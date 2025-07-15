@@ -1,0 +1,35 @@
+syntax = "proto3";
+package twilightproject.nyks.forks;
+
+// this line is used by starport scaffolding # proto/tx/import
+
+option go_package = "github.com/twilight-project/nyks/x/forks/types";
+
+// Msg defines the Msg service.
+service Msg {
+      rpc SetDelegateAddresses(MsgSetDelegateAddresses) returns (MsgSetDelegateAddressesResponse);
+  rpc SeenBtcChainTip(MsgSeenBtcChainTip) returns (MsgSeenBtcChainTipResponse);
+// this line is used by starport scaffolding # proto/tx/rpc
+}
+
+message MsgSetDelegateAddresses {
+  string validatorAddress = 1;
+  string btcOracleAddress = 2;
+  string btcPublicKey = 3;
+  string zkOracleAddress = 4;
+}
+
+message MsgSetDelegateAddressesResponse {
+  uint64 id = 1;
+}
+
+message MsgSeenBtcChainTip {
+  uint64 height = 1;
+  string hash = 2;
+  string btcOracleAddress = 3;
+}
+
+message MsgSeenBtcChainTipResponse {
+}
+
+// this line is used by starport scaffolding # proto/tx/message

@@ -1,0 +1,14 @@
+syntax = "proto3";
+package twilightproject.nyks.volt;
+
+import "gogoproto/gogo.proto";
+import "nyks/volt/params.proto";
+// this line is used by starport scaffolding # genesis/proto/import
+
+option go_package = "github.com/twilight-project/nyks/x/volt/types";
+
+// GenesisState defines the volt module's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  // this line is used by starport scaffolding # genesis/proto/state
+}

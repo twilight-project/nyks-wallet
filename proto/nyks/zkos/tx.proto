@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package twilightproject.nyks.zkos;
+
+option go_package = "github.com/twilight-project/nyks/x/zkos/types";
+
+// Msg defines the Msg service.
+service Msg {
+  rpc TransferTx         (MsgTransferTx        ) returns (MsgTransferTxResponse        );
+  rpc MintBurnTradingBtc (MsgMintBurnTradingBtc) returns (MsgMintBurnTradingBtcResponse);
+}
+
+message MsgTransferTx {
+  string txId            = 1;
+  string txByteCode      = 2;
+  uint64 txFee           = 3;
+  string zkOracleAddress = 4;
+}
+
+message MsgTransferTxResponse {}
+
+message MsgMintBurnTradingBtc {
+  bool   mintOrBurn      = 1;
+  uint64  btcValue        = 2;
+  string qqAccount       = 3;
+  string encryptScalar   = 4;
+  string twilightAddress = 5;
+}
+
+message MsgMintBurnTradingBtcResponse {}
+

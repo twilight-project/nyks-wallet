@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::faucet::*;
     use crate::wallet::*;
     use serial_test::serial;
     use tokio::time::{Duration, sleep};
@@ -67,6 +68,26 @@ mod tests {
             "e64e7928d4f6c06f01fefd31f760c51f59a16426e792761cd00529b76501c8a0",
         )?;
         println!("wallet: {:?}", wallet);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_fetch_account_details() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        let mut wallet = Wallet::import_from_json("test.json")?;
+        let account_details = fetch_account_details(&wallet.twilightaddress).await?;
+        println!("Account details: {:?}", account_details);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_check_balance() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        let mut wallet = Wallet::import_from_json("test.json")?;
+        let balance = check_balance(&wallet.twilightaddress).await?;
+        println!("Balance: {:?}", balance);
         Ok(())
     }
 }

@@ -1,0 +1,96 @@
+syntax = "proto3";
+package twilightproject.nyks.bridge;
+
+//import "gogoproto/gogo.proto";
+
+option go_package = "github.com/twilight-project/nyks/x/bridge/types";
+
+message EventRegisterBtcDepositAddress {
+    string message = 1;
+    string depositAddress = 2;
+}
+
+message EventRegisterReserveAddress {
+    string message        = 1;
+    string reserveScript = 2;
+}
+
+message EventBootstrapFragmentAddress {
+    string message = 1;
+    string judgeAddress = 2;
+    uint64 fragmentId = 3;
+    string validatorAddress = 4;
+}
+
+message EventWithdrawBtcRequest {
+    string message = 1;
+    string twilightAddress = 2;
+    uint64 reserveId = 3;
+    string withdrawAddress = 4;
+    uint64 withdrawAmount = 5;
+}
+
+message EventSignRefund {
+    string message = 1;
+    uint64 reserveId = 2;
+    uint64 roundId = 3;
+    string signerPublicKey = 4;
+    repeated string refundSignature = 5;
+    string signerAddress = 6;
+}
+
+message EventSignSweep {
+    string message = 1;
+    uint64 reserveId = 2;
+    uint64 roundId = 3;
+    string signerPublicKey = 4;
+    repeated string sweepSignature = 5;
+    string signerAddress = 6;
+}
+
+message EventBroadcastTxSweep {
+    string message = 1;
+    uint64 reserveId = 2;
+    uint64 roundId = 3;
+    string signedSweepTx = 4;
+    string judgeAddress = 5;
+}
+
+message EventBroadcastTxRefund {
+    string message = 1;
+    uint64 reserveId = 2;
+    uint64 roundId = 3;
+    string signedRefundTx = 4;
+    string judgeAddress = 5;
+}
+
+message EventProposeRefundHash {
+    string message = 1;
+    string refundHash = 2;
+    string judgeAddress = 3;
+}
+
+message EventUnsignedTxSweep {
+    string message = 1;
+    string txId = 2;
+    uint64 reserveId = 3;
+    uint64 roundId = 4;
+    string unsignedSweepTx = 5;
+    string judgeAddress = 6;
+}
+
+message EventUnsignedTxRefund {
+    string message = 1;
+    uint64 reserveId = 2;
+    uint64 roundId = 3;
+    string unsignedRefundTx = 4;
+    string judgeAddress = 5;
+}
+
+message EventProposeSweepAddress{
+    string message = 1;      
+    string btcAddress = 2;   
+    string btcScript = 3;    
+    uint64 reserveId = 4;   
+    string judgeAddress = 5; 
+}

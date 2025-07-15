@@ -42,25 +42,28 @@ pub fn create_register_btc_deposit_message(
 }
 
 #[derive(Deserialize, Debug)]
-struct AccountResponse {
-    account: Account,
+pub struct AccountResponse {
+    pub account: Account,
 }
 
 #[derive(Deserialize, Debug)]
-struct Account {
+pub struct Account {
     #[serde(rename = "@type")]
-    account_type: String,
-    address: String,
-    pub_key: Option<String>,
-    account_number: String,
-    sequence: String,
+    pub account_type: String,
+    pub address: String,
+    // `pub_key` can be an object or null depending on whether the account has
+    // a public key set on-chain. We do not use its inner fields in the current
+    // code, so deserialize it into a generic `serde_json::Value` to avoid
+    // strict type expectations that lead to parsing errors when it is an
+    // object.
+    pub pub_key: Option<Value>,
+    pub account_number: String,
+    pub sequence: String,
 }
 
-async fn fetch_account_details(address: &str) -> anyhow::Result<AccountResponse> {
-    let url = format!(
-        "https://lcd.twilight.rest/cosmos/auth/v1beta1/accounts/{}",
-        address
-    );
+pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountResponse> {
+    let baseurl = std::env::var("LCD_BASE_URL").unwrap_or("https://lcd.twilight.rest".to_string());
+    let url = format!("{}/cosmos/auth/v1beta1/accounts/{}", baseurl, address);
     let client = Client::new();
     let response = client.get(&url).send().await?;
 

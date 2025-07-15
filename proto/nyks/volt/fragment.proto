@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package twilightproject.nyks.volt;
+import "nyks/volt/reserve.proto";
+
+// this line is used by starport scaffolding # proto/tx/import
+
+option go_package = "github.com/twilight-project/nyks/x/volt/types";
+
+// Msg defines the Msg service.
+service Msg {
+  
+  // this line is used by starport scaffolding # proto/tx/rpc
+  rpc SignerApplication (MsgSignerApplication) returns (MsgSignerApplicationResponse);
+  rpc AcceptSigners     (MsgAcceptSigners    ) returns (MsgAcceptSignersResponse    );
+}
+
+// this line is used by starport scaffolding # proto/tx/message
+
+message MsgSignerApplication {
+  uint64 fragmentId     = 1;
+  uint64 applicationFee = 2;
+  uint64 feeBips        = 3;
+  string btcPubKey      = 4;
+  string signerAddress  = 5;
+}
+
+message SignerApplication {
+  uint64 applicationId = 1;
+  uint64 fragmentId = 2;
+  uint64 applicationFee = 3;
+  uint64 feeBips = 4;
+  string btcPubKey = 5;
+  string signerAddress = 6;
+}
+
+message MsgSignerApplicationResponse {
+    uint64 applicationId = 1;
+}
+
+message MsgAcceptSigners {
+  uint64 fragmentId      = 1;
+  repeated uint64 signerApplicationIds = 2;
+  string judgeAddress    = 3;
+}
+  
+message MsgAcceptSignersResponse {}
+  
+
+message Fragment {
+  uint64 FragmentId = 1;
+  bool FragmentStatus = 2;
+  string JudgeAddress = 3;
+  bool JudgeStatus = 4;
+  repeated FragmentSigners Signers = 5;
+  uint64 SignerApplicationFee = 6;
+  uint64 Threshold = 7;
+  uint64 FeePool = 8;
+  uint64 FragmentFeeBips = 9;
+  string arbitraryData = 10;
+  repeated uint64 ReserveIds = 11;
+}
+
+message FragmentSigners {
+  uint64 FragmentID = 1;
+  string SignerAddress = 2;
+  bool SignerStatus = 3;
+  string SignerBtcPublicKey = 4;
+  uint64 SignerApplicationFee = 5;
+  uint64 SignerFeeBips = 6;
+}

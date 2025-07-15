@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package twilightproject.nyks.zkos;
+
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "nyks/zkos/params.proto";
+import "nyks/zkos/tx.proto";
+
+option go_package = "github.com/twilight-project/nyks/x/zkos/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  
+  // Parameters queries the parameters of the module.
+  rpc Params (QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/zkos/params";
+  
+  }
+  
+  // Queries a list of TransferTx items.
+  rpc TransferTx (QueryTransferTxRequest) returns (QueryTransferTxResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/zkos/transfer_tx/{txId}";
+  
+  }
+  
+  // Queries a list of MintOrBurnTradingBtc items.
+  rpc MintOrBurnTradingBtc (QueryMintOrBurnTradingBtcRequest) returns (QueryMintOrBurnTradingBtcResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/zkos/mint_or_burn_trading_btc/{twilightAddress}";
+  
+  }
+}
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  
+  // params holds all the parameters of this module.
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryTransferTxRequest {
+  string txId = 1;
+}
+
+message QueryTransferTxResponse {
+  MsgTransferTx TransferTx = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryMintOrBurnTradingBtcRequest {
+  string twilightAddress = 1;
+}
+
+message QueryMintOrBurnTradingBtcResponse {
+  repeated MsgMintBurnTradingBtc MintOrBurnTradingBtc = 1 [(gogoproto.nullable) = false];
+}
+

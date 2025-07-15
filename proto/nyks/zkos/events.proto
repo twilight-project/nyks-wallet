@@ -1,0 +1,12 @@
+syntax = "proto3";
+package twilightproject.nyks.zkos;
+
+//import "gogoproto/gogo.proto";
+
+option go_package = "github.com/twilight-project/nyks/x/zkos/types";
+
+message EventTransferTx{
+    string message         = 1;
+    string txId            = 2;
+    string zkOracleAddress = 3;
+}

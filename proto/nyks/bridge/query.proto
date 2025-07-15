@@ -1,0 +1,349 @@
+syntax = "proto3";
+
+package twilightproject.nyks.bridge;
+
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "nyks/bridge/tx.proto";
+import "nyks/bridge/params.proto";
+import "nyks/volt/deposit.proto";
+import "nyks/volt/withdraw.proto";
+
+// this line is used by starport scaffolding # 1
+
+option go_package = "github.com/twilight-project/nyks/x/bridge/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  
+  // Parameters queries the parameters of the module.
+  rpc Params (QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/params";
+  
+  }
+  
+  // Queries a list of RegisteredBtcDepositAddresses items.
+  rpc RegisteredBtcDepositAddresses (QueryRegisteredBtcDepositAddressesRequest) returns (QueryRegisteredBtcDepositAddressesResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/registered_btc_deposit_addresses";
+  
+  }
+  
+  // Queries a list of RegisteredReserveAddresses items.
+  rpc RegisteredReserveAddresses (QueryRegisteredReserveAddressesRequest) returns (QueryRegisteredReserveAddressesResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/registered_reserve_addresses";
+  
+  }
+  
+  // Queries a list of RegisteredBtcDepositAddress items.
+  rpc RegisteredBtcDepositAddress (QueryRegisteredBtcDepositAddressRequest) returns (QueryRegisteredBtcDepositAddressResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/registered_btc_deposit_address/{depositAddress}";
+  
+  }
+  
+  // Queries a list of RegisteredBtcDepositAddressByTwilightAddress items.
+  rpc RegisteredBtcDepositAddressByTwilightAddress (QueryRegisteredBtcDepositAddressByTwilightAddressRequest) returns (QueryRegisteredBtcDepositAddressByTwilightAddressResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/registered_btc_deposit_address_by_twilight_address/{twilightDepositAddress}";
+  
+  }
+
+  // this line is used by starport scaffolding # 2
+  
+  // Queries a list of RegisteredJudgeAddressByValidatorAddress items.
+  rpc RegisteredJudgeAddressByValidatorAddress (QueryRegisteredJudgeAddressByValidatorAddressRequest) returns (QueryRegisteredJudgeAddressByValidatorAddressResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/registered_judge_address_by_validator_address/{validatorAddress}";
+  
+  }
+  
+  // Queries a list of RegisteredJudges items.
+  rpc RegisteredJudges (QueryRegisteredJudgesRequest) returns (QueryRegisteredJudgesResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/registered_judges";
+  
+  }
+  
+  // Queries a list of WithdrawBtcRequestAll items.
+  rpc WithdrawBtcRequestAll (QueryWithdrawBtcRequestAllRequest) returns (QueryWithdrawBtcRequestAllResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/withdraw_btc_request_all";
+  
+  }
+  
+  // Queries a list of SignRefundAll items.
+  rpc SignRefundAll (QuerySignRefundAllRequest) returns (QuerySignRefundAllResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/sign_refund_all";
+  
+  }
+  
+  // Queries a list of SignSweepAll items.
+  rpc SignSweepAll (QuerySignSweepAllRequest) returns (QuerySignSweepAllResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/sign_sweep_all";
+  
+  }
+  
+  // Queries a list of BroadcastTxSweepAll items.
+  rpc BroadcastTxSweepAll (QueryBroadcastTxSweepAllRequest) returns (QueryBroadcastTxSweepAllResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/broadcast_tx_sweep_all";
+  
+  }
+  
+  // Queries a list of ProposeRefundHashAll items.
+  rpc ProposeRefundHashAll (QueryProposeRefundHashAllRequest) returns (QueryProposeRefundHashAllResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/propose_refund_hash_all";
+  
+  }
+  
+  // Queries a list of UnsignedTxSweep items.
+  rpc UnsignedTxSweep (QueryUnsignedTxSweepRequest) returns (QueryUnsignedTxSweepResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/unsigned_tx_sweep/{reserveId}/{roundId}";
+  
+  }
+  
+  // Queries a list of UnsignedTxRefund items.
+  rpc UnsignedTxRefund (QueryUnsignedTxRefundRequest) returns (QueryUnsignedTxRefundResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/unsigned_tx_refund/{reserveId}/{roundId}";
+  
+  }
+  
+  // Queries a list of UnsignedTxSweepAll items.
+  rpc UnsignedTxSweepAll (QueryUnsignedTxSweepAllRequest) returns (QueryUnsignedTxSweepAllResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/unsigned_tx_sweep_all";
+  
+  }
+  
+  // Queries a list of UnsignedTxRefundAll items.
+  rpc UnsignedTxRefundAll (QueryUnsignedTxRefundAllRequest) returns (QueryUnsignedTxRefundAllResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/unsigned_tx_refund_all";
+  
+  }
+  
+  // Queries a list of BroadcastTxRefundAll items.
+  rpc BroadcastTxRefundAll (QueryBroadcastTxRefundAllRequest) returns (QueryBroadcastTxRefundAllResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/broadcast_tx_refund_all";
+  
+  }
+  
+  // Queries a list of ProposeSweepAddress items.
+  rpc ProposeSweepAddress (QueryProposeSweepAddressRequest) returns (QueryProposeSweepAddressResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/propose_sweep_address/{reserveId}/{roundId}";
+  
+  }
+  
+  // Queries a list of ProposeSweepAddressesAll items.
+  rpc ProposeSweepAddressesAll (QueryProposeSweepAddressesAllRequest) returns (QueryProposeSweepAddressesAllResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/propose_sweep_addresses_all/{limit}";
+  
+  }
+  
+  // Queries a list of SignRefund items.
+  rpc SignRefund (QuerySignRefundRequest) returns (QuerySignRefundResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/sign_refund/{reserveId}/{roundId}";
+  
+  }
+  
+  // Queries a list of SignSweep items.
+  rpc SignSweep (QuerySignSweepRequest) returns (QuerySignSweepResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/sign_sweep/{reserveId}/{roundId}";
+  
+  }
+  
+  // Queries a list of BroadcastTxRefund items.
+  rpc BroadcastTxRefund (QueryBroadcastTxRefundRequest) returns (QueryBroadcastTxRefundResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/broadcast_tx_refund/{reserveId}/{roundId}";
+  
+  }
+  
+  // Queries a list of BroadcastTxSweep items.
+  rpc BroadcastTxSweep (QueryBroadcastTxSweepRequest) returns (QueryBroadcastTxSweepResponse) {
+    option (google.api.http).get = "/twilight-project/nyks/bridge/broadcast_tx_sweep/{reserveId}/{roundId}";
+  
+  }
+}
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  
+  // params holds all the parameters of this module.
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryRegisteredBtcDepositAddressesRequest {}
+
+message QueryRegisteredBtcDepositAddressesResponse {
+  repeated volt.BtcDepositAddress addresses = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryRegisteredReserveAddressesRequest {}
+
+message QueryRegisteredReserveAddressesResponse {
+  repeated MsgRegisterReserveAddress addresses = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryRegisteredBtcDepositAddressRequest {
+  string depositAddress = 1;
+}
+
+message QueryRegisteredBtcDepositAddressResponse {
+  string depositAddress         = 1;
+  string twilightDepositAddress = 2;
+}
+
+message QueryRegisteredBtcDepositAddressByTwilightAddressRequest {
+  string twilightDepositAddress = 1;
+}
+
+message QueryRegisteredBtcDepositAddressByTwilightAddressResponse {
+  string depositAddress         = 1;
+  string twilightDepositAddress = 2;
+}
+
+// this line is used by starport scaffolding # 3
+message QueryRegisteredJudgeAddressByValidatorAddressRequest {
+  string validatorAddress = 1;
+}
+
+message QueryRegisteredJudgeAddressByValidatorAddressResponse {
+  string judgeAddress     = 1;
+  uint64 numOfSigners     = 2;
+  uint64 threshold       = 3;
+  uint64 signerApplicationFee = 4;
+  string arbitraryData    = 5;
+  string validatorAddress = 6;
+}
+
+message QueryRegisteredJudgesRequest {}
+
+message QueryRegisteredJudgesResponse {
+  repeated MsgBootstrapFragment Judges = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryWithdrawBtcRequestAllRequest {}
+
+message QueryWithdrawBtcRequestAllResponse {
+  repeated volt.BtcWithdrawRequestInternal withdrawRequest = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryProposeRefundHashAllRequest {}
+
+message QueryProposeRefundHashAllResponse {
+  repeated MsgProposeRefundHash proposeRefundHashMsg = 1 [(gogoproto.nullable) = false];
+}
+
+// Sweep Queries
+// 1. ProposeSweepAddress
+message QueryProposeSweepAddressRequest {
+  uint64 reserveId = 1;
+  uint64 roundId   = 2;
+}
+
+message QueryProposeSweepAddressResponse {
+  MsgProposeSweepAddress proposeSweepAddressMsg = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryProposeSweepAddressesAllRequest {
+  uint64 limit = 1;
+}
+
+message QueryProposeSweepAddressesAllResponse {
+  repeated MsgProposeSweepAddress proposeSweepAddressMsgs = 1 [(gogoproto.nullable) = false];
+}
+
+// 2. UnsignedTxSweep
+message QueryUnsignedTxSweepRequest {
+  uint64 reserveId = 1;
+  uint64 roundId   = 2;
+}
+
+message QueryUnsignedTxSweepResponse {
+  MsgUnsignedTxSweep unsignedTxSweepMsg = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryUnsignedTxSweepAllRequest {
+  uint64 limit = 1;
+}
+
+message QueryUnsignedTxSweepAllResponse {
+  repeated MsgUnsignedTxSweep unsignedTxSweepMsgs = 1 [(gogoproto.nullable) = false];
+}
+
+// 3. UnsignedTxRefund
+message QueryUnsignedTxRefundRequest {
+  uint64 reserveId = 1;
+  uint64 roundId   = 2;
+}
+
+message QueryUnsignedTxRefundResponse {
+  MsgUnsignedTxRefund unsignedTxRefundMsg = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryUnsignedTxRefundAllRequest {
+  uint64 limit = 1;
+}
+
+message QueryUnsignedTxRefundAllResponse {
+  repeated MsgUnsignedTxRefund unsignedTxRefundMsgs = 1 [(gogoproto.nullable) = false];
+}
+
+// 4. SignRefund
+message QuerySignRefundRequest {
+  uint64 reserveId = 1;
+  uint64 roundId   = 2;
+}
+
+message QuerySignRefundResponse {
+  repeated MsgSignRefund signRefundMsg = 1 [(gogoproto.nullable) = false];
+}
+
+message QuerySignRefundAllRequest {}
+
+message QuerySignRefundAllResponse {
+  repeated MsgSignRefund signRefundMsg = 1 [(gogoproto.nullable) = false];
+}
+
+// 5. SignSweep
+message QuerySignSweepRequest {
+  uint64 reserveId = 1;
+  uint64 roundId   = 2;
+}
+
+message QuerySignSweepResponse {
+  repeated MsgSignSweep signSweepMsg = 1 [(gogoproto.nullable) = false];
+}
+
+message QuerySignSweepAllRequest {}
+
+message QuerySignSweepAllResponse {
+  repeated MsgSignSweep signSweepMsg = 1 [(gogoproto.nullable) = false];
+}
+
+// 6. BroadcastTxRefund
+message QueryBroadcastTxRefundRequest {
+  uint64 reserveId = 1;
+  uint64 roundId   = 2;
+}
+
+message QueryBroadcastTxRefundResponse {
+  MsgBroadcastTxRefund broadcastRefundMsg = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryBroadcastTxRefundAllRequest {}
+
+message QueryBroadcastTxRefundAllResponse {
+  repeated MsgBroadcastTxRefund BroadcastTxRefundMsg = 1 [(gogoproto.nullable) = false];
+}
+
+// 7. BroadcastTxSweep
+message QueryBroadcastTxSweepRequest {
+  uint64 reserveId = 1;
+  uint64 roundId   = 2;
+}
+
+message QueryBroadcastTxSweepResponse {
+  MsgBroadcastTxSweep broadcastSweepMsg = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryBroadcastTxSweepAllRequest {}
+
+message QueryBroadcastTxSweepAllResponse {
+  repeated MsgBroadcastTxSweep BroadcastTxSweepMsg = 1 [(gogoproto.nullable) = false];
+}

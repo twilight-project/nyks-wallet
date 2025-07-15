@@ -1,0 +1,12 @@
+syntax = "proto3";
+package twilightproject.nyks.zkos;
+
+import "gogoproto/gogo.proto";
+import "nyks/zkos/params.proto";
+
+option go_package = "github.com/twilight-project/nyks/x/zkos/types";
+
+// GenesisState defines the zkos module's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+}

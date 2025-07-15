@@ -1,0 +1,17 @@
+syntax = "proto3";
+package twilightproject.nyks.forks;
+
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/twilight-project/nyks/x/forks/types";
+
+message EventSetDelegateAddresses {
+    string message = 1;
+    string address = 2;
+}
+  
+message EventProposal {
+    string message        = 1;
+    string proposal_hash  = 2;
+    string attestation_id = 3;
+}

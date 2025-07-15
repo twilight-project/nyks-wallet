@@ -1,0 +1,35 @@
+syntax = "proto3";
+package twilightproject.nyks.volt;
+
+
+option go_package = "github.com/twilight-project/nyks/x/volt/types";
+
+message IndividualTwilightReserveAccountBalance {
+    uint64 ReserveId = 1;
+    uint64 Amount = 2;
+}
+
+// ClearingAccount is used to keep a mapping of how a user's addresses and its reserve account balances
+message ClearingAccount {
+    string TwilightAddress = 1;
+    string BtcDepositAddress = 2;
+    uint32 BtcDepositAddressIdentifier = 3; 
+    string BtcWithdrawAddress = 4;
+    uint32 BtcWithdrawAddressIdentifier = 5;
+    repeated IndividualTwilightReserveAccountBalance ReserveAccountBalances = 6;
+}
+
+// RefundTxSnap is used to keep a mapping of the last refund transaction for a reserve
+message RefundTxAccountSnap {
+    uint64 Amount = 1;
+    string BtcDepositAddress = 2;
+    uint32 BtcDepositAddressIdentifier = 3; 
+}
+
+// LastRefundTxSnapshot is a snapshot of the last refund for this reserve id
+message RefundTxSnapshot {
+    uint64 ReserveId = 1;
+    uint64 RoundId = 2;
+    repeated RefundTxAccountSnap refundAccounts = 3;
+    int64 EndBlockerHeightTwilight = 4;
+}

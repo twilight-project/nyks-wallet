@@ -1,0 +1,47 @@
+syntax = "proto3";
+package twilightproject.nyks.volt;
+
+
+option go_package = "github.com/twilight-project/nyks/x/volt/types";
+
+
+// Chain creates an internal mapping with identifier and bool confirmed
+message BtcWithdrawRequestInternal {
+    uint32 withdrawIdentifier = 1;
+    string withdrawAddress  = 2;
+    uint64 withdrawReserveId  = 3;
+    uint64 withdrawAmount  = 4; //in satoshis
+    string twilightAddress  = 5;
+    bool isConfirmed = 6;
+    int64 CreationTwilightBlockHeight = 7;
+}
+
+message ReserveWithdrawPool {
+    uint64 ReserveID = 1;
+    uint64 RoundID = 2;
+    repeated uint32 processingWithdrawIdentifiers = 3; // Currently being processed
+    repeated uint32 queuedWithdrawIdentifiers = 4;     // Waiting to be processed
+    uint32 currentProcessingIndex = 5;                 // Index of the last processed withdraw
+}
+
+// WithdrawRequestSnap is a snapshot of the withdraw request
+message WithdrawRequestSnap {
+    uint32 withdrawIdentifier = 1;
+    string withdrawAddress  = 2;
+    uint64 withdrawAmount  = 3;
+}
+
+// ReserveWithdrawSnapshot is a snapshot of the reserve withdraw, its used in sweep to know which withdraws are currently being processed
+message ReserveWithdrawSnapshot {
+    uint64 ReserveId = 1;
+    uint64 RoundId = 2;
+    repeated WithdrawRequestSnap withdrawRequests = 3;
+    int64 EndBlockerHeightTwilight = 4;
+}
+
+// NewSweepProposalReceivedInternal is an internal mapping for the sweep proposal to let Endblocker know that a new sweep proposal has been received
+message NewSweepProposalReceivedInternal {
+    uint64 reserveId = 1;
+    uint64 roundId = 2;
+    int64 creationTwilightBlockHeight = 6;
+}

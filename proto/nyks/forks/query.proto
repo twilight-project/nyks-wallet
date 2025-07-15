@@ -1,0 +1,82 @@
+syntax = "proto3";
+package twilightproject.nyks.forks;
+
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "nyks/forks/params.proto";
+import "nyks/forks/tx.proto";
+import "nyks/forks/attestation.proto";
+// this line is used by starport scaffolding # 1
+
+option go_package = "github.com/twilight-project/nyks/x/forks/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  // Parameters queries the parameters of the module.
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/twilightproject/nyks/nyks/params";
+  }
+  // Queries a list of Attestations items.
+	rpc GetAttestations(QueryAttestationsRequest) returns (QueryAttestationsResponse) {
+		option (google.api.http).get = "/twilight-project/nyks/nyks/attestations";
+	}
+
+// Queries a list of DelegateKeysByBtcOracleAddress items.
+	rpc DelegateKeysByBtcOracleAddress(QueryDelegateKeysByBtcOracleAddressRequest) returns (QueryDelegateKeysByBtcOracleAddressResponse) {
+		option (google.api.http).get = "/twilight-project/nyks/forks/delegate_keys_by_btc_oracle_address/{btcOracleAddress}";
+	}
+
+// Queries a list of DelegateKeysAll items.
+	rpc DelegateKeysAll(QueryDelegateKeysAllRequest) returns (QueryDelegateKeysAllResponse) {
+		option (google.api.http).get = "/twilight-project/nyks/forks/delegate_keys_all";
+	}
+
+// this line is used by starport scaffolding # 2
+}
+
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  // params holds all the parameters of this module.
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+// QueryAttestationsRequest defines the request structure for getting recent
+// attestations with optional query parameters. By default, a limited set of
+// recent attestations will be returned, defined by 'limit'.
+message QueryAttestationsRequest {
+  // limit defines how many attestations to limit in the response.
+  uint64 limit = 1;
+  // order_by provides ordering of atteststions by nonce in the response. Either
+  // 'asc' or 'desc' can be provided. If no value is provided, it defaults to
+  // 'asc'.
+  string order_by = 2;
+  // proposal_type allows filtering attestations by proposal type
+  string proposal_type = 3;
+  // height allows filtering attestations by block height
+  uint64 height = 4;
+}
+
+message QueryAttestationsResponse {
+  repeated Attestation attestations = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryDelegateKeysByBtcOracleAddressRequest {
+  string btcOracleAddress = 1;
+}
+
+message QueryDelegateKeysByBtcOracleAddressResponse {
+  MsgSetDelegateAddresses addresses = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryDelegateKeysAllRequest {
+}
+
+message QueryDelegateKeysAllResponse {
+  repeated MsgSetDelegateAddresses addresses = 1 [(gogoproto.nullable) = false];
+}
+
+// this line is used by starport scaffolding # 3

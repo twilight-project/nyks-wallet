@@ -1,0 +1,14 @@
+syntax = "proto3";
+package twilightproject.nyks.forks;
+
+import "gogoproto/gogo.proto";
+import "nyks/forks/params.proto";
+// this line is used by starport scaffolding # genesis/proto/import
+
+option go_package = "github.com/twilight-project/nyks/x/forks/types";
+
+// GenesisState defines the nyks module's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  // this line is used by starport scaffolding # genesis/proto/state
+}
