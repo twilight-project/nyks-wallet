@@ -21,3 +21,7 @@ target
 #.idea/
 .DS_Store
 Cargo.lock
+account.json
+test.json
+.gitignore
+.env

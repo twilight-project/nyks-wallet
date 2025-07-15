@@ -1,0 +1,204 @@
+use super::MsgRegisterBtcDepositAddress;
+use anyhow::anyhow;
+use base64::{Engine as _, engine::general_purpose};
+use bip32::{DerivationPath, XPrv};
+use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
+use cosmrs::crypto::{PublicKey, secp256k1::SigningKey};
+use cosmrs::tendermint::chain::Id;
+use cosmrs::{
+    AccountId, Coin,
+    tx::{Body, Fee, SignDoc, SignerInfo},
+};
+use prost::Message;
+use reqwest::Client;
+use ripemd::Ripemd160;
+use rpassword::prompt_password;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{error::Error, str::FromStr};
+use tokio::time::{Duration, sleep};
+
+pub fn create_register_btc_deposit_message(
+    btc_address: String,
+    btc_amount: u64,
+    twilight_amount: u64,
+    twilight_address: String,
+) -> cosmrs::Any {
+    let msg = MsgRegisterBtcDepositAddress {
+        btc_deposit_address: btc_address,
+        btc_satoshi_test_amount: btc_amount,
+        twilight_staking_amount: twilight_amount,
+        twilight_address,
+    };
+
+    let mut buf = Vec::new();
+    msg.encode(&mut buf).expect("msg encoding failed");
+
+    cosmrs::Any {
+        type_url: "/twilightproject.nyks.bridge.MsgRegisterBtcDepositAddress".to_string(),
+        value: buf,
+    }
+}
+
+#[derive(Deserialize, Debug)]
+struct AccountResponse {
+    account: Account,
+}
+
+#[derive(Deserialize, Debug)]
+struct Account {
+    #[serde(rename = "@type")]
+    account_type: String,
+    address: String,
+    pub_key: Option<String>,
+    account_number: String,
+    sequence: String,
+}
+
+async fn fetch_account_details(address: &str) -> anyhow::Result<AccountResponse> {
+    let url = format!(
+        "https://lcd.twilight.rest/cosmos/auth/v1beta1/accounts/{}",
+        address
+    );
+    let client = Client::new();
+    let response = client.get(&url).send().await?;
+
+    if response.status().is_success() {
+        let account_response: AccountResponse = response.json().await?;
+        Ok(account_response)
+    } else {
+        let status = response.status();
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "No response body".to_string());
+        Err(anyhow!(
+            "Failed to fetch account details. Status: {}, Error: {}",
+            status,
+            error_body
+        ))
+    }
+}
+
+pub async fn get_nyks(recipient_address: &str) -> Result<(), Box<dyn Error>> {
+    let baseurl =
+        std::env::var("FAUCET_BASE_URL").unwrap_or("https://faucet-rpc.twilight.rest".to_string());
+    let url = format!("{}/faucet", baseurl);
+    let payload = json!({ "recipientAddress": recipient_address });
+    let client = Client::new();
+    let response = client.post(url).json(&payload).send().await?;
+
+    if response.status().is_success() {
+        println!("Faucet response: {}", response.text().await?);
+        Ok(())
+    } else {
+        let status = response.status();
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "No response body".to_string());
+        Err(format!(
+            "Failed to call /faucet. Status: {}, Error: {}",
+            status, error_body
+        )
+        .into())
+    }
+}
+
+pub async fn mint_sats(recipient_address: &str) -> Result<(), Box<dyn Error>> {
+    let baseurl =
+        std::env::var("FAUCET_BASE_URL").unwrap_or("https://faucet-rpc.twilight.rest".to_string());
+    let url = format!("{}/mint", baseurl);
+
+    let payload = json!({ "recipientAddress": recipient_address });
+    let client = Client::new();
+    let response = client.post(url).json(&payload).send().await?;
+
+    if response.status().is_success() {
+        println!("Mint response: {}", response.text().await?);
+        Ok(())
+    } else {
+        let status = response.status();
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "No response body".to_string());
+        Err(format!(
+            "Failed to call /mint. Status: {}, Error: {}",
+            status, error_body
+        )
+        .into())
+    }
+}
+pub async fn mint_sats_5btc(recipient_address: &str) -> Result<(), Box<dyn Error>> {
+    let baseurl =
+        std::env::var("FAUCET_BASE_URL").unwrap_or("https://faucet-rpc.twilight.rest".to_string());
+    let url = format!("{}/mint-relayer-wallet", baseurl);
+
+    let payload = json!({ "recipientAddress": recipient_address });
+    let client = Client::new();
+    let response = client.post(url).json(&payload).send().await?;
+
+    if response.status().is_success() {
+        println!("Mint response: {}", response.text().await?);
+        Ok(())
+    } else {
+        let status = response.status();
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "No response body".to_string());
+        Err(format!(
+            "Failed to call /mint. Status: {}, Error: {}",
+            status, error_body
+        )
+        .into())
+    }
+}
+
+pub async fn sign_and_send_reg_deposit_tx(
+    signing_key: SigningKey,
+    public_key: PublicKey,
+    sender_account: String,
+    btc_address: String,
+) -> anyhow::Result<()> {
+    // --- Msg & body
+    let msg_any =
+        create_register_btc_deposit_message(btc_address, 50_000, 10_000, sender_account.clone());
+    let body = Body::new(vec![msg_any], "", 0u16);
+
+    // --- On‑chain numbers
+    let account_details = fetch_account_details(&sender_account).await?;
+    let sequence = account_details.account.sequence.parse::<u64>()?;
+    let account_number = account_details.account.account_number.parse::<u64>()?;
+
+    // --- Fee & auth‑info
+    let gas_limit = 200_000u64;
+    let fee_amount = Coin {
+        denom: cosmrs::Denom::from_str("nyks").map_err(|e| anyhow!("{}", e))?,
+        amount: 1_000u64.into(),
+    };
+    let signer_info = SignerInfo::single_direct(Some(public_key), sequence);
+    let auth_info = signer_info.auth_info(Fee::from_amount_and_gas(fee_amount, gas_limit));
+
+    // --- Sign
+    let chain_id = Id::try_from("nyks").map_err(|e| anyhow!("{}", e))?;
+    let sign_doc =
+        SignDoc::new(&body, &auth_info, &chain_id, account_number).map_err(|e| anyhow!("{}", e))?;
+    let raw_tx = sign_doc.sign(&signing_key).map_err(|e| anyhow!("{}", e))?;
+
+    // --- Encode & broadcast
+    let tx_bytes = raw_tx.to_bytes().map_err(|e| anyhow!("{}", e))?;
+    let tx_base64 = general_purpose::STANDARD.encode(&tx_bytes);
+
+    let client = Client::new();
+    let res = client
+        .post("https://lcd.twilight.rest/cosmos/tx/v1beta1/txs")
+        .json(&json!({ "tx_bytes": tx_base64, "mode": "BROADCAST_MODE_SYNC" }))
+        .send()
+        .await?;
+
+    println!("Broadcast response: {}", res.text().await?);
+    Ok(())
+}
