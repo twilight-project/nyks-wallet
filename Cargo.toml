@@ -45,7 +45,7 @@ rand = "0.7"
 tendermint-rpc = { version = "0.34", features = ["http-client"] }
 [dependencies.twilight-client-sdk]
 git = "https://github.com/twilight-project/twilight-client-sdk.git"
-branch = "develop"
+branch = "zk-account"
 
 
 [build-dependencies]
