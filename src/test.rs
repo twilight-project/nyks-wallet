@@ -1,18 +1,20 @@
+#[allow(unused_imports, unused_variables, dead_code)]
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::faucet::*;
+    use crate::nyks_fn::MsgMintBurnTradingBtc;
+    use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
+    use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+    use crate::seed_signer::{build_sign_doc, sign_adr036, signature_bundle};
     use crate::wallet::*;
+    use cosmrs::crypto::secp256k1::SigningKey;
     use serial_test::serial;
-    use tokio::time::{Duration, sleep};
-
     #[tokio::test]
     #[serial]
     async fn test_create_wallet() {
         dotenv::dotenv().ok();
         match create_and_export_randmon_wallet_account("test1").await {
             Ok(wallet) => println!("wallet: {:?}", wallet),
-            Err(e) => println!(
+            Err(_) => println!(
                 "error: {:?}",
                 "wallet creation failed, wallet already exists"
             ),
@@ -88,6 +90,66 @@ mod tests {
         let mut wallet = Wallet::import_from_json("test.json")?;
         let balance = check_balance(&wallet.twilightaddress).await?;
         println!("Balance: {:?}", balance);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_tx_sync_mint_burn() -> anyhow::Result<()> {
+        let wallet = Wallet::import_from_json("test.json")?;
+        let sk = wallet.signing_key()?;
+        let pk = wallet.public_key()?;
+        let account_details = wallet.account_info().await?;
+        let sequence = account_details.account.sequence.parse::<u64>()?;
+        let account_number = account_details
+            .account
+            .account_number
+            .parse::<u64>()
+            .unwrap();
+        // Create test message
+        let msg = MsgMintBurnTradingBtc {
+            mint_or_burn: true,
+            btc_value: 1000,
+            qq_account: "test_creator".to_string(),
+            encrypt_scalar: "test_scalar".to_string(),
+            twilight_address: wallet.twilightaddress.clone(),
+        };
+
+        // Create method type and get Any message
+        let method_type = MethodTypeURL::MsgMintBurnTradingBtc;
+        let any_msg = method_type.type_url(msg);
+
+        // Sign the message
+        let signed_tx = method_type
+            .sign_msg::<MsgMintBurnTradingBtc>(any_msg, pk, sequence, account_number, sk)
+            .unwrap();
+
+        // Create RPC request
+        let (tx_send, data): (RpcBody<TxParams>, String) = RpcRequest::new_with_data(
+            TxParams::new(signed_tx.clone()),
+            Method::broadcast_tx_sync,
+            signed_tx,
+        );
+
+        // Send RPC request
+        // let response = tx_send.send("https://rpc.twilight.rest".to_string(), data);
+        let url = "https://rpc.twilight.rest".to_string();
+        let response = tokio::task::spawn_blocking(move || tx_send.send(url))
+            .await // wait for the blocking task to finish
+            .expect("blocking task panicked")?;
+
+        println!("response: {:?}", response);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_seed_signer() -> anyhow::Result<()> {
+        let wallet = Wallet::import_from_json("test.json")?;
+        let private_key = wallet.private_key.clone();
+        let twilight_address = wallet.twilightaddress.clone();
+        let sign_mgs = "hello";
+        let chain_id = "nyks";
+        let seed = generate_seed(&private_key, &twilight_address, sign_mgs, chain_id);
+        println!("{:?}", seed);
         Ok(())
     }
 }

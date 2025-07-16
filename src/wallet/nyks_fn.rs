@@ -1,33 +1,20 @@
-use super::MsgMintBurnTradingBtc;
+pub use super::super::MsgMintBurnTradingBtc;
 use super::faucet::fetch_account_details;
 use super::wallet::*;
-use bip32::PrivateKey;
-use curve25519_dalek::scalar::Scalar;
-use fastrand::Rng;
-use prost::Message;
-use quisquislib::accounts::Account;
-use quisquislib::keys::PublicKey;
-use quisquislib::ristretto::{RistrettoPublicKey, RistrettoSecretKey};
-use reqwest::header::HeaderMap;
-use twilight_client_sdk::quisquislib;
-
 use anyhow::anyhow;
 use base64::{Engine as _, engine::general_purpose};
 use cosmrs::tendermint::chain::Id;
-use cosmrs::{
-    crypto::secp256k1::SigningKey,
-    proto::cosmos::base::v1beta1::Coin,
-    tx::{self, Body, Fee, Raw, SignDoc, SignerInfo},
-};
-use prost::Message as _;
-use reqwest::Client;
-use serde_json::{Value, json};
+use cosmrs::tx::{Body, Fee, SignDoc, SignerInfo};
+use prost::Message;
+use reqwest::header::HeaderMap;
+use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, HeaderValue, USER_AGENT};
+use serde_json::Value;
 use std::str::FromStr;
-// ---------- constants you’ll want to tweak ----------
-const RPC: &str = "https://rpc.twilight.rest"; // Nyks RPC, not LCD
-const CHAIN_ID: &str = "nyks";
-const DENOM: &str = "nyks"; // replace with Nyks micro‑denom
-// ----------------------------------------------------
+// // ---------- constants you’ll want to tweak ----------
+// const RPC: &str = "https://rpc.twilight.rest"; // Nyks RPC, not LCD
+// const CHAIN_ID: &str = "nyks";
+// const DENOM: &str = "nyks"; // replace with Nyks micro‑denom
+// // ----------------------------------------------------
 
 pub fn create_funiding_to_trading_tx_msg(
     mint_or_burn: bool,
@@ -191,8 +178,6 @@ impl RpcBody {
         }
     }
 }
-
-use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, HeaderValue, USER_AGENT};
 
 fn construct_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();

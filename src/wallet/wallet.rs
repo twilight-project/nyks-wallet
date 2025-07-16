@@ -1,22 +1,16 @@
 use crate::faucet::*;
 use anyhow::anyhow;
-// use base64::{Engine as _, engine::general_purpose};
 use bip32::{DerivationPath, XPrv};
 use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
+use cosmrs::AccountId;
 use cosmrs::crypto::{PublicKey, secp256k1::SigningKey};
-use cosmrs::tendermint::chain::Id;
-use cosmrs::{
-    AccountId, Coin,
-    tx::{Body, Fee, SignDoc, SignerInfo},
-};
-use prost::Message;
 use reqwest::Client;
 use ripemd::Ripemd160;
 use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{error::Error, str::FromStr};
+
 use tokio::time::{Duration, sleep};
 
 pub const BECH_PREFIX: &str = "twilight";
@@ -450,6 +444,10 @@ impl Wallet {
             nyks: balance_nyks,
             sats: balance_sats,
         })
+    }
+    pub async fn account_info(&self) -> anyhow::Result<AccountResponse> {
+        let account_details = fetch_account_details(&self.twilightaddress).await?;
+        Ok(account_details)
     }
 }
 

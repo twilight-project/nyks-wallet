@@ -17,8 +17,19 @@ k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 hex = "0.4"
 prost = "0.12"
 prost-types = "0.12"
-# reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+
+#  json rpc dependencies #########################################################
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
+jsonrpc = "0.17.0"
+jsonrpc-http-server = "18.0"
+jsonrpc-core = "18.0.0"
+serde-this-or-that = "0.4.2"
+uuid = { version = "1.6.1", features = ["v4", "serde"] }
+lazy_static = "1.4.0"
+# #########################################################
+
+
 ripemd = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

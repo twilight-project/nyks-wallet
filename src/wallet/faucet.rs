@@ -1,23 +1,20 @@
-use super::MsgRegisterBtcDepositAddress;
+use super::super::MsgRegisterBtcDepositAddress;
 use anyhow::anyhow;
 use base64::{Engine as _, engine::general_purpose};
-use bip32::{DerivationPath, XPrv};
-use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
+
 use cosmrs::crypto::{PublicKey, secp256k1::SigningKey};
 use cosmrs::tendermint::chain::Id;
 use cosmrs::{
-    AccountId, Coin,
+    Coin,
     tx::{Body, Fee, SignDoc, SignerInfo},
 };
 use prost::Message;
 use reqwest::Client;
-use ripemd::Ripemd160;
-use rpassword::prompt_password;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+
 use std::{error::Error, str::FromStr};
-use tokio::time::{Duration, sleep};
 
 pub fn create_register_btc_deposit_message(
     btc_address: String,
@@ -41,12 +38,12 @@ pub fn create_register_btc_deposit_message(
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct AccountResponse {
     pub account: Account,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Account {
     #[serde(rename = "@type")]
     pub account_type: String,
