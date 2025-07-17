@@ -6,6 +6,8 @@ mod tests {
     use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
     use crate::seed_signer::{build_sign_doc, sign_adr036, signature_bundle};
     use crate::wallet::*;
+    use crate::zkos_accounts::ZkAccountDB;
+    use crate::zkos_accounts::encrypted_account::DERIVATION_MESSAGE;
     use cosmrs::crypto::secp256k1::SigningKey;
     use serial_test::serial;
     #[tokio::test]
@@ -32,7 +34,7 @@ mod tests {
                 "wallet creation failed, wallet already exists"
             ),
         }
-        let mut wallet = Wallet::import_from_json("test.json")?;
+        let wallet = Wallet::import_from_json("test.json")?;
         println!("wallet: {:?}", wallet);
         Ok(())
     }
@@ -77,7 +79,7 @@ mod tests {
     #[serial]
     async fn test_fetch_account_details() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
-        let mut wallet = Wallet::import_from_json("test.json")?;
+        let wallet = Wallet::import_from_json("test.json")?;
         let account_details = fetch_account_details(&wallet.twilightaddress).await?;
         println!("Account details: {:?}", account_details);
         Ok(())
@@ -87,7 +89,7 @@ mod tests {
     #[serial]
     async fn test_check_balance() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
-        let mut wallet = Wallet::import_from_json("test.json")?;
+        let wallet = Wallet::import_from_json("test.json")?;
         let balance = check_balance(&wallet.twilightaddress).await?;
         println!("Balance: {:?}", balance);
         Ok(())
@@ -151,5 +153,44 @@ mod tests {
         let seed = generate_seed(&private_key, &twilight_address, sign_mgs, chain_id);
         println!("{:?}", seed);
         Ok(())
+    }
+
+    #[test]
+    fn test_zkaccount_from_seed() {
+        // Create a mock 64-byte signature/seed
+        let wallet = Wallet::import_from_json("test.json").unwrap();
+        let private_key = wallet.private_key.clone();
+        let twilight_address = wallet.twilightaddress.clone();
+        let chain_id = "nyks";
+
+        let seed = match generate_seed(
+            &private_key,
+            &twilight_address,
+            DERIVATION_MESSAGE,
+            chain_id,
+        ) {
+            Ok(seed) => seed,
+            Err(e) => panic!("Failed to generate seed: {}", e),
+        };
+        let seed_str = seed.get_signature();
+
+        let balance = 40000;
+
+        // Create ZkAccount from seed
+        println!("{}", seed_str);
+        let mut db = match ZkAccountDB::import_from_json("ZkAccounts.json") {
+            Ok(db) => db,
+            Err(e) => {
+                println!("Failed to import from json: {}", e);
+                ZkAccountDB::new()
+            }
+        };
+        let index = db.generate_new_account(balance, seed_str).unwrap();
+        println!("{}", index);
+        println!("{}", db.get_all_accounts_as_json());
+        match db.export_to_json("ZkAccounts.json") {
+            Ok(_) => println!("Exported to ZkAccounts.json"),
+            Err(e) => println!("Failed to export to json: {}", e),
+        }
     }
 }

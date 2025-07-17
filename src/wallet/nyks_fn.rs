@@ -126,7 +126,7 @@ mod tests {
         let (qq_account, encrypt_scalar) = get_quisquis_account();
         let twilight_address = "twilight1ykm5td5kw2hwafmhn7qha54p20veh9um05dpjn".to_string();
 
-        let msg = create_funiding_to_trading_tx_msg(
+        let _msg = create_funiding_to_trading_tx_msg(
             true,  // mint
             50000, // btc value in sats
             qq_account,

@@ -1,11 +1,8 @@
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose};
 use cosmrs::crypto::secp256k1::SigningKey;
-use k256::ecdsa::signature::Signer; // for Signer::sign
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::str::FromStr;
 
 /// ----- MsgSignData (ADR-036) -------------------------------------------------
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +43,12 @@ impl PubKeyBundle {
     pub fn new(key_type: String, value: String) -> Self {
         Self { key_type, value }
     }
+    pub fn get_value(&self) -> String {
+        self.value.clone()
+    }
+    pub fn get_key_type(&self) -> String {
+        self.key_type.clone()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +63,21 @@ impl SignatureBundle {
             address,
             key,
             signature,
+        }
+    }
+    pub fn get_signature(&self) -> String {
+        self.signature.clone()
+    }
+    pub fn get_address(&self) -> String {
+        self.address.clone()
+    }
+    pub fn get_key(&self) -> PubKeyBundle {
+        self.key.clone()
+    }
+    pub fn get_signature_bytes(&self) -> Vec<u8> {
+        match general_purpose::STANDARD.decode(self.signature.as_bytes()) {
+            Ok(sig) => sig,
+            Err(_) => return self.signature.as_bytes().to_vec(),
         }
     }
 }

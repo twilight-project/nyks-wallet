@@ -1,15 +1,11 @@
+use super::encrypted_account::{EncryptedAccount, KeyManager};
 use curve25519_dalek::scalar::Scalar;
-use quisquislib::keys::{PublicKey, SecretKey};
-use quisquislib::ristretto::RistrettoPublicKey;
-use quisquislib::ristretto::RistrettoSecretKey;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use twilight_client_sdk::encrypted_account::KeyManager; // correct path
-use twilight_client_sdk::encrypted_account::{self, EncryptedAccount};
-use twilight_client_sdk::quisquislib;
-use twilight_client_sdk::quisquislib::Account;
-use twilight_client_sdk::quisquislib::ElGamalCommitment;
+use twilight_client_sdk::quisquislib::{
+    Account, ElGamalCommitment, keys::PublicKey, ristretto::RistrettoPublicKey,
+};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ZkAccount {
@@ -17,14 +13,22 @@ pub struct ZkAccount {
     pub balance: u64,
     pub account: String,
     pub scalar: String,
+    pub index: u32,
 }
 impl ZkAccount {
-    pub fn new(qq_address: String, balance: u64, account: String, scalar: String) -> Self {
+    pub fn new(
+        qq_address: String,
+        balance: u64,
+        account: String,
+        scalar: String,
+        index: u32,
+    ) -> Self {
         Self {
             qq_address,
             balance,
             account,
             scalar,
+            index,
         }
     }
 
@@ -44,34 +48,103 @@ impl ZkAccount {
         let account: String = qq_address.get_address();
         let qq_address_str: String = qq_address.to_hex_str();
 
-        Self::new(qq_address_str, balance, account, rscalar_str)
+        Self::new(qq_address_str, balance, account, rscalar_str, index)
     }
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ZkAccountDB {
-    pub accounts: HashMap<String, ZkAccount>,
+    pub accounts: HashMap<u32, ZkAccount>,
+    pub index: u32,
 }
+impl ZkAccountDB {
+    pub fn new() -> Self {
+        Self {
+            accounts: HashMap::new(),
+            index: 0,
+        }
+    }
+    pub fn add_account(&mut self, account: ZkAccount) -> Option<ZkAccount> {
+        let result = self.accounts.insert(self.index, account);
+        self.index += 1;
+        result
+    }
+    pub fn generate_new_account(&mut self, balance: u64, seed: String) -> Result<u32, String> {
+        let zk_account = ZkAccount::from_seed(self.index, seed, balance);
+        self.add_account(zk_account);
+        Ok(self.index)
+    }
+    pub fn try_add_account(&mut self, account: ZkAccount) -> Result<u32, String> {
+        if self.accounts.contains_key(&account.index) {
+            return Err(format!(
+                "Account with index {} already exists",
+                account.index
+            ));
+        }
+        self.accounts.insert(self.index, account);
+        self.index += 1;
+        Ok(self.index)
+    }
 
-#[cfg(test)]
-mod tests {
-
-    use crate::Wallet;
-
-    use super::*;
-
-    #[test]
-    fn test_zkaccount_from_seed() {
-        // Create a mock 64-byte signature/seed
-        let wallet = Wallet::import_from_json("test.json");
-
-        let mock_seed = "mDbWcSVCauGEhYH15ubwa8fer14iud/bL2nR6KcofD5Plm7Ebrwv4VbU8eQiB0n0Mh7R4ZnPyPylqBUga+3S0g==";
-
-        let index = 0;
-        let balance = 40000;
-
-        // Create ZkAccount from seed
-        let zk_account = ZkAccount::from_seed(index, mock_seed.to_string(), balance);
-        println!("{:?}", zk_account);
+    pub fn get_account(&self, index: &u32) -> Option<&ZkAccount> {
+        self.accounts.get(index)
+    }
+    pub fn remove_account(&mut self, index: &u32) {
+        self.accounts.remove(index);
+    }
+    pub fn get_all_accounts(&self) -> Vec<&ZkAccount> {
+        self.accounts.values().collect()
+    }
+    pub fn get_all_accounts_as_json(&self) -> String {
+        serde_json::to_string(&self.accounts).unwrap()
+    }
+    pub fn import_from_json(path: &str) -> Result<ZkAccountDB, String> {
+        let json = match std::fs::read_to_string(path) {
+            Ok(json) => json,
+            Err(e) => return Err(format!("Failed to read file: {}", e)),
+        };
+        let zk_accounts_db: ZkAccountDB = match serde_json::from_str(&json) {
+            Ok(zk_accounts_db) => zk_accounts_db,
+            Err(e) => return Err(format!("Failed to parse json: {}", e)),
+        };
+        Ok(zk_accounts_db)
+    }
+    pub fn get_balance(&self, index: &u32) -> Option<u64> {
+        self.accounts.get(index).map(|account| account.balance)
+    }
+    pub fn update_balance(&mut self, index: &u32, balance: u64) -> Result<(), String> {
+        if !self.accounts.contains_key(index) {
+            return Err(format!("Account with index {} does not exist", index));
+        }
+        self.accounts.get_mut(index).unwrap().balance = balance;
+        Ok(())
+    }
+    pub fn export_to_json(&self, path: &str) -> Result<(), String> {
+        match serde_json::to_string(&self) {
+            Ok(json) => match std::fs::write(path, json) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(format!("Failed to export to json: {}", e)),
+            },
+            Err(e) => Err(format!("Failed to export to json: {}", e)),
+        }
+    }
+    pub fn try_export_to_json(&self, path: &str) -> Result<(), String> {
+        match serde_json::to_string(&self) {
+            Ok(json) => {
+                // Check if file exists and rename to filename_old if it does
+                if std::path::Path::new(path).exists() {
+                    let old_path =
+                        format!("{}_{}", path, chrono::Local::now().format("%Y%m%d_%H%M%S"));
+                    if let Err(e) = std::fs::rename(path, &old_path) {
+                        return Err(format!("Failed to rename existing file: {}", e));
+                    }
+                }
+                match std::fs::write(path, json) {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(format!("Failed to export to json: {}", e)),
+                }
+            }
+            Err(e) => Err(format!("Failed to export to json: {}", e)),
+        }
     }
 }
