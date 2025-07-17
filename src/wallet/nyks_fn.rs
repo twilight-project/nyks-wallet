@@ -10,11 +10,6 @@ use reqwest::header::HeaderMap;
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, HeaderValue, USER_AGENT};
 use serde_json::Value;
 use std::str::FromStr;
-// // ---------- constants you’ll want to tweak ----------
-// const RPC: &str = "https://rpc.twilight.rest"; // Nyks RPC, not LCD
-// const CHAIN_ID: &str = "nyks";
-// const DENOM: &str = "nyks"; // replace with Nyks micro‑denom
-// // ----------------------------------------------------
 
 pub fn create_funiding_to_trading_tx_msg(
     mint_or_burn: bool,
@@ -31,23 +26,8 @@ pub fn create_funiding_to_trading_tx_msg(
         twilight_address,
     };
     msg
-    // let mut buf = Vec::new();
-    // msg.encode(&mut buf).expect("msg encoding failed");
-    // cosmrs::Any {
-    //     type_url: "/twilightproject.nyks.zkos.MsgMintBurnTradingBtc".to_string(),
-    //     value: buf,
-    // }
 }
 pub fn get_quisquis_account() -> (String, String) {
-    // let public_key = PublicKey::from_str(&public_key).unwrap();
-    // let seed =
-    //     "tX4LFWW05uhE/N+VKWY8ikY5+NnFm5IXbK1SnGMpdiZma5wLXOD5t5s8I/P895VdembmQYeHnWWDceovTBp2Qw==";
-    // let account_sort = "0c0ac626dc24a96380b7640c90a03461a0aaf16e771839c95f584f82bb9975015c7a6c946aafa060c78424699190413702a6458f3b0262d42f510d7f93054841253378ff89";
-    // let account = "0c5c36ec4eee3811e82e3e354e9ad96dd240831c5e0100dad43eb2c87508e3236204965efe7c2b93da826d0fd2cb95462cc785d9a9c698482c94d4628d24c50d16fc1f3b996aaaffe04c1b84ab116ffe01cd5c8952ab9be7152d65bb40be593d6cd5b5eb2c74a6baedb2b87bdc87af9b06afefe57c3afa0902b86911c30e676399a715c77d";
-
-    // let scalar_sort = "f4ef453352a387869a31e898b690c637d8fad27bf0b1c79f482b16d2e6188707";
-    // let scalar = "a4cae9ad74de209a2fc3512d30f22a6b3d33d87b9fb2e7bf0a56f32943a0cc04";
-
     let account = "0c7811a4496cb25be33fc96514bffba4d8c27befabc4fec7a17c86c31a66c38d53a6113f126c7cf9a6d718b21029dd7eb55b0397c9f1af7baa2f41e3bacab51313fe71e051c4301500aaab0a5ed4a00253fd339e7025a4a0b5954f369c0634656b872dc4029c5bc4abd85721ef90cc67188d0a95d5046d1db3cafa61cba9fc61eb319de03d";
     let scalar = "4fd91931c1700868734dcc26a1312dce47502771127bf7281f9a1187b183d30a";
     (account.to_string(), scalar.to_string())
@@ -133,9 +113,6 @@ mod tests {
             encrypt_scalar,
             twilight_address,
         );
-
-        // println!("Message type_url: {}", msg.type_url);
-        // println!("Message value (base64): {}", base64::encode(&msg.value));
     }
     #[tokio::test]
     async fn test_send_tx() -> anyhow::Result<()> {

@@ -41,11 +41,11 @@ The resulting binary will be at `target/release/relayer_init`.
 
 `relayer_init` talks to several Twilight test-net services. Endpoints are looked up via environment variables and **panic if they are not set**.
 
-| Variable          | Default value                          | Notes                                                          |
-| ----------------- | -------------------------------------- | -------------------------------------------------------------- |
-| `LCD_BASE_URL`    | `https://lcd.twilight.rest`            | Cosmos SDK LCD (REST) endpoint                                 |
-| `FAUCET_BASE_URL` | `https://faucet-rpc.twilight.rest`     | Nyks / BTC faucet services                                     |
-| `ZKOS_SERVER_URL` | `https://nykschain.twilight.rest/zkos` | ZkOS JSON-RPC endpoint – e.g. `https://zkos-rpc.twilight.rest` |
+| Variable          | Default value                          | Notes                          |
+| ----------------- | -------------------------------------- | ------------------------------ |
+| `LCD_BASE_URL`    | `https://lcd.twilight.rest`            | NYKS chain LCD (REST) endpoint |
+| `FAUCET_BASE_URL` | `https://faucet-rpc.twilight.rest`     | Nyks / BTC faucet services     |
+| `ZKOS_SERVER_URL` | `https://nykschain.twilight.rest/zkos` | ZkOS JSON-RPC endpoint         |
 
 ### 3.1 Create a `.env` file (recommended)
 
