@@ -179,6 +179,7 @@ async fn main() -> Result<(), String> {
     }
     let seed_signature_clone = seed_signature.clone();
     let zk_account_clone = zk_account.clone();
+    let zk_account_clone2 = zk_account.clone();
     let (tx, output_state) = match tokio::task::spawn_blocking(move || {
         deploy_relayer_initial_state(
             account_id.clone(),
@@ -227,6 +228,20 @@ async fn main() -> Result<(), String> {
     println!("out_state_hex {:?}\n", out_state_hex);
     println!("secret_key: {:?}", seed_signature_clone);
     println!("index: {}", index - 1);
+    let relayer_data = serde_json::json!({
+        "zkaccount": zk_account_clone2,
+        "index": index - 1,
+        "out_state_hex": out_state_hex,
+        "seed_signature": seed_signature_clone
+    });
+
+    match std::fs::write(
+        "relayer_deployer.json",
+        serde_json::to_string_pretty(&relayer_data).unwrap(),
+    ) {
+        Ok(_) => println!("Successfully wrote relayer data to relayer_deployer.json"),
+        Err(e) => return Err(format!("Failed to write relayer data to file: {}", e)),
+    }
     Ok(())
 }
 
