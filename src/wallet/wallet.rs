@@ -308,7 +308,49 @@ pub struct Wallet {
     pub btc_address: String,
 }
 impl Wallet {
-    pub fn new(
+    pub async fn create_new_with_random_btc_address() -> anyhow::Result<Wallet> {
+        let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
+        let seed = mnemonic.to_seed("");
+        let path: DerivationPath = "m/44'/118'/0'/0/0"
+            .parse()
+            .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
+
+        let xprv = XPrv::derive_from_path(&seed, &path)
+            .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
+
+        let private_key_bytes = xprv.private_key().to_bytes();
+
+        let signing_key = SigningKey::from_slice(&private_key_bytes)
+            .map_err(|e| anyhow!("Invalid private key: {}", e))?;
+        let public_key = signing_key.public_key();
+        println!("{}", hex::encode(public_key.to_bytes()));
+        let account_id = public_key
+            .account_id(BECH_PREFIX)
+            .map_err(|e| anyhow!("Address generation failed: {}", e))?;
+
+        println!("twilight account address: {}", account_id);
+        let random_key = SigningKey::random();
+        let pubkey_bytes = random_key.public_key().to_bytes();
+        let btc_address = format!(
+            "bc1q{}",
+            hex::encode(&pubkey_bytes[..19])
+                .chars()
+                .take(38)
+                .collect::<String>()
+        );
+
+        Ok(Wallet {
+            private_key: private_key_bytes.to_vec(),
+            public_key: public_key.to_bytes().to_vec(),
+            twilightaddress: account_id.to_string(),
+            balance_nyks: 0,
+            balance_sats: 0,
+            sequence: 0,
+            btc_address,
+        })
+    }
+
+    pub fn from(
         private_key: String,
         public_key: String,
         twilightaddress: String,

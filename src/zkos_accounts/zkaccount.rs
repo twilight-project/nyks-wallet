@@ -7,13 +7,13 @@ use twilight_client_sdk::quisquislib::{
     Account, ElGamalCommitment, keys::PublicKey, ristretto::RistrettoPublicKey,
 };
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ZkAccount {
     pub qq_address: String,
     pub balance: u64,
     pub account: String,
     pub scalar: String,
-    pub index: u32,
+    pub index: u64,
 }
 impl ZkAccount {
     pub fn new(
@@ -21,7 +21,7 @@ impl ZkAccount {
         balance: u64,
         account: String,
         scalar: String,
-        index: u32,
+        index: u64,
     ) -> Self {
         Self {
             qq_address,
@@ -32,7 +32,7 @@ impl ZkAccount {
         }
     }
 
-    pub fn from_seed(index: u32, seed: String, balance: u64) -> Self {
+    pub fn from_seed(index: u64, seed: String, balance: u64) -> Self {
         let key_manager = KeyManager::from_cosmos_signature(seed.as_bytes());
 
         let secret_key = key_manager.derive_child_key(index);
@@ -52,10 +52,10 @@ impl ZkAccount {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ZkAccountDB {
-    pub accounts: HashMap<u32, ZkAccount>,
-    pub index: u32,
+    pub accounts: HashMap<u64, ZkAccount>,
+    pub index: u64,
 }
 impl ZkAccountDB {
     pub fn new() -> Self {
@@ -69,12 +69,12 @@ impl ZkAccountDB {
         self.index += 1;
         result
     }
-    pub fn generate_new_account(&mut self, balance: u64, seed: String) -> Result<u32, String> {
+    pub fn generate_new_account(&mut self, balance: u64, seed: String) -> Result<u64, String> {
         let zk_account = ZkAccount::from_seed(self.index, seed, balance);
         self.add_account(zk_account);
         Ok(self.index)
     }
-    pub fn try_add_account(&mut self, account: ZkAccount) -> Result<u32, String> {
+    pub fn try_add_account(&mut self, account: ZkAccount) -> Result<u64, String> {
         if self.accounts.contains_key(&account.index) {
             return Err(format!(
                 "Account with index {} already exists",
@@ -86,10 +86,10 @@ impl ZkAccountDB {
         Ok(self.index)
     }
 
-    pub fn get_account(&self, index: &u32) -> Option<&ZkAccount> {
-        self.accounts.get(index)
+    pub fn get_account(&self, index: &u64) -> Option<ZkAccount> {
+        self.accounts.get(index).cloned()
     }
-    pub fn remove_account(&mut self, index: &u32) {
+    pub fn remove_account(&mut self, index: &u64) {
         self.accounts.remove(index);
     }
     pub fn get_all_accounts(&self) -> Vec<&ZkAccount> {
@@ -109,10 +109,10 @@ impl ZkAccountDB {
         };
         Ok(zk_accounts_db)
     }
-    pub fn get_balance(&self, index: &u32) -> Option<u64> {
+    pub fn get_balance(&self, index: &u64) -> Option<u64> {
         self.accounts.get(index).map(|account| account.balance)
     }
-    pub fn update_balance(&mut self, index: &u32, balance: u64) -> Result<(), String> {
+    pub fn update_balance(&mut self, index: &u64, balance: u64) -> Result<(), String> {
         if !self.accounts.contains_key(index) {
             return Err(format!("Account with index {} does not exist", index));
         }

@@ -39,7 +39,7 @@ impl KeyManager {
     }
 
     /// Derives a child key for a specific account index using an HD wallet pattern.
-    pub fn derive_child_key(&self, account_index: u32) -> RistrettoSecretKey {
+    pub fn derive_child_key(&self, account_index: u64) -> RistrettoSecretKey {
         derive_child_key(&self.master_key, account_index)
     }
 }
@@ -54,7 +54,7 @@ fn derive_master_ristretto_key(cosmos_signature_bytes: &[u8]) -> RistrettoSecret
 
 /// Derives a child key from a master key and an account index.
 /// This creates a simple Hierarchical Deterministic (HD) path.
-fn derive_child_key(master_key: &RistrettoSecretKey, account_index: u32) -> RistrettoSecretKey {
+fn derive_child_key(master_key: &RistrettoSecretKey, account_index: u64) -> RistrettoSecretKey {
     let mut hasher = Sha512::new();
 
     // Hash the master key bytes concatenated with a domain separator and the account index.
