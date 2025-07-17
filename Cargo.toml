@@ -17,7 +17,7 @@ k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 hex = "0.4"
 prost = "0.12"
 prost-types = "0.12"
-
+chrono = "0.4"
 
 #  json rpc dependencies #########################################################
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
@@ -46,7 +46,14 @@ tendermint-rpc = { version = "0.34", features = ["http-client"] }
 [dependencies.twilight-client-sdk]
 git = "https://github.com/twilight-project/twilight-client-sdk.git"
 branch = "zk-account"
+# path = "../twilight-client-sdk_zkaccount"
 
+[dependencies.utxo-in-memory]
+git = "https://github.com/twilight-project/zkos-rust.git"
+branch = "develop"
+[dependencies.address]
+git = "https://github.com/twilight-project/zkos-rust.git"
+branch = "develop"
 
 [build-dependencies]
 prost-build = "0.12"

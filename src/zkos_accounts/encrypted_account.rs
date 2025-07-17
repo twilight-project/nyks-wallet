@@ -1,3 +1,4 @@
+use address::{AddressType, Network};
 use core::convert::TryInto;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
@@ -5,10 +6,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha512};
 use twilight_client_sdk::{
-    address::{AddressType, Network},
     quisquislib::{
         self, Account, ElGamalCommitment, RistrettoPublicKey, RistrettoSecretKey, keys::SecretKey,
     },
+    util,
     zkvm::{
         Address,
         zkos_types::{IOType, Output, OutputCoin, OutputData},
@@ -263,7 +264,7 @@ pub fn generate_encrypted_account_with_balance(
     // Parse the string of data into a RistrettoPublicKey object.
     let pk = public_key_from_hex(pk)?;
 
-    let comm_scalar = match crate::util::hex_to_scalar(r_scalar) {
+    let comm_scalar = match util::hex_to_scalar(r_scalar) {
         Some(scalar) => scalar,
         None => return Err("Error converting hex string to Scalar"),
     };

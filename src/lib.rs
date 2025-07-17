@@ -3,8 +3,7 @@ pub mod wallet;
 pub use wallet::*;
 pub mod test;
 pub mod zkos_accounts;
-pub extern crate twilight_client_sdk;
-pub use twilight_client_sdk::*;
+
 #[macro_use]
 extern crate lazy_static;
 // ----------------------------------------------------------------------------
