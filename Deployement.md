@@ -9,8 +9,8 @@ This document explains how to build and run the `relayer_init` binary that ships
 Make sure the following tools are available on your system:
 
 | Tool                        | Minimum version      | Install command                                                               |
-| --------------------------- | -------------------- | ----------------------------------------------------------------------------- | -------------------------------- |
-| Rust toolchain              | 2024-edition nightly | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs                    | sh`<br/>`rustup default nightly` |
+| --------------------------- | -------------------- | ----------------------------------------------------------------------------- |
+| Rust toolchain              | 2024-edition nightly | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs                    |
 | `protoc` (Protocol Buffers) | ≥ 3.0                | Ubuntu `sudo apt install protobuf-compiler`<br/>macOS `brew install protobuf` |
 | `git`                       | any                  | Ubuntu `sudo apt install git`                                                 |
 
