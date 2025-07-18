@@ -5,6 +5,7 @@ use nyks_wallet::{
     nyks_rpc::rpcclient::{
         method::{Method, MethodTypeURL},
         txrequest::{RpcBody, RpcRequest, TxParams},
+        txresult::from_rpc_response,
     },
     zkos_accounts::{
         ZkAccount, ZkAccountDB,
@@ -130,11 +131,23 @@ async fn send_rpc_request(signed_tx: String) -> Result<(), String> {
     let url = "https://rpc.twilight.rest".to_string();
 
     // Execute the blocking HTTP request on a separate thread
-    let _response = tokio::task::spawn_blocking(move || tx_send.send(url))
+    let response = tokio::task::spawn_blocking(move || tx_send.send(url))
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
 
     // info!("response: {:?}", response);
+    let result = match response {
+        Ok(response) => from_rpc_response(response),
+        Err(e) => {
+            return Err(format!("Failed to get tx result: {}", e));
+        }
+    };
+    match result {
+        Ok(result) => info!("result: {:?}", result),
+        Err(e) => {
+            return Err(format!("Failed to get tx result: {}", e));
+        }
+    }
     Ok(())
 }
 
