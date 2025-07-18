@@ -3,8 +3,9 @@ use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use twilight_client_sdk::quisquislib::{
-    Account, ElGamalCommitment, keys::PublicKey, ristretto::RistrettoPublicKey,
+use twilight_client_sdk::{
+    quisquislib::{Account, ElGamalCommitment, keys::PublicKey, ristretto::RistrettoPublicKey},
+    zkvm::IOType,
 };
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -14,6 +15,7 @@ pub struct ZkAccount {
     pub account: String,
     pub scalar: String,
     pub index: u64,
+    pub io_type: IOType,
 }
 impl ZkAccount {
     pub fn new(
@@ -29,6 +31,7 @@ impl ZkAccount {
             account,
             scalar,
             index,
+            io_type: IOType::Coin,
         }
     }
 
@@ -72,7 +75,7 @@ impl ZkAccountDB {
     pub fn generate_new_account(&mut self, balance: u64, seed: String) -> Result<u64, String> {
         let zk_account = ZkAccount::from_seed(self.index, seed, balance);
         self.add_account(zk_account);
-        Ok(self.index)
+        Ok(self.index - 1)
     }
     pub fn try_add_account(&mut self, account: ZkAccount) -> Result<u64, String> {
         if self.accounts.contains_key(&account.index) {
@@ -88,6 +91,9 @@ impl ZkAccountDB {
 
     pub fn get_account(&self, index: &u64) -> Option<ZkAccount> {
         self.accounts.get(index).cloned()
+    }
+    pub fn get_mut_account(&mut self, index: &u64) -> Option<&mut ZkAccount> {
+        self.accounts.get_mut(index)
     }
     pub fn remove_account(&mut self, index: &u64) {
         self.accounts.remove(index);
