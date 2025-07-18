@@ -1,13 +1,13 @@
 use super::super::MsgRegisterBtcDepositAddress;
 use anyhow::anyhow;
 use base64::{Engine as _, engine::general_purpose};
-
 use cosmrs::crypto::{PublicKey, secp256k1::SigningKey};
 use cosmrs::tendermint::chain::Id;
 use cosmrs::{
     Coin,
     tx::{Body, Fee, SignDoc, SignerInfo},
 };
+use log::debug;
 use prost::Message;
 use reqwest::Client;
 
@@ -90,7 +90,7 @@ pub async fn get_nyks(recipient_address: &str) -> Result<(), Box<dyn Error>> {
     let response = client.post(url).json(&payload).send().await?;
 
     if response.status().is_success() {
-        println!("Faucet response: {}", response.text().await?);
+        debug!("Faucet response: {}", response.text().await?);
         Ok(())
     } else {
         let status = response.status();
@@ -116,7 +116,7 @@ pub async fn mint_sats(recipient_address: &str) -> Result<(), Box<dyn Error>> {
     let response = client.post(url).json(&payload).send().await?;
 
     if response.status().is_success() {
-        println!("Mint response: {}", response.text().await?);
+        debug!("Mint response: {}", response.text().await?);
         Ok(())
     } else {
         let status = response.status();
@@ -141,7 +141,7 @@ pub async fn mint_sats_5btc(recipient_address: &str) -> Result<(), Box<dyn Error
     let response = client.post(url).json(&payload).send().await?;
 
     if response.status().is_success() {
-        println!("Mint response: {}", response.text().await?);
+        debug!("Mint response: {}", response.text().await?);
         Ok(())
     } else {
         let status = response.status();
@@ -199,6 +199,6 @@ pub async fn sign_and_send_reg_deposit_tx(
         .send()
         .await?;
 
-    println!("Broadcast response: {}", res.text().await?);
+    debug!("Broadcast response: {}", res.text().await?);
     Ok(())
 }

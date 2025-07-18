@@ -46,6 +46,7 @@ The resulting binary will be at `target/release/relayer_init`.
 | `LCD_BASE_URL`    | `https://lcd.twilight.rest`            | NYKS chain LCD (REST) endpoint |
 | `FAUCET_BASE_URL` | `https://faucet-rpc.twilight.rest`     | Nyks / BTC faucet services     |
 | `ZKOS_SERVER_URL` | `https://nykschain.twilight.rest/zkos` | ZkOS JSON-RPC endpoint         |
+| `RUST_LOG`        | `info`                                 | Logging info                   |
 
 ### 3.1 Create a `.env` file (recommended)
 
@@ -54,6 +55,7 @@ cat <<'EOF' > .env
 LCD_BASE_URL=https://lcd.twilight.rest
 FAUCET_BASE_URL=https://faucet-rpc.twilight.rest
 ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
+RUST_LOG=info
 
 EOF
 ```
@@ -72,6 +74,7 @@ You can also pass variables inline for a single execution:
 ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos \
 LCD_BASE_URL=https://lcd.twilight.rest \
 FAUCET_BASE_URL=https://faucet-rpc.twilight.rest \
+RUST_LOG=info \
 cargo run --bin relayer_init
 ```
 
@@ -148,6 +151,7 @@ docker run --rm \
   -e LCD_BASE_URL=https://lcd.twilight.rest \
   -e FAUCET_BASE_URL=https://faucet-rpc.twilight.rest \
   -e ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos \
+  -e RUST_LOG=info \
   -v $(pwd):/home/relayer \
   relayer-init
 ```
