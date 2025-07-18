@@ -8,9 +8,9 @@ This guide gets you from **zero to a funded test wallet in ~60 seconds**. For a 
 
 | Tool           | Min. version                            | Install                                                     |
 | -------------- | --------------------------------------- | ----------------------------------------------------------- | ------------------------------------ |
-| Rust toolchain | 2024-edition nightly (or stable ≥ 1.75) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs` |
+| Rust toolchain | 2024-edition nightly (or stable ≥ 1.75) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs` |                                      |
 | protoc         | ≥ 3.0                                   | Ubuntu `sudo apt install protobuf-compiler` &nbsp;          | &nbsp; macOS `brew install protobuf` |
-| git            | any                                     | Ubuntu `sudo apt install git`                               |
+| git            | any                                     | Ubuntu `sudo apt install git`                               |                                      |
 
 > Tip – On Debian/Ubuntu add OpenSSL headers: `sudo apt install pkg-config libssl-dev`.
 
@@ -36,7 +36,7 @@ This produces the library **and** the sample binary `relayer_init` in `target/re
 Nyks Wallet talks to the public Twilight test-net. Endpoints are read from environment variables and will **panic if missing**.
 
 ```bash
-cat <<'EOF' > .env
+cat <<'EOF' > .env.blbal
 LCD_BASE_URL=https://lcd.twilight.rest
 FAUCET_BASE_URL=https://faucet-rpc.twilight.rest
 ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
