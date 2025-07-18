@@ -6,7 +6,7 @@ use nyks_wallet::{
         txrequest::{RpcBody, RpcRequest, TxParams},
     },
     zkos_accounts::{
-        ZkAccountDB,
+        ZkAccount, ZkAccountDB,
         encrypted_account::{DERIVATION_MESSAGE, KeyManager},
     },
     *,
@@ -18,46 +18,201 @@ use twilight_client_sdk::{
     zkvm::{IOType, Output},
 };
 
-#[tokio::main]
-async fn main() -> Result<(), String> {
-    dotenv::dotenv().ok();
-    let mut wallet = match Wallet::create_new_with_random_btc_address().await {
-        Ok(wallet) => wallet,
-        Err(e) => {
-            println!("Error: {}", e);
-            return Err(e.to_string());
-        }
-    };
+/// Initializes a new wallet, requests test tokens from the faucet, and waits until the
+/// balance is reflected on-chain.
+async fn setup_wallet() -> Result<Wallet, String> {
+    let mut wallet = Wallet::create_new_with_random_btc_address()
+        .await
+        .map_err(|e| e.to_string())?;
+
     match get_test_tokens(&mut wallet).await {
         Ok(_) => println!("Tokens received"),
         Err(e) => return Err(e.to_string()),
     }
+
+    // Give the faucet some time to finalize and the indexer to catch up.
     sleep(Duration::from_secs(5)).await;
-    let chain_id = "nyks";
-    let seed_signature = match generate_seed(
+
+    Ok(wallet)
+}
+
+/// Generates a seed signature, loads or initializes the `ZkAccountDB`, creates a new zk
+/// account, persists the DB to disk, and returns `(zk_accounts, index, seed_signature)`.
+fn setup_zk_accounts(
+    wallet: &Wallet,
+    chain_id: &str,
+) -> Result<(ZkAccountDB, u64, String), String> {
+    // Generate seed signature
+    let seed_signature = generate_seed(
         &wallet.private_key,
         &wallet.twilightaddress,
         DERIVATION_MESSAGE,
         chain_id,
-    ) {
-        Ok(seed) => seed.get_signature(),
-        Err(e) => return Err(format!("Failed to generate seed: {}", e)),
-    };
-    let mut zk_accounts = match ZkAccountDB::import_from_json("ZkAccounts.json") {
-        Ok(db) => db,
-        Err(e) => {
-            println!("Failed to import from json: {}", e);
-            ZkAccountDB::new()
-        }
-    };
+    )
+    .map_err(|e| format!("Failed to generate seed: {}", e))?
+    .get_signature();
+
+    // Load or create db
+    let mut zk_accounts = ZkAccountDB::import_from_json("ZkAccounts.json").unwrap_or_else(|e| {
+        println!("Failed to import from json: {}. Creating new DB", e);
+        ZkAccountDB::new()
+    });
+
+    // Create new zk account
     let index = zk_accounts
         .generate_new_account(wallet.balance_sats, seed_signature.clone())
-        .unwrap();
-    println!("index: {}", index);
-    match zk_accounts.export_to_json("ZkAccounts.json") {
-        Ok(_) => println!("ZkAccounts.json exported"),
-        Err(e) => return Err(format!("Failed to export to json: {}", e)),
+        .map_err(|e| format!("Failed to generate new zk account: {}", e))?;
+
+    // Persist DB
+    zk_accounts
+        .export_to_json("ZkAccounts.json")
+        .map_err(|e| format!("Failed to export to json: {}", e))?;
+
+    Ok((zk_accounts, index, seed_signature))
+}
+
+/// Constructs a `MsgMintBurnTradingBtc` for the given wallet/zk account, then signs it and
+/// returns the base64-encoded transaction ready for broadcast.
+fn build_and_sign_msg(
+    wallet: &Wallet,
+    zk_accounts: &ZkAccountDB,
+    index: u64,
+    sequence: u64,
+    account_number: u64,
+) -> Result<String, String> {
+    // Retrieve zk account (index is 1-based from setup)
+    let account_idx = index - 1;
+    let zk_account = zk_accounts
+        .get_account(&account_idx)
+        .ok_or_else(|| format!("Failed to get zk account: {}", account_idx))?;
+
+    // Build message
+    let msg = MsgMintBurnTradingBtc {
+        mint_or_burn: true,
+        btc_value: wallet.balance_sats,
+        qq_account: zk_account.qq_address.clone(),
+        encrypt_scalar: zk_account.scalar.clone(),
+        twilight_address: wallet.twilightaddress.clone(),
+    };
+
+    // Serialize into Any and sign
+    let method_type = MethodTypeURL::MsgMintBurnTradingBtc;
+    let any_msg = method_type.type_url(msg);
+
+    let sk = wallet
+        .signing_key()
+        .map_err(|e| format!("Failed to get signing key: {}", e))?;
+    let pk = wallet
+        .public_key()
+        .map_err(|e| format!("Failed to get public key: {}", e))?;
+
+    let signed_tx = method_type
+        .sign_msg::<MsgMintBurnTradingBtc>(any_msg, pk, sequence, account_number, sk)
+        .map_err(|e| e.to_string())?;
+
+    Ok(signed_tx)
+}
+
+/// Broadcasts the signed transaction to the NYKS RPC endpoint and logs the response.
+async fn send_rpc_request(signed_tx: String) -> Result<(), String> {
+    // Prepare the RPC request body
+    let (tx_send, _): (RpcBody<TxParams>, String) = RpcRequest::new_with_data(
+        TxParams::new(signed_tx.clone()),
+        Method::broadcast_tx_sync,
+        signed_tx,
+    );
+
+    // RPC endpoint URL (consider moving to an env var later)
+    let url = "https://rpc.twilight.rest".to_string();
+
+    // Execute the blocking HTTP request on a separate thread
+    let response = tokio::task::spawn_blocking(move || tx_send.send(url))
+        .await
+        .map_err(|e| format!("Failed to send RPC request: {}", e))?;
+
+    println!("response: {:?}", response);
+    Ok(())
+}
+
+/// Repeatedly queries the chain for UTXO details until success or `max_attempts` reached.
+async fn fetch_utxo_details_with_retry(
+    account_id: String,
+    max_attempts: u32,
+    delay_ms: u64,
+) -> Result<(), String> {
+    let mut attempts = 0;
+    loop {
+        let account_id_clone = account_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            twilight_client_sdk::chain::get_utxo_details_by_address(account_id_clone, IOType::Coin)
+        })
+        .await
+        {
+            Ok(response) => match response {
+                Ok(utxo_detail) => {
+                    println!("utxo_detail: {:?}, account_id: {}", utxo_detail, account_id);
+                    return Ok(());
+                }
+                Err(err) => {
+                    attempts += 1;
+                    if attempts >= max_attempts {
+                        return Err(format!(
+                            "Failed to get utxo details after {} attempts: {}",
+                            max_attempts, err
+                        ));
+                    }
+                }
+            },
+            Err(e) => {
+                attempts += 1;
+                if attempts >= max_attempts {
+                    return Err(format!("Failed to spawn blocking task: {}", e));
+                }
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
     }
+}
+
+/// Serializes and writes relayer deployment data to `relayer_deployer.json`.
+fn export_relayer_data(
+    zk_account: &ZkAccount,
+    index: u64,
+    output_state: &Output,
+    seed_signature: &str,
+) -> Result<(), String> {
+    let out_state_bin = bincode::serialize(output_state)
+        .map_err(|e| format!("Failed to serialize output_state: {}", e))?;
+    let out_state_hex = hex::encode(&out_state_bin);
+
+    println!("out_state_hex {:?}", out_state_hex);
+    println!("secret_key: {:?}", seed_signature);
+    println!("index: {}", index);
+
+    let relayer_data = serde_json::json!({
+        "zkaccount": zk_account,
+        "index": index,
+        "out_state_hex": out_state_hex,
+        "seed_signature": seed_signature,
+    });
+
+    let json_str = serde_json::to_string_pretty(&relayer_data)
+        .map_err(|e| format!("Failed to serialize relayer data to JSON: {}", e))?;
+
+    std::fs::write("relayer_deployer.json", json_str)
+        .map_err(|e| format!("Failed to write relayer data to file: {}", e))?;
+
+    println!("Successfully wrote relayer data to relayer_deployer.json");
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), String> {
+    dotenv::dotenv().ok();
+    let mut wallet = setup_wallet().await?;
+    let chain_id = "nyks";
+    let (mut zk_accounts, index, seed_signature) = setup_zk_accounts(&wallet, chain_id)?;
+    println!("index: {}", index);
     let account_details = match wallet.account_info().await {
         Ok(details) => details,
         Err(e) => {
@@ -79,64 +234,12 @@ async fn main() -> Result<(), String> {
             return Err(format!("Failed to parse account number: {}", e));
         }
     };
-    // Create test message
-    let msg = MsgMintBurnTradingBtc {
-        mint_or_burn: true,
-        btc_value: wallet.balance_sats,
-        qq_account: zk_accounts
-            .get_account(&(index - 1))
-            .unwrap()
-            .qq_address
-            .clone(),
-        encrypt_scalar: zk_accounts
-            .get_account(&(index - 1))
-            .unwrap()
-            .scalar
-            .clone(),
-        twilight_address: wallet.twilightaddress.clone(),
-    };
+    // Build and sign message
+    let signed_tx = build_and_sign_msg(&wallet, &zk_accounts, index, sequence, account_number)?;
+    // Broadcast the transaction
+    send_rpc_request(signed_tx.clone()).await?;
 
-    // Create method type and get Any message
-    let method_type = MethodTypeURL::MsgMintBurnTradingBtc;
-    let any_msg = method_type.type_url(msg);
-    let sk = match wallet.signing_key() {
-        Ok(sk) => sk,
-        Err(e) => {
-            println!("Failed to get signing key: {}", e);
-            return Err(format!("Failed to get signing key: {}", e));
-        }
-    };
-    let pk = match wallet.public_key() {
-        Ok(pk) => pk,
-        Err(e) => {
-            println!("Failed to get public key: {}", e);
-            return Err(format!("Failed to get public key: {}", e));
-        }
-    };
-    // Sign the message
-    let signed_tx = method_type
-        .sign_msg::<MsgMintBurnTradingBtc>(any_msg, pk, sequence, account_number, sk)
-        .unwrap();
-
-    // Create RPC request
-    let (tx_send, _data): (RpcBody<TxParams>, String) = RpcRequest::new_with_data(
-        TxParams::new(signed_tx.clone()),
-        Method::broadcast_tx_sync,
-        signed_tx,
-    );
-
-    // Send RPC request
-    // let response = tx_send.send("https://rpc.twilight.rest".to_string(), data);
-    let url = "https://rpc.twilight.rest".to_string();
-    let response = match tokio::task::spawn_blocking(move || tx_send.send(url)).await {
-        Ok(response) => response,
-        Err(e) => {
-            println!("Failed to send RPC request: {}", e);
-            return Err(format!("Failed to send RPC request: {}", e));
-        }
-    };
-
-    println!("response: {:?}", response);
+    // Retrieve the zk account and ensure it exists
     let zk_account = match zk_accounts.get_account(&(index - 1)) {
         Some(account) => account.clone(),
         None => {
@@ -144,39 +247,12 @@ async fn main() -> Result<(), String> {
             return Err(format!("Failed to get zk account: {}", index));
         }
     };
-    let mut chain_attempt = 0;
-    let utxo_output;
-    let account_id = zk_account.clone().account.clone();
-    loop {
-        let account_id_clone = account_id.clone();
-        match tokio::task::spawn_blocking(move || {
-            twilight_client_sdk::chain::get_utxo_details_by_address(account_id_clone, IOType::Coin)
-        })
-        .await
-        {
-            Ok(response) => {
-                match response {
-                    Ok(utxo_detail) => {
-                        println!("utxo_detail: {:?}, account_id: {}", utxo_detail, account_id);
-                        utxo_output = utxo_detail;
-                        break;
-                    }
-                    Err(arg) => {
-                        chain_attempt += 1;
 
-                        if chain_attempt == 100 {
-                            // flag_chain_update = false;
-                            return Err(format!("Failed to get utxo details: {}", arg));
-                        }
-                        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Error: {}", e);
-            }
-        }
-    }
+    // Wait for UTXO details to appear on-chain
+    let account_id = zk_account.clone().account.clone();
+    fetch_utxo_details_with_retry(account_id.clone(), 100, 200).await?;
+
+    // Deploy the relayer initial state
     let seed_signature_clone = seed_signature.clone();
     let zk_account_clone = zk_account.clone();
     let zk_account_clone2 = zk_account.clone();
@@ -202,6 +278,8 @@ async fn main() -> Result<(), String> {
         }
     };
     println!("tx: {:?},\n\n\n output_state: {:?}", tx, output_state);
+
+    // Broadcast the deployment transaction
     let tx_clone = tx.clone();
     let broadcast_result = match tokio::task::spawn_blocking(move || {
         twilight_client_sdk::chain::tx_commit_broadcast_transaction(tx_clone)
@@ -220,28 +298,13 @@ async fn main() -> Result<(), String> {
     };
     println!("Transaction broadcast result: {}", broadcast_result);
 
-    let tx_bin = bincode::serialize(&tx).unwrap();
-    let tx_hex = hex::encode(&tx_bin);
-    let out_state_bin = bincode::serialize(&output_state).unwrap();
-    let out_state_hex = hex::encode(&out_state_bin);
-    // println!("tx_hex {:?}\n", tx_hex);
-    println!("out_state_hex {:?}\n", out_state_hex);
-    println!("secret_key: {:?}", seed_signature_clone);
-    println!("index: {}", index - 1);
-    let relayer_data = serde_json::json!({
-        "zkaccount": zk_account_clone2,
-        "index": index - 1,
-        "out_state_hex": out_state_hex,
-        "seed_signature": seed_signature_clone
-    });
+    export_relayer_data(
+        &zk_account_clone2,
+        index - 1,
+        &output_state,
+        &seed_signature_clone,
+    )?;
 
-    match std::fs::write(
-        "relayer_deployer.json",
-        serde_json::to_string_pretty(&relayer_data).unwrap(),
-    ) {
-        Ok(_) => println!("Successfully wrote relayer data to relayer_deployer.json"),
-        Err(e) => return Err(format!("Failed to write relayer data to file: {}", e)),
-    }
     Ok(())
 }
 
