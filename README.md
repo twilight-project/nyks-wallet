@@ -137,7 +137,7 @@ All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**
 | `LCD_BASE_URL`    | `https://lcd.twilight.rest`            | Cosmos SDK LCD REST endpoint                  |
 | `FAUCET_BASE_URL` | `https://faucet-rpc.twilight.rest`     | Faucet & mint endpoints                       |
 | `ZKOS_SERVER_URL` | `https://nykschain.twilight.rest/zkos` | zkaccount json-rpc endpoint                   |
-| `RUST_LOG`        | `info`                                 | `info`, `debug` and `warn` are tags available |
+| `RUST_LOG`        | `info`                                 | `info`, `debug` and `warn` are available tags |
 
 Set them before running to point the SDK at a local full-node.
 
@@ -173,8 +173,10 @@ async fn main() -> anyhow::Result<()> {
 
 ## 9 • Further reading
 
-- [Twilight Protocol docs](https://twilight-project.github.io/) – consensus, Nyks module and bridge design.
-- [`twilight-client-sdk`](https://crates.io/crates/twilight-client-sdk) – Rust primitives for QuisQuis & ZkOS.
+- [Quick Start guide](QuickStart.md) – fastest path to build, configure & fund a test wallet.
+- [Deployment guide](DEPLOYMENT.md) – detailed steps to build & run `relayer_init` (plus Docker).
+- [`twilight-client-sdk`](https:/github.com/twilight-project/twilight-client-sdk) – Rust primitives for QuisQuis & ZkOS.
+- [`relayer-core`](https://github.com/twilight-project/relayer-core)
 - [ADR-036](https://github.com/cosmos/cosmos-adrs/blob/main/adr-036-arbitrary-data-signature.md) – Canonical signing of arbitrary data (used by seed signer).
 
 ---
