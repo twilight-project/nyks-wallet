@@ -1,11 +1,9 @@
-use tokio::time::{Duration, sleep};
-
 use log::{debug, error, info};
 use nyks_wallet::{
     nyks_rpc::rpcclient::{
         method::{Method, MethodTypeURL},
         txrequest::{RpcBody, RpcRequest, TxParams},
-        txresult::from_rpc_response,
+        txresult::{from_rpc_response, parse_tx_response},
     },
     zkos_accounts::{
         ZkAccount, ZkAccountDB,
@@ -13,6 +11,8 @@ use nyks_wallet::{
     },
     *,
 };
+
+use tokio::time::{Duration, sleep};
 use twilight_client_sdk::{
     script,
     transaction::Transaction,
@@ -27,6 +27,8 @@ async fn setup_wallet() -> Result<Wallet, String> {
     let mut wallet = Wallet::create_new_with_random_btc_address()
         .await
         .map_err(|e| e.to_string())?;
+    // info!("importing wallet from json");
+    // let mut wallet = Wallet::import_from_json("test.json").map_err(|e| e.to_string())?;
     info!("Getting test tokens from faucet");
     match get_test_tokens(&mut wallet).await {
         Ok(_) => info!("Tokens received successfully"),
@@ -121,11 +123,9 @@ fn build_and_sign_msg(
 /// Broadcasts the signed transaction to the NYKS RPC endpoint and logs the response.
 async fn send_rpc_request(signed_tx: String) -> Result<(), String> {
     // Prepare the RPC request body
-    let (tx_send, _): (RpcBody<TxParams>, String) = RpcRequest::new_with_data(
-        TxParams::new(signed_tx.clone()),
-        Method::broadcast_tx_sync,
-        signed_tx,
-    );
+    let method = Method::broadcast_tx_sync;
+    let (tx_send, _): (RpcBody<TxParams>, String) =
+        RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
 
     // RPC endpoint URL (consider moving to an env var later)
     let url = "https://rpc.twilight.rest".to_string();
@@ -135,15 +135,21 @@ async fn send_rpc_request(signed_tx: String) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
 
-    // info!("response: {:?}", response);
     let result = match response {
-        Ok(response) => from_rpc_response(response),
+        Ok(rpc_response) => parse_tx_response(&method, rpc_response),
         Err(e) => {
             return Err(format!("Failed to get tx result: {}", e));
         }
     };
+    // let result = parse_tx_response(tx_send.get_method(), response);
     match result {
-        Ok(result) => info!("result: {:?}", result),
+        Ok(result) => {
+            info!(
+                "tx hash: {} with code: {}",
+                result.get_tx_hash(),
+                result.get_code()
+            );
+        }
         Err(e) => {
             return Err(format!("Failed to get tx result: {}", e));
         }
@@ -274,7 +280,7 @@ async fn main() -> Result<(), String> {
     // Wait for UTXO details to appear on-chain
     info!("    Waiting for UTXO details to appear on-chain...");
     let account_id = zk_account.clone().account.clone();
-    fetch_utxo_details_with_retry(account_id.clone(), 100, 200).await?;
+    fetch_utxo_details_with_retry(account_id.clone(), 100, 500).await?;
 
     // Deploy the relayer initial state
     let seed_signature_clone = seed_signature.clone();

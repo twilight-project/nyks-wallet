@@ -1,8 +1,10 @@
-use super::json_rpc::id::Id;
+use crate::nyks_rpc::rpcclient::utils::uuid_v4;
+
+// use super::json_rpc::id::Id;
 use super::method::Method;
 // use curve25519_dalek::digest::Output;
-use jsonrpc_core::Version;
 use jsonrpc_core::response::Output;
+use jsonrpc_core::{Id, Version};
 use serde::{Deserialize, Serialize};
 // use super::method::Method;
 use reqwest::blocking::Response;
@@ -129,7 +131,7 @@ pub fn rpc_response(
 
 impl RpcRequest<TxParams> for RpcBody<TxParams> {
     fn new(request: TxParams, method: Method) -> Self {
-        Self::new_with_id(Id::uuid_v4(), request, method)
+        Self::new_with_id(Id::Str(uuid_v4()), request, method)
     }
 
     fn new_with_id(id: Id, request: TxParams, method: Method) -> Self {
@@ -144,7 +146,7 @@ impl RpcRequest<TxParams> for RpcBody<TxParams> {
         (
             Self {
                 jsonrpc: Version::V2,
-                id: Id::uuid_v4(),
+                id: Id::Str(uuid_v4()),
                 method: method,
                 params: request,
             },

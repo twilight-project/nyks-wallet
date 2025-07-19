@@ -4,18 +4,52 @@ mod tests {
     use crate::nyks_fn::MsgMintBurnTradingBtc;
     use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
     use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+    use crate::nyks_rpc::rpcclient::txresult::from_rpc_response;
     use crate::seed_signer::{build_sign_doc, sign_adr036, signature_bundle};
     use crate::wallet::*;
     use crate::zkos_accounts::ZkAccountDB;
     use crate::zkos_accounts::encrypted_account::DERIVATION_MESSAGE;
     use cosmrs::crypto::secp256k1::SigningKey;
+    use log::warn;
     use serial_test::serial;
+
+    use std::sync::Once;
+    use tokio::sync::OnceCell;
+
+    static INIT: Once = Once::new();
+    static INIT_ASYNC: OnceCell<()> = OnceCell::const_new();
+
+    // This function initializes the logger for the tests.
+    fn init_logger() {
+        INIT.call_once(|| {
+            // `is_test(true)` keeps the default filter at `trace`
+            // and respects RUST_LOG if you set it.
+            env_logger::builder().is_test(true).try_init().ok();
+        });
+    }
+    async fn global_setup() {
+        INIT_ASYNC
+            .get_or_init(|| async {
+                match create_and_export_randmon_wallet_account("test").await {
+                    Ok(_) => println!("wallet created successfully"),
+                    Err(_) => warn!(
+                        "error: {:?}",
+                        "wallet creation failed, wallet already exists"
+                    ),
+                }
+            })
+            .await;
+    }
+
+    // This test creates a new wallet and exports it to a JSON file.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_create_wallet --exact --show-output
     #[tokio::test]
     #[serial]
     async fn test_create_wallet() {
+        init_logger();
         dotenv::dotenv().ok();
         match create_and_export_randmon_wallet_account("test1").await {
-            Ok(wallet) => println!("wallet: {:?}", wallet),
+            Ok(_) => println!("wallet created successfully"),
             Err(_) => println!(
                 "error: {:?}",
                 "wallet creation failed, wallet already exists"
@@ -23,51 +57,77 @@ mod tests {
         }
     }
 
+    // This test imports a wallet from a JSON file and prints the wallet details.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_import --exact --show-output
     #[tokio::test]
     #[serial]
     async fn test_wallet_import() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
-        match create_and_export_randmon_wallet_account("test").await {
-            Ok(wallet) => println!("wallet: {:?}", wallet),
-            Err(e) => println!(
-                "error: {:?}",
-                "wallet creation failed, wallet already exists"
-            ),
-        }
+        init_logger();
+        global_setup().await;
+
         let wallet = Wallet::import_from_json("test.json")?;
         println!("wallet: {:?}", wallet);
         Ok(())
     }
 
+    // This test creates a new wallet, gets test tokens, updates the balance and account info,
+    // and exports the wallet to a JSON file.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_complete_flow --exact --show-output
+    #[tokio::test]
+    #[serial]
+    async fn test_wallet_complete_flow() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        init_logger();
+        global_setup().await;
+
+        let mut wallet = Wallet::import_from_json("test.json")?;
+        println!("wallet: {:?}", wallet);
+        get_test_tokens(&mut wallet).await?;
+        wallet.update_balance().await?;
+        wallet.update_account_info().await?;
+        wallet.export_to_json("test.json")?;
+
+        println!("wallet: {:?}", wallet);
+        Ok(())
+    }
+
+    // This test creates a new wallet, gets test tokens and prints the wallet details.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_get_tokens --exact --show-output
     #[tokio::test]
     #[serial]
     async fn test_get_tokens() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
-        match create_and_export_randmon_wallet_account("test").await {
-            Ok(wallet) => println!("wallet: {:?}", wallet),
-            Err(e) => println!(
-                "error: {:?}",
-                "wallet creation failed, wallet already exists"
-            ),
-        }
+        init_logger();
+        global_setup().await;
+
         let mut wallet = Wallet::import_from_json("test.json")?;
         get_test_tokens(&mut wallet).await?;
+        println!("Updated wallet: {:?}", wallet);
+
         Ok(())
     }
 
+    // This test creates a new wallet from a mnemonic and prints the wallet details.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_from_mnemonic --exact --show-output
     #[tokio::test]
     #[serial]
     async fn test_wallet_from_mnemonic() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
+        init_logger();
         let wallet =
             Wallet::from_mnemonic("test test test test test test test test test test test junk")?;
         println!("wallet: {:?}", wallet);
         Ok(())
     }
+
+    // This test creates a new wallet from a private key and prints the wallet details.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_from_private_key --exact --show-output
     #[tokio::test]
     #[serial]
     async fn test_wallet_from_private_key() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
+        init_logger();
         let wallet = Wallet::from_private_key(
             "e64e7928d4f6c06f01fefd31f760c51f59a16426e792761cd00529b76501c8a0",
         )?;
@@ -75,28 +135,42 @@ mod tests {
         Ok(())
     }
 
+    // This test fetches the account details and prints them.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_fetch_account_details --exact --show-output
     #[tokio::test]
     #[serial]
     async fn test_fetch_account_details() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
+        init_logger();
+        global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
         let account_details = fetch_account_details(&wallet.twilightaddress).await?;
         println!("Account details: {:?}", account_details);
         Ok(())
     }
 
+    // This test checks the balance of the wallet and prints it.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_check_balance --exact --show-output
     #[tokio::test]
     #[serial]
     async fn test_check_balance() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
+        init_logger();
+        global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
         let balance = check_balance(&wallet.twilightaddress).await?;
         println!("Balance: {:?}", balance);
         Ok(())
     }
 
+    // This test broadcasts a mint/burn transaction and prints the response.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_broadcast_tx_sync_mint_burn --exact --show-output
     #[tokio::test]
+    #[serial]
     async fn test_broadcast_tx_sync_mint_burn() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        init_logger();
+        global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
         let sk = wallet.signing_key()?;
         let pk = wallet.public_key()?;
@@ -135,16 +209,40 @@ mod tests {
         // Send RPC request
         // let response = tx_send.send("https://rpc.twilight.rest".to_string(), data);
         let url = "https://rpc.twilight.rest".to_string();
-        let response = tokio::task::spawn_blocking(move || tx_send.send(url))
+        let response = match tokio::task::spawn_blocking(move || tx_send.send(url))
             .await // wait for the blocking task to finish
-            .expect("blocking task panicked")?;
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    println!("Failed to send RPC request: {}", e);
+                    return Err(anyhow::anyhow!("Failed to send RPC request: {}", e));
+                }
+            };
 
         println!("response: {:?}", response);
+
+        let result = match response {
+            Ok(rpc_response) => from_rpc_response(rpc_response),
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to get tx result: {}", e));
+            }
+        };
+        match result {
+            Ok(result) => println!("result: {:?}", result),
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to get tx result: {}", e));
+            }
+        }
         Ok(())
     }
 
+    // This test creates a seed and prints it.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_seed_signer --exact --show-output
     #[tokio::test]
     async fn test_seed_signer() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        init_logger();
+        global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
         let private_key = wallet.private_key.clone();
         let twilight_address = wallet.twilightaddress.clone();
@@ -155,8 +253,14 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_zkaccount_from_seed() {
+    // This test creates a ZkAccount from a seed and prints it.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_zkaccount_from_seed --exact --show-output
+    #[tokio::test]
+    #[serial]
+    async fn test_zkaccount_from_seed() {
+        dotenv::dotenv().ok();
+        init_logger();
+        global_setup().await;
         // Create a mock 64-byte signature/seed
         let wallet = Wallet::import_from_json("test.json").unwrap();
         let private_key = wallet.private_key.clone();

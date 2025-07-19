@@ -43,7 +43,7 @@ pub struct AccountResponse {
     pub account: Account,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Account {
     #[serde(rename = "@type")]
     pub account_type: String,
@@ -191,10 +191,10 @@ pub async fn sign_and_send_reg_deposit_tx(
     // --- Encode & broadcast
     let tx_bytes = raw_tx.to_bytes().map_err(|e| anyhow!("{}", e))?;
     let tx_base64 = general_purpose::STANDARD.encode(&tx_bytes);
-
+    let baseurl = std::env::var("LCD_BASE_URL").unwrap_or("https://lcd.twilight.rest".to_string());
     let client = Client::new();
     let res = client
-        .post("https://lcd.twilight.rest/cosmos/tx/v1beta1/txs")
+        .post(format!("{}/cosmos/tx/v1beta1/txs", baseurl))
         .json(&json!({ "tx_bytes": tx_base64, "mode": "BROADCAST_MODE_SYNC" }))
         .send()
         .await?;

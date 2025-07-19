@@ -7,7 +7,7 @@ use uuid::Uuid;
 /// Produce a string containing a UUID.
 ///
 /// Panics if random number generation fails.
-pub fn uuid_str() -> String {
+pub fn uuid_v4() -> String {
     let mut bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
 
