@@ -4,13 +4,13 @@ use bip32::{DerivationPath, XPrv};
 use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
 use cosmrs::AccountId;
 use cosmrs::crypto::{PublicKey, secp256k1::SigningKey};
+use log::{debug, error, info};
 use reqwest::Client;
 use ripemd::Ripemd160;
 use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-
 use tokio::time::{Duration, sleep};
 
 pub const BECH_PREFIX: &str = "twilight";
@@ -172,7 +172,7 @@ pub async fn check_code() -> anyhow::Result<()> {
             .take(38)
             .collect::<String>()
     );
-    println!("   Generated BTC Address: {}", btc_address);
+    debug!("   Generated BTC Address: {}", btc_address);
 
     match sign_and_send_reg_deposit_tx(
         signing_key,
@@ -183,10 +183,9 @@ pub async fn check_code() -> anyhow::Result<()> {
     .await
     {
         Ok(_) => {
-            println!("✅ Successfully registered BTC deposit address!");
-            println!("   BTC Address: {}", btc_address);
-            println!("   Test Amount: 50,000 satoshis");
-            println!("   Staking Amount: 10,000 twilight tokens");
+            info!("Successfully registered BTC deposit address!");
+            debug!("   BTC Address: {}", btc_address);
+            debug!("   Amount: 50,000 satoshis");
         }
         Err(e) => {
             eprintln!("❌ Failed to register BTC deposit address: {}", e);
@@ -285,8 +284,12 @@ pub async fn create_and_export_randmon_wallet_account(name: &str) -> anyhow::Res
         "mnemonic": mnemonic.to_string(),
         "private_key": hex::encode(private_key_bytes),
         "public_key": hex::encode(public_key.to_bytes()),
-        "address": account_id.to_string(),
+        "twilightaddress": account_id.to_string(),
         "btc_address": btc_address.to_string(),
+        "btc_address_registered": false,
+        "balance_nyks": 0,
+        "balance_sats": 0,
+        "sequence": 0,
     });
 
     let json_string = serde_json::to_string_pretty(&account_info)?;
@@ -306,9 +309,53 @@ pub struct Wallet {
     pub balance_sats: SATS,
     pub sequence: u64,
     pub btc_address: String,
+    pub btc_address_registered: bool,
+    pub account_info: Option<Account>,
 }
 impl Wallet {
-    pub fn new(
+    pub async fn create_new_with_random_btc_address() -> anyhow::Result<Wallet> {
+        let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
+        let seed = mnemonic.to_seed("");
+        let path: DerivationPath = "m/44'/118'/0'/0/0"
+            .parse()
+            .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
+
+        let xprv = XPrv::derive_from_path(&seed, &path)
+            .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
+
+        let private_key_bytes = xprv.private_key().to_bytes();
+
+        let signing_key = SigningKey::from_slice(&private_key_bytes)
+            .map_err(|e| anyhow!("Invalid private key: {}", e))?;
+        let public_key = signing_key.public_key();
+        let account_id = public_key
+            .account_id(BECH_PREFIX)
+            .map_err(|e| anyhow!("Address generation failed: {}", e))?;
+
+        let random_key = SigningKey::random();
+        let pubkey_bytes = random_key.public_key().to_bytes();
+        let btc_address = format!(
+            "bc1q{}",
+            hex::encode(&pubkey_bytes[..19])
+                .chars()
+                .take(38)
+                .collect::<String>()
+        );
+
+        Ok(Wallet {
+            private_key: private_key_bytes.to_vec(),
+            public_key: public_key.to_bytes().to_vec(),
+            twilightaddress: account_id.to_string(),
+            balance_nyks: 0,
+            balance_sats: 0,
+            sequence: 0,
+            btc_address,
+            btc_address_registered: false,
+            account_info: None,
+        })
+    }
+
+    pub fn from(
         private_key: String,
         public_key: String,
         twilightaddress: String,
@@ -322,6 +369,8 @@ impl Wallet {
             balance_sats: 0,
             sequence: 0,
             btc_address,
+            btc_address_registered: false,
+            account_info: None,
         }
     }
 
@@ -357,6 +406,8 @@ impl Wallet {
             balance_sats: 0,
             sequence: 0,
             btc_address,
+            btc_address_registered: false,
+            account_info: None,
         })
     }
 
@@ -384,6 +435,8 @@ impl Wallet {
             balance_sats: 0,
             sequence: 0,
             btc_address,
+            btc_address_registered: false,
+            account_info: None,
         })
     }
 
@@ -395,11 +448,18 @@ impl Wallet {
                 .unwrap_or_default(),
             public_key: hex::decode(account_info["public_key"].as_str().unwrap().to_string())
                 .unwrap_or_default(),
-            twilightaddress: account_info["address"].as_str().unwrap().to_string(),
-            balance_nyks: 0,
-            balance_sats: 0,
-            sequence: 0,
+            twilightaddress: account_info["twilightaddress"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            balance_nyks: account_info["balance_nyks"].as_u64().unwrap_or_default(),
+            balance_sats: account_info["balance_sats"].as_u64().unwrap_or_default(),
+            sequence: account_info["sequence"].as_u64().unwrap_or_default(),
             btc_address: account_info["btc_address"].as_str().unwrap().to_string(),
+            btc_address_registered: account_info["btc_address_registered"]
+                .as_bool()
+                .unwrap_or_default(),
+            account_info: None,
         };
         Ok(wallet)
     }
@@ -429,7 +489,7 @@ impl Wallet {
                     balance.get("amount").and_then(|a| a.as_str()),
                     balance.get("denom").and_then(|d| d.as_str()),
                 ) {
-                    println!("Balance: {} {}", amount, denom);
+                    debug!("Updating balance: {} {}", amount, denom);
                     if denom == "nyks" {
                         balance_nyks = amount.parse::<NYKS>().unwrap_or(0);
                     } else if denom == "sats" {
@@ -449,25 +509,47 @@ impl Wallet {
         let account_details = fetch_account_details(&self.twilightaddress).await?;
         Ok(account_details)
     }
+    pub async fn update_account_info(&mut self) -> anyhow::Result<()> {
+        let account_details = fetch_account_details(&self.twilightaddress).await?;
+        self.account_info = Some(account_details.account);
+        Ok(())
+    }
+    pub fn export_to_json(&self, path: &str) -> anyhow::Result<()> {
+        let account_info = serde_json::json!({
+            "private_key": hex::encode(self.private_key.clone()),
+            "public_key": hex::encode(self.public_key.clone()),
+            "twilightaddress": self.twilightaddress,
+            "btc_address": self.btc_address,
+            "btc_address_registered": self.btc_address_registered,
+            "balance_nyks": self.balance_nyks,
+            "balance_sats": self.balance_sats,
+            "sequence": self.sequence,
+            "account_info": self.account_info,
+        });
+        std::fs::write(path, account_info.to_string())?;
+        Ok(())
+    }
 }
 
 pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
     let balance = wallet.update_balance().await?;
-    println!("Checking balance values if nyks is less than 1000000");
-    println!("nyks: {}", balance.nyks);
-    if balance.nyks < 1000000 {
-        println!("Getting tokens from faucet");
+    debug!("Checking balance values if nyks is less than 50000");
+    debug!("nyks: {}", balance.nyks);
+    if balance.nyks < 50000 {
+        debug!("Getting tokens from faucet");
         get_nyks(&wallet.twilightaddress).await.unwrap_or_else(|e| {
-            eprintln!("Failed to get tokens from faucet: {}", e);
-            println!("💡 You may need to wait or try again later");
+            error!("Failed to get tokens from faucet: {}", e);
+            info!("💡 You may need to wait or try again later");
         });
+    } else {
+        info!("Skipping get tokens from faucet because nyks is greater than 50000");
     }
-    println!("waiting 10 seconds to update nyks balance");
+    info!("waiting for updated nyks balance to appear on-chain");
     sleep(Duration::from_secs(10)).await;
-    println!("Checking balance values if sats is 0 or less than 1000000");
-    println!("sats: {}", balance.sats);
-    if balance.sats == 0 {
-        println!("Registering BTC deposit address");
+    debug!("Checking balance values if sats is 0 or less than 50000");
+    debug!("sats: {}", balance.sats);
+    if balance.sats == 0 && !wallet.btc_address_registered {
+        info!("Registering random BTC deposit address");
         match sign_and_send_reg_deposit_tx(
             wallet.signing_key()?,
             wallet.public_key()?,
@@ -477,36 +559,41 @@ pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
         .await
         {
             Ok(_) => {
-                println!("✅ Successfully registered BTC deposit address!");
-                println!("   BTC Address: {}", &wallet.btc_address);
-                println!("   Test Amount: 50,000 satoshis");
-                println!("waiting 10 seconds to update sats balance");
+                info!("Successfully registered BTC deposit address!");
+                debug!("   BTC Address: {}", &wallet.btc_address);
+                debug!("   Amount: 50,000 satoshis");
+                info!("   waiting for registered BTC deposit address to appear on-chain");
                 sleep(Duration::from_secs(10)).await;
-                println!("Minting satoshis");
+                info!("Minting test BTC...");
                 mint_sats(&wallet.twilightaddress)
                     .await
                     .unwrap_or_else(|e| {
-                        eprintln!("Failed to mint satoshis: {}", e);
-                        println!("💡 You may need to wait or try again later");
+                        error!("Failed to mint satoshis: {}", e);
+                        info!("    You may need to restart the process again or try again later");
                     });
+                wallet.btc_address_registered = true;
             }
             Err(e) => {
-                eprintln!("❌ Failed to register BTC deposit address: {}", e);
+                error!("Failed to register BTC deposit address: {}", e);
+                info!("    You may need to restart the process again or try again later");
             }
         };
-    } else if balance.sats < 1000000 {
-        println!("Skipping register BTC deposit address because sats is less than 1000000");
-        println!("Minting satoshis");
-        mint_sats_5btc(&wallet.twilightaddress)
+    } else if balance.sats < 50000 {
+        debug!("    Skipping register BTC deposit address because sats is less than 50000");
+        info!("Minting test BTC...");
+        mint_sats(&wallet.twilightaddress)
             .await
             .unwrap_or_else(|e| {
-                eprintln!("Failed to mint satoshis: {}", e);
-                println!("💡 You may need to wait or try again later");
+                error!("Failed to mint satoshis: {}", e);
+                info!("    You may need to restart the process again or try again later");
             });
+    } else {
+        info!("Skipping minting test BTC because sats is greater than 50000");
     }
-    sleep(Duration::from_secs(5)).await;
+    info!("    waiting for updated sats balance to appear on-chain");
+    sleep(Duration::from_secs(10)).await;
     let balance = wallet.update_balance().await?;
-    println!("new balance: {:?}", balance);
+    debug!("    new balance: {:?}", balance);
 
     Ok(())
 }

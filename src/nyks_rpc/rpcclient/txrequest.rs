@@ -1,8 +1,10 @@
-use super::json_rpc::id::Id;
+use crate::nyks_rpc::rpcclient::utils::uuid_v4;
+
+// use super::json_rpc::id::Id;
 use super::method::Method;
 // use curve25519_dalek::digest::Output;
-use jsonrpc_core::Version;
 use jsonrpc_core::response::Output;
+use jsonrpc_core::{Id, Version};
 use serde::{Deserialize, Serialize};
 // use super::method::Method;
 use reqwest::blocking::Response;
@@ -129,7 +131,7 @@ pub fn rpc_response(
 
 impl RpcRequest<TxParams> for RpcBody<TxParams> {
     fn new(request: TxParams, method: Method) -> Self {
-        Self::new_with_id(Id::uuid_v4(), request, method)
+        Self::new_with_id(Id::Str(uuid_v4()), request, method)
     }
 
     fn new_with_id(id: Id, request: TxParams, method: Method) -> Self {
@@ -144,7 +146,7 @@ impl RpcRequest<TxParams> for RpcBody<TxParams> {
         (
             Self {
                 jsonrpc: Version::V2,
-                id: Id::uuid_v4(),
+                id: Id::Str(uuid_v4()),
                 method: method,
                 params: request,
             },
@@ -201,217 +203,3 @@ impl RpcRequest<TxParams> for RpcBody<TxParams> {
         }
     }
 }
-
-// impl RpcRequest<TransactionHashArgs> for RpcBody<TransactionHashArgs> {
-//     fn new(request: TransactionHashArgs, method: Method) -> Self {
-//         Self::new_with_id(Id::uuid_v4(), request, method)
-//     }
-
-//     fn new_with_id(id: Id, request: TransactionHashArgs, method: Method) -> Self {
-//         Self {
-//             jsonrpc: Version::V2,
-//             id,
-//             method: method,
-//             params: request,
-//         }
-//     }
-
-//     fn id(&self) -> &Id {
-//         &self.id
-//     }
-
-//     fn params(&self) -> &TransactionHashArgs {
-//         &self.params
-//     }
-//     fn into_json(self) -> String {
-//         let tx = serde_json::to_string(&self).unwrap();
-//         let mut file = File::create("foo.txt").unwrap();
-//         file.write_all(&serde_json::to_vec_pretty(&tx.clone()).unwrap())
-//             .unwrap();
-//         tx
-//     }
-
-//     fn get_method(&self) -> &Method {
-//         &self.method
-//     }
-
-//     fn send(
-//         self,
-//         url: std::string::String,
-//     ) -> Result<RpcResponse<serde_json::Value>, reqwest::Error> {
-//         match self.method {
-//             Method::transaction_hashes => {
-//                 let client = reqwest::blocking::Client::new();
-//                 let clint_clone = client.clone();
-//                 let res = clint_clone
-//                     .post(url)
-//                     .headers(construct_headers())
-//                     .body(self.into_json())
-//                     .send();
-
-//                 return rpc_response(res);
-//             }
-//             _ => {
-//                 let client = reqwest::blocking::Client::new();
-//                 let clint_clone = client.clone();
-//                 let res = clint_clone
-//                     .post(url)
-//                     .headers(construct_headers())
-//                     .body(self.into_json())
-//                     .send();
-
-//                 return rpc_response(res);
-//             }
-//         }
-//     }
-// }
-
-// impl RpcRequest<Option<String>> for RpcBody<Option<String>> {
-//     fn new(request: Option<String>, method: Method) -> Self {
-//         Self::new_with_id(Id::uuid_v4(), request, method)
-//     }
-
-//     fn new_with_id(id: Id, request: Option<String>, method: Method) -> Self {
-//         Self {
-//             jsonrpc: Version::V2,
-//             id,
-//             method: method,
-//             params: request,
-//         }
-//     }
-
-//     fn id(&self) -> &Id {
-//         &self.id
-//     }
-
-//     fn params(&self) -> &Option<String> {
-//         &self.params
-//     }
-//     fn into_json(self) -> String {
-//         let tx = serde_json::to_string(&self).unwrap();
-//         let mut file = File::create("foo.txt").unwrap();
-//         file.write_all(&serde_json::to_vec_pretty(&tx.clone()).unwrap())
-//             .unwrap();
-//         tx
-//     }
-
-//     fn get_method(&self) -> &Method {
-//         &self.method
-//     }
-
-//     fn send(
-//         self,
-//         url: std::string::String,
-//     ) -> Result<RpcResponse<serde_json::Value>, reqwest::Error> {
-//         match self.method {
-//             Method::btc_usd_price => {
-//                 let client = reqwest::blocking::Client::new();
-//                 let clint_clone = client.clone();
-//                 let res = clint_clone
-//                     .post(url)
-//                     .headers(construct_headers())
-//                     .body(self.into_json())
-//                     .send();
-
-//                 return rpc_response(res);
-//             }
-//             _ => {
-//                 let client = reqwest::blocking::Client::new();
-//                 let clint_clone = client.clone();
-//                 let res = clint_clone
-//                     .post(url)
-//                     .headers(construct_headers())
-//                     .body(self.into_json())
-//                     .send();
-
-//                 return rpc_response(res);
-//             }
-//         }
-//     }
-// }
-
-// impl RpcRequest<UtxoRequest> for RpcBody<UtxoRequest> {
-//     fn new(request: UtxoRequest, method: Method) -> Self {
-//         Self::new_with_id(Id::uuid_v4(), request, method)
-//     }
-
-//     fn new_with_id(id: Id, request: UtxoRequest, method: Method) -> Self {
-//         Self {
-//             jsonrpc: Version::V2,
-//             id,
-//             method: method,
-//             params: request,
-//         }
-//     }
-
-//     fn id(&self) -> &Id {
-//         &self.id
-//     }
-
-//     fn params(&self) -> &UtxoRequest {
-//         &self.params
-//     }
-//     fn into_json(self) -> String {
-//         let tx = serde_json::to_string(&self).unwrap();
-//         let mut file = File::create("foo.txt").unwrap();
-//         file.write_all(&serde_json::to_vec_pretty(&tx.clone()).unwrap())
-//             .unwrap();
-//         tx
-//     }
-
-//     fn get_method(&self) -> &Method {
-//         &self.method
-//     }
-
-//     fn send(
-//         self,
-//         url: std::string::String,
-//     ) -> Result<RpcResponse<serde_json::Value>, reqwest::Error> {
-//         match self.method {
-//             Method::get_utxos_id => {
-//                 let client = reqwest::blocking::Client::new();
-//                 let clint_clone = client.clone();
-//                 let res = clint_clone
-//                     .post(url)
-//                     .headers(construct_headers())
-//                     .body(self.into_json())
-//                     .send();
-
-//                 return rpc_response(res);
-//             }
-//             Method::get_output => {
-//                 let client = reqwest::blocking::Client::new();
-//                 let clint_clone = client.clone();
-//                 let res = clint_clone
-//                     .post(url)
-//                     .headers(construct_headers())
-//                     .body(self.into_json())
-//                     .send();
-
-//                 return rpc_response(res);
-//             }
-//             Method::get_utxos_detail => {
-//                 let client = reqwest::blocking::Client::new();
-//                 let clint_clone = client.clone();
-//                 let res = clint_clone
-//                     .post(url)
-//                     .headers(construct_headers())
-//                     .body(self.into_json())
-//                     .send();
-
-//                 return rpc_response(res);
-//             }
-//             _ => {
-//                 let client = reqwest::blocking::Client::new();
-//                 let clint_clone = client.clone();
-//                 let res = clint_clone
-//                     .post(url)
-//                     .headers(construct_headers())
-//                     .body(self.into_json())
-//                     .send();
-
-//                 return rpc_response(res);
-//             }
-//         }
-//     }
-// }

@@ -1,13 +1,13 @@
 use super::super::MsgRegisterBtcDepositAddress;
 use anyhow::anyhow;
 use base64::{Engine as _, engine::general_purpose};
-
 use cosmrs::crypto::{PublicKey, secp256k1::SigningKey};
 use cosmrs::tendermint::chain::Id;
 use cosmrs::{
     Coin,
     tx::{Body, Fee, SignDoc, SignerInfo},
 };
+use log::debug;
 use prost::Message;
 use reqwest::Client;
 
@@ -43,7 +43,7 @@ pub struct AccountResponse {
     pub account: Account,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Account {
     #[serde(rename = "@type")]
     pub account_type: String,
@@ -90,7 +90,7 @@ pub async fn get_nyks(recipient_address: &str) -> Result<(), Box<dyn Error>> {
     let response = client.post(url).json(&payload).send().await?;
 
     if response.status().is_success() {
-        println!("Faucet response: {}", response.text().await?);
+        debug!("Faucet response: {}", response.text().await?);
         Ok(())
     } else {
         let status = response.status();
@@ -116,7 +116,7 @@ pub async fn mint_sats(recipient_address: &str) -> Result<(), Box<dyn Error>> {
     let response = client.post(url).json(&payload).send().await?;
 
     if response.status().is_success() {
-        println!("Mint response: {}", response.text().await?);
+        debug!("Mint response: {}", response.text().await?);
         Ok(())
     } else {
         let status = response.status();
@@ -141,7 +141,7 @@ pub async fn mint_sats_5btc(recipient_address: &str) -> Result<(), Box<dyn Error
     let response = client.post(url).json(&payload).send().await?;
 
     if response.status().is_success() {
-        println!("Mint response: {}", response.text().await?);
+        debug!("Mint response: {}", response.text().await?);
         Ok(())
     } else {
         let status = response.status();
@@ -191,14 +191,14 @@ pub async fn sign_and_send_reg_deposit_tx(
     // --- Encode & broadcast
     let tx_bytes = raw_tx.to_bytes().map_err(|e| anyhow!("{}", e))?;
     let tx_base64 = general_purpose::STANDARD.encode(&tx_bytes);
-
+    let baseurl = std::env::var("LCD_BASE_URL").unwrap_or("https://lcd.twilight.rest".to_string());
     let client = Client::new();
     let res = client
-        .post("https://lcd.twilight.rest/cosmos/tx/v1beta1/txs")
+        .post(format!("{}/cosmos/tx/v1beta1/txs", baseurl))
         .json(&json!({ "tx_bytes": tx_base64, "mode": "BROADCAST_MODE_SYNC" }))
         .send()
         .await?;
 
-    println!("Broadcast response: {}", res.text().await?);
+    debug!("Broadcast response: {}", res.text().await?);
     Ok(())
 }
