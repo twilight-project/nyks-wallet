@@ -132,12 +132,13 @@ All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**
 
 ## 7 • Environment variables
 
-| Variable          | Default                                | Description                                   |
-| ----------------- | -------------------------------------- | --------------------------------------------- |
-| `LCD_BASE_URL`    | `https://lcd.twilight.rest`            | Cosmos SDK LCD REST endpoint                  |
-| `FAUCET_BASE_URL` | `https://faucet-rpc.twilight.rest`     | Faucet & mint endpoints                       |
-| `ZKOS_SERVER_URL` | `https://nykschain.twilight.rest/zkos` | zkaccount json-rpc endpoint                   |
-| `RUST_LOG`        | `info`                                 | `info`, `debug` and `warn` are available tags |
+| Variable            | Default                                | Description                                   |
+| ------------------- | -------------------------------------- | --------------------------------------------- |
+| `NYKS_LCD_BASE_URL` | `https://lcd.twilight.rest`            | Cosmos SDK LCD REST endpoint `port:1317`      |
+| `NYKS_RPC_BASE_URL` | `https://rpc.twilight.rest`            | Cosmos SDK RPC REST endpoint `port:26657`     |
+| `FAUCET_BASE_URL`   | `https://faucet-rpc.twilight.rest`     | Faucet & mint endpoints `port:6969`           |
+| `ZKOS_SERVER_URL`   | `https://nykschain.twilight.rest/zkos` | zkaccount json-rpc endpoint `port:3030`       |
+| `RUST_LOG`          | `info`                                 | `info`, `debug` and `warn` are available tags |
 
 Set them before running to point the SDK at a local full-node.
 

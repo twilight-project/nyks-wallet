@@ -37,7 +37,8 @@ Nyks Wallet talks to the public Twilight test-net. Endpoints are read from envir
 
 ```bash
 cat <<'EOF' > .env.blbal
-LCD_BASE_URL=https://lcd.twilight.rest
+NYKS_LCD_BASE_URL=https://lcd.twilight.rest
+NYKS_RPC_BASE_URL=https://rpc.twilight.rest
 FAUCET_BASE_URL=https://faucet-rpc.twilight.rest
 ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
 RUST_LOG=info

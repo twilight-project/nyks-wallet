@@ -1,4 +1,5 @@
 use crate::faucet::*;
+use crate::nyks_rpc::rpcclient::txrequest::NYKS_LCD_BASE_URL;
 use anyhow::anyhow;
 use bip32::{DerivationPath, XPrv};
 use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
@@ -213,8 +214,11 @@ pub async fn check_code() -> anyhow::Result<()> {
 }
 
 pub async fn check_balance(address: &str) -> anyhow::Result<Balance> {
-    let baseurl = std::env::var("LCD_BASE_URL").unwrap_or("https://lcd.twilight.rest".to_string());
-    let url = format!("{}/cosmos/bank/v1beta1/balances/{}", baseurl, address);
+    let url = format!(
+        "{}/cosmos/bank/v1beta1/balances/{}",
+        NYKS_LCD_BASE_URL.as_str(),
+        address
+    );
     let client = Client::new();
     let response = client.get(url).send().await?;
     let balance: Value = response.json().await?;
@@ -473,7 +477,8 @@ impl Wallet {
         Ok(self.signing_key()?.public_key())
     }
     pub async fn update_balance(&mut self) -> anyhow::Result<Balance> {
-        let baseurl = std::env::var("LCD_BASE_URL").unwrap_or("http://0.0.0.0:1317".to_string());
+        let baseurl =
+            std::env::var("NYKS_LCD_BASE_URL").unwrap_or("http://0.0.0.0:1317".to_string());
         let url = format!(
             "{}/cosmos/bank/v1beta1/balances/{}",
             baseurl, self.twilightaddress

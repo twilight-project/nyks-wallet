@@ -15,9 +15,11 @@ use std::io::prelude::*;
 // use crate::nyks_rpc::rpcclient::method::ByteRec;
 lazy_static! {
     pub static ref FAUCET_BASE_URL: String =
-        std::env::var("FAUCET_BASE_URL").expect("missing environment variable FAUCET_BASE_URL");
-    pub static ref LCD_BASE_URL: String =
-        std::env::var("LCD_BASE_URL").expect("missing environment variable LCD_BASE_URL");
+        std::env::var("FAUCET_BASE_URL").unwrap_or("http://0.0.0.0:6969".to_string());
+    pub static ref NYKS_LCD_BASE_URL: String =
+        std::env::var("NYKS_LCD_BASE_URL").unwrap_or("http://0.0.0.0:1317".to_string());
+    pub static ref NYKS_RPC_BASE_URL: String =
+        std::env::var("NYKS_RPC_BASE_URL").unwrap_or("http://0.0.0.0:26657".to_string());
 }
 
 fn construct_headers() -> HeaderMap {

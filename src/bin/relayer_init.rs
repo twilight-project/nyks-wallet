@@ -2,8 +2,8 @@ use log::{debug, error, info};
 use nyks_wallet::{
     nyks_rpc::rpcclient::{
         method::{Method, MethodTypeURL},
-        txrequest::{RpcBody, RpcRequest, TxParams},
-        txresult::{from_rpc_response, parse_tx_response},
+        txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams},
+        txresult::parse_tx_response,
     },
     zkos_accounts::{
         ZkAccount, ZkAccountDB,
@@ -128,7 +128,7 @@ async fn send_rpc_request(signed_tx: String) -> Result<(), String> {
         RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
 
     // RPC endpoint URL (consider moving to an env var later)
-    let url = "https://rpc.twilight.rest".to_string();
+    let url = NYKS_RPC_BASE_URL.to_string();
 
     // Execute the blocking HTTP request on a separate thread
     let response = tokio::task::spawn_blocking(move || tx_send.send(url))

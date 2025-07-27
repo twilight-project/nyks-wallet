@@ -1,3 +1,5 @@
+use crate::nyks_rpc::rpcclient::txrequest::NYKS_RPC_BASE_URL;
+
 pub use super::super::MsgMintBurnTradingBtc;
 use super::faucet::fetch_account_details;
 use super::wallet::*;
@@ -85,7 +87,7 @@ pub async fn send_tx(msg: MsgMintBurnTradingBtc) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let clint_clone = client.clone();
     let res = clint_clone
-        .post("https://rpc.twilight.rest")
+        .post(NYKS_RPC_BASE_URL.as_str())
         .headers(construct_headers())
         .body(tx)
         .send();

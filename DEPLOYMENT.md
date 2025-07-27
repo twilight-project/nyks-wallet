@@ -1,6 +1,6 @@
 # Relayer-Init Deployment Guide
 
-This document explains how to build and run the `relayer_init` binary that ships with **nyks-wallet**.
+This document explains how to build and run the `relayer-init` binary that ships with **nyks-wallet**.
 
 ---
 
@@ -29,30 +29,32 @@ $ cd nyks-wallet
 $ sudo apt-get update
 $ sudo apt-get install protobuf-compiler
 
-# compile only relayer_init in release mode
-$ cargo build --release --bin relayer_init
+# compile only relayer-init in release mode
+$ cargo build --release --bin relayer-init
 ```
 
-The resulting binary will be at `target/release/relayer_init`.
+The resulting binary will be at `target/release/relayer-init`.
 
 ---
 
 ## 3. Configure endpoints
 
-`relayer_init` talks to several Twilight test-net services. Endpoints are looked up via environment variables and **panic if they are not set**.
+`relayer-init` talks to several Twilight test-net services. Endpoints are looked up via environment variables and **panic if they are not set**.
 
-| Variable          | Default value                          | Notes                          |
-| ----------------- | -------------------------------------- | ------------------------------ |
-| `LCD_BASE_URL`    | `https://lcd.twilight.rest`            | NYKS chain LCD (REST) endpoint |
-| `FAUCET_BASE_URL` | `https://faucet-rpc.twilight.rest`     | Nyks / BTC faucet services     |
-| `ZKOS_SERVER_URL` | `https://nykschain.twilight.rest/zkos` | ZkOS JSON-RPC endpoint         |
-| `RUST_LOG`        | `info`                                 | Logging info                   |
+| Variable            | Default value                          | Notes                          |
+| ------------------- | -------------------------------------- | ------------------------------ |
+| `NYKS_LCD_BASE_URL` | `https://lcd.twilight.rest`            | NYKS chain LCD (REST) endpoint |
+| `NYKS_RPC_BASE_URL` | `https://rpc.twilight.rest`            | NYKS chain LCD (REST) endpoint |
+| `FAUCET_BASE_URL`   | `https://faucet-rpc.twilight.rest`     | Nyks / BTC faucet services     |
+| `ZKOS_SERVER_URL`   | `https://nykschain.twilight.rest/zkos` | ZkOS JSON-RPC endpoint         |
+| `RUST_LOG`          | `info`                                 | Logging info                   |
 
 ### 3.1 Create a `.env` file (recommended)
 
 ```bash
 cat <<'EOF' > .env
-LCD_BASE_URL=https://lcd.twilight.rest
+NYKS_LCD_BASE_URL=https://lcd.twilight.rest
+NYKS_RPC_BASE_URL=https://RPC.twilight.rest
 FAUCET_BASE_URL=https://faucet-rpc.twilight.rest
 ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
 RUST_LOG=info
@@ -72,28 +74,29 @@ You can also pass variables inline for a single execution:
 
 ```bash
 ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos \
-LCD_BASE_URL=https://lcd.twilight.rest \
+NYKS_LCD_BASE_URL=https://lcd.twilight.rest \
+NYKS_RPC_BASE_URL=https://rpc.twilight.rest \
 FAUCET_BASE_URL=https://faucet-rpc.twilight.rest \
 RUST_LOG=info \
-cargo run --bin relayer_init
+cargo run --bin relayer-init
 ```
 
 ---
 
-## 4. Run `relayer_init`
+## 4. Run `relayer-init`
 
 With the environment configured you can start the program either via **cargo** (dev-friendly) or the compiled binary (faster start-up):
 
 ### 4.1 Cargo
 
 ```bash
-cargo run --bin relayer_init  # uses the current directory’s source
+cargo run --bin relayer-init  # uses the current directory’s source
 ```
 
 ### 4.2 Pre-built binary
 
 ```bash
-./target/release/relayer_init
+./target/release/relayer-init
 ```
 
 Both modes will:
@@ -122,7 +125,7 @@ Logs are printed to stdout – watch for **“Successfully wrote relayer data to
 cargo clean
 
 # rebuild after changing code
-autoenv | source .env && cargo run --bin relayer_init
+autoenv | source .env && cargo run --bin relayer-init
 ```
 
 ---
@@ -148,7 +151,8 @@ docker build -t relayer-init .
 ```bash
 # current directory will receive relayer_deployer.json
 docker run --rm \
-  -e LCD_BASE_URL=https://lcd.twilight.rest \
+  -e NYKS_LCD_BASE_URL=https://lcd.twilight.rest \
+  -e NYKS_RPC_BASE_URL=https://rpc.twilight.rest \
   -e FAUCET_BASE_URL=https://faucet-rpc.twilight.rest \
   -e ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos \
   -e RUST_LOG=info \
