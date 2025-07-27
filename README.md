@@ -180,7 +180,6 @@ async fn main() -> anyhow::Result<()> {
 - [Deployment guide](DEPLOYMENT.md) – detailed steps to build & run `relayer_init` (plus Docker).
 - [`twilight-client-sdk`](https://github.com/twilight-project/twilight-client-sdk) – Rust primitives for QuisQuis & ZkOS.
 - [`relayer-core`](https://github.com/twilight-project/relayer-core) - Twilight Relayer Core is an extremely high performance matching engine written in Rust.
-- [ADR-036](https://github.com/cosmos/cosmos-adrs/blob/main/adr-036-arbitrary-data-signature.md) – Canonical signing of arbitrary data (used by seed signer).
 
 ---
 
