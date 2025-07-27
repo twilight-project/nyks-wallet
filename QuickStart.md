@@ -6,7 +6,7 @@ This guide gets you from **zero to a funded test wallet in ~60 seconds**. For a 
 
 ## 1 • Prerequisites
 
-| Tool           | Min. version                            | Install                                                     |
+| Tool           | Min. version                            | Install                                                     |                                      |
 | -------------- | --------------------------------------- | ----------------------------------------------------------- | ------------------------------------ |
 | Rust toolchain | 2024-edition nightly (or stable ≥ 1.75) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs` |                                      |
 | protoc         | ≥ 3.0                                   | Ubuntu `sudo apt install protobuf-compiler` &nbsp;          | &nbsp; macOS `brew install protobuf` |
@@ -20,7 +20,7 @@ This guide gets you from **zero to a funded test wallet in ~60 seconds**. For a 
 
 ```bash
 # grab the source
-$ git clone https://github.com/your-org/nyks-wallet.git
+$ git clone https://github.com/twilight-project/nyks-wallet.git
 $ cd nyks-wallet
 
 # compile everything in release mode (≈ 40 s on a modern laptop)
@@ -37,7 +37,8 @@ Nyks Wallet talks to the public Twilight test-net. Endpoints are read from envir
 
 ```bash
 cat <<'EOF' > .env.blbal
-LCD_BASE_URL=https://lcd.twilight.rest
+NYKS_LCD_BASE_URL=https://lcd.twilight.rest
+NYKS_RPC_BASE_URL=https://rpc.twilight.rest
 FAUCET_BASE_URL=https://faucet-rpc.twilight.rest
 ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
 RUST_LOG=info
@@ -72,7 +73,6 @@ Add a path (or Git) dependency:
 # Cargo.toml
 [dependencies]
 nyks-wallet = { path = "../nyks-wallet" }           # or github = "twilight-project/nyks-wallet"
-reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 ```
 
 Minimal example:

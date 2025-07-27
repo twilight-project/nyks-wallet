@@ -1,3 +1,5 @@
+use crate::nyks_rpc::rpcclient::txrequest::{FAUCET_BASE_URL, NYKS_LCD_BASE_URL};
+
 use super::super::MsgRegisterBtcDepositAddress;
 use anyhow::anyhow;
 use base64::{Engine as _, engine::general_purpose};
@@ -59,8 +61,11 @@ pub struct Account {
 }
 
 pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountResponse> {
-    let baseurl = std::env::var("LCD_BASE_URL").unwrap_or("https://lcd.twilight.rest".to_string());
-    let url = format!("{}/cosmos/auth/v1beta1/accounts/{}", baseurl, address);
+    let url = format!(
+        "{}/cosmos/auth/v1beta1/accounts/{}",
+        NYKS_LCD_BASE_URL.as_str(),
+        address
+    );
     let client = Client::new();
     let response = client.get(&url).send().await?;
 
@@ -82,9 +87,7 @@ pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountRespo
 }
 
 pub async fn get_nyks(recipient_address: &str) -> Result<(), Box<dyn Error>> {
-    let baseurl =
-        std::env::var("FAUCET_BASE_URL").unwrap_or("https://faucet-rpc.twilight.rest".to_string());
-    let url = format!("{}/faucet", baseurl);
+    let url = format!("{}/faucet", FAUCET_BASE_URL.as_str());
     let payload = json!({ "recipientAddress": recipient_address });
     let client = Client::new();
     let response = client.post(url).json(&payload).send().await?;
@@ -107,9 +110,7 @@ pub async fn get_nyks(recipient_address: &str) -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn mint_sats(recipient_address: &str) -> Result<(), Box<dyn Error>> {
-    let baseurl =
-        std::env::var("FAUCET_BASE_URL").unwrap_or("https://faucet-rpc.twilight.rest".to_string());
-    let url = format!("{}/mint", baseurl);
+    let url = format!("{}/mint", FAUCET_BASE_URL.as_str());
 
     let payload = json!({ "recipientAddress": recipient_address });
     let client = Client::new();
@@ -132,9 +133,7 @@ pub async fn mint_sats(recipient_address: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 pub async fn mint_sats_5btc(recipient_address: &str) -> Result<(), Box<dyn Error>> {
-    let baseurl =
-        std::env::var("FAUCET_BASE_URL").unwrap_or("https://faucet-rpc.twilight.rest".to_string());
-    let url = format!("{}/mint-relayer-wallet", baseurl);
+    let url = format!("{}/mint-relayer-wallet", FAUCET_BASE_URL.as_str());
 
     let payload = json!({ "recipientAddress": recipient_address });
     let client = Client::new();
@@ -191,10 +190,12 @@ pub async fn sign_and_send_reg_deposit_tx(
     // --- Encode & broadcast
     let tx_bytes = raw_tx.to_bytes().map_err(|e| anyhow!("{}", e))?;
     let tx_base64 = general_purpose::STANDARD.encode(&tx_bytes);
-    let baseurl = std::env::var("LCD_BASE_URL").unwrap_or("https://lcd.twilight.rest".to_string());
     let client = Client::new();
     let res = client
-        .post(format!("{}/cosmos/tx/v1beta1/txs", baseurl))
+        .post(format!(
+            "{}/cosmos/tx/v1beta1/txs",
+            NYKS_LCD_BASE_URL.as_str()
+        ))
         .json(&json!({ "tx_bytes": tx_base64, "mode": "BROADCAST_MODE_SYNC" }))
         .send()
         .await?;

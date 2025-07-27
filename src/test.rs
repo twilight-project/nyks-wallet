@@ -3,7 +3,7 @@
 mod tests {
     use crate::nyks_fn::MsgMintBurnTradingBtc;
     use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
-    use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+    use crate::nyks_rpc::rpcclient::txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams};
     use crate::nyks_rpc::rpcclient::txresult::from_rpc_response;
     use crate::seed_signer::{build_sign_doc, sign_adr036, signature_bundle};
     use crate::wallet::*;
@@ -207,8 +207,7 @@ mod tests {
         );
 
         // Send RPC request
-        // let response = tx_send.send("https://rpc.twilight.rest".to_string(), data);
-        let url = "https://rpc.twilight.rest".to_string();
+        let url = NYKS_RPC_BASE_URL.to_string();
         let response = match tokio::task::spawn_blocking(move || tx_send.send(url))
             .await // wait for the blocking task to finish
             {
