@@ -6,7 +6,7 @@ This guide gets you from **zero to a funded test wallet in ~60 seconds**. For a 
 
 ## 1 • Prerequisites
 
-| Tool           | Min. version                            | Install                                                     |
+| Tool           | Min. version                            | Install                                                     |                                      |
 | -------------- | --------------------------------------- | ----------------------------------------------------------- | ------------------------------------ |
 | Rust toolchain | 2024-edition nightly (or stable ≥ 1.75) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs` |                                      |
 | protoc         | ≥ 3.0                                   | Ubuntu `sudo apt install protobuf-compiler` &nbsp;          | &nbsp; macOS `brew install protobuf` |
