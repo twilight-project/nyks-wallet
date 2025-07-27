@@ -73,7 +73,6 @@ Add a path (or Git) dependency:
 # Cargo.toml
 [dependencies]
 nyks-wallet = { path = "../nyks-wallet" }           # or github = "twilight-project/nyks-wallet"
-reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 ```
 
 Minimal example:

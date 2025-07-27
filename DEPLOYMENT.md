@@ -41,22 +41,22 @@ The resulting binary will be at `target/release/relayer-init`.
 
 `relayer-init` talks to several Twilight test-net services. Endpoints are looked up via environment variables and **panic if they are not set**.
 
-| Variable            | Default value                          | Notes                          |
-| ------------------- | -------------------------------------- | ------------------------------ |
-| `NYKS_LCD_BASE_URL` | `https://lcd.twilight.rest`            | NYKS chain LCD (REST) endpoint |
-| `NYKS_RPC_BASE_URL` | `https://rpc.twilight.rest`            | NYKS chain LCD (REST) endpoint |
-| `FAUCET_BASE_URL`   | `https://faucet-rpc.twilight.rest`     | Nyks / BTC faucet services     |
-| `ZKOS_SERVER_URL`   | `https://nykschain.twilight.rest/zkos` | ZkOS JSON-RPC endpoint         |
-| `RUST_LOG`          | `info`                                 | Logging info                   |
+| Variable            | Default value                                                        | Notes                          |
+| ------------------- | -------------------------------------------------------------------- | ------------------------------ |
+| `NYKS_LCD_BASE_URL` | `http://0.0.0.0:1317` (public: https://lcd.twilight.rest)            | NYKS chain LCD (REST) endpoint |
+| `NYKS_RPC_BASE_URL` | `http://0.0.0.0:26657` (public: https://rpc.twilight.rest)           | NYKS chain RPC endpoint        |
+| `FAUCET_BASE_URL`   | `http://0.0.0.0:6969` (public: https://faucet-rpc.twilight.rest)     | Nyks / BTC faucet services     |
+| `ZKOS_SERVER_URL`   | `http://0.0.0.0:3030` (public: https://nykschain.twilight.rest/zkos) | ZkOS JSON-RPC endpoint         |
+| `RUST_LOG`          | `info`                                                               | Logging info                   |
 
 ### 3.1 Create a `.env` file (recommended)
 
 ```bash
 cat <<'EOF' > .env
-NYKS_LCD_BASE_URL=https://lcd.twilight.rest
-NYKS_RPC_BASE_URL=https://RPC.twilight.rest
-FAUCET_BASE_URL=https://faucet-rpc.twilight.rest
-ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
+NYKS_LCD_BASE_URL=http://0.0.0.0:1317
+NYKS_RPC_BASE_URL=http://0.0.0.0:26657
+FAUCET_BASE_URL=http://0.0.0.0:6969
+ZKOS_SERVER_URL=http://0.0.0.0:3030
 RUST_LOG=info
 
 EOF

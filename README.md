@@ -43,16 +43,19 @@ The crate started as a market-maker client and grew into the de-facto wallet lay
 ```
 nyks-wallet
 │
-├── wallet/          # Account handling & on-chain helpers
-│   ├── wallet.rs    # Wallet struct & lifecycle helpers
-│   ├── faucet.rs    # Faucet + BTC-deposit tx builders
-│   ├── nyks_fn.rs   # Mint/Burn trading messages
-│   └── seed_signer.rs
-│
-├── zkos_accounts/   # Shielded account (QuisQuis) utilities
-├── nyks_rpc/        # Minimal JSON-RPC client & message encoder
-├── proto/           # Upstream `.proto` definitions (compiled by build.rs)
-└── src/lib.rs       # Re-exports + generated protobuf modules
+└── src/
+    ├── wallet/          # Account handling & on-chain helpers
+    │   ├── wallet.rs    # Wallet struct & lifecycle helpers
+    │   ├── faucet.rs    # Faucet + BTC-deposit tx builders
+    │   ├── nyks_fn.rs   # Mint/Burn trading messages
+    │   ├── btc_key.rs   # Deterministic BTC key helpers
+    │   └── seed_signer.rs
+    │
+    ├── zkos_accounts/   # Shielded account (QuisQuis) utilities
+    ├── nyks_rpc/        # Minimal JSON-RPC client & message encoder
+    ├── bin/             # CLI utilities (e.g. relayer_init.rs)
+    ├── proto/           # Upstream `.proto` definitions (compiled by build.rs)
+    └── lib.rs           # Re-exports + generated protobuf modules
 ```
 
 All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**, **curve25519-dalek** and **twilight-client-sdk**.
@@ -132,13 +135,13 @@ All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**
 
 ## 7 • Environment variables
 
-| Variable            | Default                                | Description                                   |
-| ------------------- | -------------------------------------- | --------------------------------------------- |
-| `NYKS_LCD_BASE_URL` | `https://lcd.twilight.rest`            | Cosmos SDK LCD REST endpoint `port:1317`      |
-| `NYKS_RPC_BASE_URL` | `https://rpc.twilight.rest`            | Cosmos SDK RPC REST endpoint `port:26657`     |
-| `FAUCET_BASE_URL`   | `https://faucet-rpc.twilight.rest`     | Faucet & mint endpoints `port:6969`           |
-| `ZKOS_SERVER_URL`   | `https://nykschain.twilight.rest/zkos` | zkaccount json-rpc endpoint `port:3030`       |
-| `RUST_LOG`          | `info`                                 | `info`, `debug` and `warn` are available tags |
+| Variable            | Default                                                              | Description                                   |
+| ------------------- | -------------------------------------------------------------------- | --------------------------------------------- |
+| `NYKS_LCD_BASE_URL` | `http://0.0.0.0:1317` (public: https://lcd.twilight.rest)            | Cosmos SDK LCD REST endpoint `port:1317`      |
+| `NYKS_RPC_BASE_URL` | `http://0.0.0.0:26657` (public: https://rpc.twilight.rest)           | Cosmos SDK RPC REST endpoint `port:26657`     |
+| `FAUCET_BASE_URL`   | `http://0.0.0.0:6969` (public: https://faucet-rpc.twilight.rest)     | Faucet & mint endpoints `port:6969`           |
+| `ZKOS_SERVER_URL`   | `http://0.0.0.0:3030` (public: https://nykschain.twilight.rest/zkos) | zkaccount json-rpc endpoint `port:3030`       |
+| `RUST_LOG`          | `info`                                                               | `info`, `debug` and `warn` are available tags |
 
 Set them before running to point the SDK at a local full-node.
 
@@ -150,7 +153,6 @@ Set them before running to point the SDK at a local full-node.
 # Cargo.toml
 [dependencies]
 nyks-wallet = { path = "../nyks-wallet" }    # or github = "twilight-project/nyks-wallet"
-reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 ```
 
 ```rust
