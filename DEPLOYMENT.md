@@ -22,7 +22,7 @@ Make sure the following tools are available on your system:
 
 ```bash
 # clone the repository
-$ git clone -b relayer-deployer https://github.com/your-org/nyks-wallet.git
+$ git clone https://github.com/your-org/nyks-wallet.git
 $ cd nyks-wallet
 
 # (optional) update package lists and install protoc

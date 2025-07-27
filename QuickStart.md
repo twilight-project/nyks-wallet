@@ -20,7 +20,7 @@ This guide gets you from **zero to a funded test wallet in ~60 seconds**. For a 
 
 ```bash
 # grab the source
-$ git clone https://github.com/your-org/nyks-wallet.git
+$ git clone https://github.com/twilight-project/nyks-wallet.git
 $ cd nyks-wallet
 
 # compile everything in release mode (≈ 40 s on a modern laptop)
