@@ -23,3 +23,13 @@ pub mod nyks {
 
 pub use nyks::module::bridge::MsgRegisterBtcDepositAddress;
 pub use nyks::module::zkos::MsgMintBurnTradingBtc;
+pub use nyks::module::zkos::MsgTransferTx;
+
+// -------------------------------------------------------------
+// Optional validator-wallet feature
+// -------------------------------------------------------------
+#[cfg(feature = "validator-wallet")]
+pub mod validator_wallet;
+
+#[cfg(feature = "validator-wallet")]
+pub use validator_wallet::*;

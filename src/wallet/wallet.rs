@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::time::{Duration, sleep};
-
 pub const BECH_PREFIX: &str = "twilight";
 pub type NYKS = u64;
 pub type SATS = u64;
@@ -533,6 +532,12 @@ impl Wallet {
         });
         std::fs::write(path, account_info.to_string())?;
         Ok(())
+    }
+
+    pub fn from_mnemonic_file(path: &str) -> anyhow::Result<Wallet> {
+        let mnemonic = std::fs::read_to_string(path)?;
+        let wallet = Wallet::from_mnemonic(&mnemonic)?;
+        Ok(wallet)
     }
 }
 

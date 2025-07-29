@@ -41,8 +41,8 @@ pub async fn send_tx(msg: MsgMintBurnTradingBtc) -> anyhow::Result<()> {
     let sk = wallet.signing_key()?;
     let pk = wallet.public_key()?;
     let account_details = fetch_account_details(&wallet.twilightaddress).await?;
-    let sequence = account_details.account.sequence.parse::<u64>()?;
-    let account_number = account_details.account.account_number.parse::<u64>()?;
+    let sequence = account_details.account.sequence;
+    let account_number = account_details.account.account_number;
     // 2. Craft the custom message
     let msg = msg;
     let mut buf = Vec::new();

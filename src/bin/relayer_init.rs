@@ -245,20 +245,8 @@ async fn main() -> Result<(), String> {
             return Err(format!("Failed to get account info: {}", e));
         }
     };
-    let sequence = match account_details.account.sequence.parse::<u64>() {
-        Ok(seq) => seq,
-        Err(e) => {
-            error!("Failed to parse sequence: {}", e);
-            return Err(format!("Failed to parse sequence: {}", e));
-        }
-    };
-    let account_number = match account_details.account.account_number.parse::<u64>() {
-        Ok(num) => num,
-        Err(e) => {
-            error!("Failed to parse account number: {}", e);
-            return Err(format!("Failed to parse account number: {}", e));
-        }
-    };
+    let sequence = account_details.account.sequence;
+    let account_number = account_details.account.account_number;
     // Build and sign message
     info!("Building and signing message for Funding to zk account transfer");
     let signed_tx = build_and_sign_msg(&wallet, &zk_accounts, index, sequence, account_number)?;

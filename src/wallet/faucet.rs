@@ -56,8 +56,19 @@ pub struct Account {
     // strict type expectations that lead to parsing errors when it is an
     // object.
     pub pub_key: Option<Value>,
-    pub account_number: String,
-    pub sequence: String,
+    pub account_number: u64,
+    pub sequence: u64,
+}
+impl Default for Account {
+    fn default() -> Self {
+        Self {
+            account_type: "".to_string(),
+            address: "".to_string(),
+            pub_key: None,
+            account_number: 0,
+            sequence: 0,
+        }
+    }
 }
 
 pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountResponse> {
@@ -169,8 +180,8 @@ pub async fn sign_and_send_reg_deposit_tx(
 
     // --- On‑chain numbers
     let account_details = fetch_account_details(&sender_account).await?;
-    let sequence = account_details.account.sequence.parse::<u64>()?;
-    let account_number = account_details.account.account_number.parse::<u64>()?;
+    let sequence = account_details.account.sequence;
+    let account_number = account_details.account.account_number;
 
     // --- Fee & auth‑info
     let gas_limit = 200_000u64;

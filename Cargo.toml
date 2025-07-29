@@ -12,6 +12,11 @@ path = "src/bin/relayer_init.rs"
 name = "nyks_wallet"
 path = "src/lib.rs"
 
+# Optional crate features
+[features]
+default = []
+validator-wallet = []
+
 
 [dependencies]
 anyhow = "1.0"

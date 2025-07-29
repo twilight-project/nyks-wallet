@@ -175,12 +175,8 @@ mod tests {
         let sk = wallet.signing_key()?;
         let pk = wallet.public_key()?;
         let account_details = wallet.account_info().await?;
-        let sequence = account_details.account.sequence.parse::<u64>()?;
-        let account_number = account_details
-            .account
-            .account_number
-            .parse::<u64>()
-            .unwrap();
+        let sequence = account_details.account.sequence;
+        let account_number = account_details.account.account_number;
         // Create test message
         let msg = MsgMintBurnTradingBtc {
             mint_or_burn: true,
@@ -295,5 +291,20 @@ mod tests {
             Ok(_) => println!("Exported to ZkAccounts.json"),
             Err(e) => println!("Failed to export to json: {}", e),
         }
+    }
+
+    // This test creates a wallet from a keyring file and prints the wallet details.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_from_keyring_file --exact --show-output
+    #[tokio::test]
+    #[serial]
+    async fn test_wallet_from_keyring_file() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        init_logger();
+        // global_setup().await;
+        let wallet = Wallet::from_mnemonic_file("validator-self.mnemonic")?;
+        let balance = check_balance(&wallet.twilightaddress).await?;
+        println!("balance: {:?}", balance);
+        println!("wallet: {:?}", wallet);
+        Ok(())
     }
 }
