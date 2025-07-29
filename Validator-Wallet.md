@@ -10,7 +10,7 @@ Add **nyks-wallet** as a dependency and enable the feature:
 
 ```toml
 [dependencies]
-nyks-wallet = { git = "https://github.com/your-org/nyks-wallet.git", features = ["validator-wallet"] }
+nyks-wallet = { git = "https://github.com/twilight-project/nyks-wallet.git", features = ["validator-wallet"] }
 ```
 
 If you are working inside this repository, build with:
@@ -34,6 +34,7 @@ _Override the path_ by setting an environment variable before runtime:
 
 ```bash
 export VALIDATOR_WALLET_PATH=/absolute/path/to/your_validator.mnemonic
+export NYKS_RPC_BASE_URL=http://your_chain_ip_or_domain:26657
 ```
 
 ---
