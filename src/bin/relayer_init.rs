@@ -48,14 +48,7 @@ fn setup_zk_accounts(
     chain_id: &str,
 ) -> Result<(ZkAccountDB, u64, String), String> {
     // Generate seed signature
-    let seed_signature = generate_seed(
-        &wallet.private_key,
-        &wallet.twilightaddress,
-        DERIVATION_MESSAGE,
-        chain_id,
-    )
-    .map_err(|e| format!("Failed to generate seed: {}", e))?
-    .get_signature();
+    let seed_signature = wallet.get_zk_account_seed(chain_id, DERIVATION_MESSAGE)?;
 
     // Load or create db
     info!("Loading ZkAccountDB ...");
@@ -91,7 +84,7 @@ fn build_and_sign_msg(
     let account_idx = index;
     let zk_account = zk_accounts
         .get_account(&account_idx)
-        .ok_or_else(|| format!("Failed to get zk account: {}", account_idx))?;
+        .map_err(|e| e.to_string())?;
 
     // Build message
     let msg = MsgMintBurnTradingBtc {
@@ -257,13 +250,7 @@ async fn main() -> Result<(), String> {
     info!("    Transaction broadcasted successfully");
 
     // Retrieve the zk account and ensure it exists
-    let zk_account = match zk_accounts.get_account(&(index)) {
-        Some(account) => account.clone(),
-        None => {
-            error!("Failed to get zk account: {}", index);
-            return Err(format!("Failed to get zk account: {}", index));
-        }
-    };
+    let zk_account = zk_accounts.get_account(&(index))?;
 
     // Wait for UTXO details to appear on-chain
     info!("    Waiting for UTXO details to appear on-chain...");
@@ -322,15 +309,10 @@ async fn main() -> Result<(), String> {
         "    Updating ZkAccountDB on index : {} with io_type: State",
         index
     );
-    match zk_accounts.get_mut_account(&index) {
-        Some(account) => {
-            account.io_type = IOType::State;
-            zk_accounts.export_to_json("ZkAccounts.json")?;
-        }
-        None => {
-            return Err(format!("Failed to get zk account: {}", index));
-        }
-    }
+    zk_accounts.update_io_type(&index, IOType::State)?;
+    zk_accounts.update_on_chain(&index, true)?;
+    zk_accounts.export_to_json("ZkAccounts.json")?;
+
     let updated_zk_account = zk_accounts.get_account(&index).unwrap();
     info!("    Exporting relayer data to file...");
     export_relayer_data(

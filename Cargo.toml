@@ -58,9 +58,9 @@ tendermint-rpc = { version = "0.34", features = ["http-client"] }
 [dependencies.twilight-client-sdk]
 git = "https://github.com/twilight-project/twilight-client-sdk.git"
 # branch = "develop"
-tag = "v0.0.1"
-# branch = "develop-merge-agent"
-# path = "../twilight-client-sdk_zkaccount"
+# tag = "v0.0.1"
+branch = "develop-merge-agent"
+# path = "../twilight-client-sdk"
 
 [dependencies.utxo-in-memory]
 git = "https://github.com/twilight-project/zkos-rust.git"

@@ -4,7 +4,10 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use twilight_client_sdk::{
-    quisquislib::{Account, ElGamalCommitment, keys::PublicKey, ristretto::RistrettoPublicKey},
+    quisquislib::{
+        Account, ElGamalCommitment, RistrettoSecretKey, keys::PublicKey,
+        ristretto::RistrettoPublicKey,
+    },
     zkvm::IOType,
 };
 
@@ -16,6 +19,7 @@ pub struct ZkAccount {
     pub scalar: String,
     pub index: u64,
     pub io_type: IOType,
+    pub on_chain: bool,
 }
 impl ZkAccount {
     pub fn new(
@@ -32,6 +36,7 @@ impl ZkAccount {
             scalar,
             index,
             io_type: IOType::Coin,
+            on_chain: false,
         }
     }
 
@@ -52,6 +57,11 @@ impl ZkAccount {
         let qq_address_str: String = qq_address.to_hex_str();
 
         Self::new(qq_address_str, balance, account, rscalar_str, index)
+    }
+    pub fn get_seed(&self, master_seed: &str) -> RistrettoSecretKey {
+        let key_manager = KeyManager::from_cosmos_signature(master_seed.as_bytes());
+        let secret_key = key_manager.derive_child_key(self.index);
+        secret_key
     }
 }
 
@@ -88,9 +98,16 @@ impl ZkAccountDB {
         self.index += 1;
         Ok(self.index)
     }
-
-    pub fn get_account(&self, index: &u64) -> Option<ZkAccount> {
-        self.accounts.get(index).cloned()
+    pub fn get_account_address(&self, index: &u64) -> Option<String> {
+        self.accounts
+            .get(index)
+            .map(|account| account.account.clone())
+    }
+    pub fn get_account(&self, index: &u64) -> Result<ZkAccount, String> {
+        match self.accounts.get(index).cloned() {
+            Some(account) => Ok(account),
+            None => Err(format!("Account with index {} does not exist", index)),
+        }
     }
     pub fn get_mut_account(&mut self, index: &u64) -> Option<&mut ZkAccount> {
         self.accounts.get_mut(index)
@@ -152,5 +169,26 @@ impl ZkAccountDB {
             }
             Err(e) => Err(format!("Failed to export to json: {}", e)),
         }
+    }
+    pub fn update_io_type(&mut self, index: &u64, io_type: IOType) -> Result<(), String> {
+        if !self.accounts.contains_key(&index) {
+            return Err(format!("Account with index {} does not exist", index));
+        }
+        self.accounts.get_mut(index).unwrap().io_type = io_type;
+        Ok(())
+    }
+    pub fn update_on_chain(&mut self, index: &u64, on_chain: bool) -> Result<(), String> {
+        if !self.accounts.contains_key(&index) {
+            return Err(format!("Account with index {} does not exist", index));
+        }
+        self.accounts.get_mut(index).unwrap().on_chain = on_chain;
+        Ok(())
+    }
+    pub fn remove_account_by_index(&mut self, index: &u64) -> Result<(), String> {
+        if !self.accounts.contains_key(&index) {
+            return Err(format!("Account with index {} does not exist", index));
+        }
+        self.accounts.remove(index);
+        Ok(())
     }
 }

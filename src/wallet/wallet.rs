@@ -1,5 +1,5 @@
-use crate::faucet::*;
 use crate::nyks_rpc::rpcclient::txrequest::NYKS_LCD_BASE_URL;
+use crate::{faucet::*, generate_seed};
 use anyhow::anyhow;
 use bip32::{DerivationPath, XPrv};
 use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
@@ -538,6 +538,22 @@ impl Wallet {
         let mnemonic = std::fs::read_to_string(path)?;
         let wallet = Wallet::from_mnemonic(&mnemonic)?;
         Ok(wallet)
+    }
+
+    pub fn get_zk_account_seed(
+        &self,
+        chain_id: &str,
+        derivation_message: &str,
+    ) -> Result<String, String> {
+        let seed = generate_seed(
+            &self.private_key,
+            &self.twilightaddress,
+            derivation_message,
+            chain_id,
+        )
+        .map_err(|e| format!("Failed to generate seed: {}", e))?
+        .get_signature();
+        Ok(seed)
     }
 }
 

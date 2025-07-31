@@ -25,6 +25,7 @@ pub const DERIVATION_MESSAGE: &str = "This signature is for deriving the master 
 /// This struct holds the master key in memory for the duration of a session
 /// and should be created upon wallet unlock by providing a signature from a
 /// primary wallet (e.g., Cosmos).
+#[derive(Debug, Clone)]
 pub struct KeyManager {
     master_key: RistrettoSecretKey,
 }
