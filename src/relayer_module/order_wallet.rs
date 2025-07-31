@@ -234,10 +234,7 @@ mod tests {
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
         }
-        info!(
-            "account_address: {:?}",
-            order_wallet.zk_accounts.get_account_address(&account_index)
-        );
+
         let btc_price = tokio::task::spawn_blocking(move || get_recent_price_from_relayer())
             .await
             .map_err(|e| format!("Failed to send RPC request: {}", e))?;

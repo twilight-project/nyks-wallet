@@ -67,13 +67,14 @@ fn build_and_sign_msg_mint_burn_trading_btc(
     encrypt_scalar: String,
     sequence: u64,
     account_number: u64,
+    twilight_address: String,
 ) -> Result<String, String> {
     let msg = MsgMintBurnTradingBtc {
         mint_or_burn,
         btc_value,
         qq_account,
         encrypt_scalar,
-        twilight_address: wallet.twilightaddress.clone(),
+        twilight_address,
     };
 
     let method_type = MethodTypeURL::MsgMintBurnTradingBtc;
@@ -156,6 +157,7 @@ pub async fn mint_burn_trading_btc_tx(
     btc_value: u64,
     qq_account: String,
     encrypt_scalar: String,
+    twilight_address: String,
 ) -> Result<(String, u32), String> {
     dotenv::dotenv().ok();
     env_logger::init();
@@ -173,6 +175,7 @@ pub async fn mint_burn_trading_btc_tx(
             .as_ref()
             .ok_or("Account info not available")?
             .account_number,
+        twilight_address,
     )?;
 
     send_rpc_request(signed_tx).await
