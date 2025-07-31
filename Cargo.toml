@@ -59,7 +59,7 @@ tendermint-rpc = { version = "0.34", features = ["http-client"] }
 git = "https://github.com/twilight-project/twilight-client-sdk.git"
 # branch = "develop"
 tag = "v0.0.1"
-# branch = "zk-account"
+# branch = "develop-merge-agent"
 # path = "../twilight-client-sdk_zkaccount"
 
 [dependencies.utxo-in-memory]

@@ -33,3 +33,5 @@ pub mod validator_wallet;
 
 #[cfg(feature = "validator-wallet")]
 pub use validator_wallet::*;
+
+pub mod relayer_module;

@@ -4,21 +4,9 @@ use super::{
         txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams},
         txresult::parse_tx_response,
     },
-    zkos_accounts::{
-        ZkAccount, ZkAccountDB,
-        encrypted_account::{DERIVATION_MESSAGE, KeyManager},
-    },
     *,
 };
 use log::{debug, error, info};
-
-use tokio::time::{Duration, sleep};
-use twilight_client_sdk::{
-    script,
-    transaction::Transaction,
-    util,
-    zkvm::{IOType, Output},
-};
 
 // Re-export primary async helpers when the `validator-wallet` feature is enabled.
 // These allow external callers to build & broadcast validator-side transactions.

@@ -585,6 +585,8 @@ pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
             }
             Err(e) => {
                 error!("Failed to register BTC deposit address: {}", e);
+                debug!("   BTC Address: {}", &wallet.btc_address);
+
                 info!("    You may need to restart the process again or try again later");
             }
         };

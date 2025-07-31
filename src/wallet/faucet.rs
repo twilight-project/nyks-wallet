@@ -12,8 +12,7 @@ use cosmrs::{
 use log::debug;
 use prost::Message;
 use reqwest::Client;
-
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 use std::{error::Error, str::FromStr};
@@ -56,7 +55,9 @@ pub struct Account {
     // strict type expectations that lead to parsing errors when it is an
     // object.
     pub pub_key: Option<Value>,
+    #[serde(deserialize_with = "from_str_to_u64")]
     pub account_number: u64,
+    #[serde(deserialize_with = "from_str_to_u64")]
     pub sequence: u64,
 }
 impl Default for Account {
@@ -71,6 +72,14 @@ impl Default for Account {
     }
 }
 
+fn from_str_to_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: &str = Deserialize::deserialize(deserializer)?;
+    s.parse::<u64>().map_err(serde::de::Error::custom)
+}
+
 pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountResponse> {
     let url = format!(
         "{}/cosmos/auth/v1beta1/accounts/{}",
@@ -81,7 +90,8 @@ pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountRespo
     let response = client.get(&url).send().await?;
 
     if response.status().is_success() {
-        let account_response: AccountResponse = response.json().await?;
+        let text = response.text().await?;
+        let account_response: AccountResponse = serde_json::from_str(&text)?;
         Ok(account_response)
     } else {
         let status = response.status();
@@ -177,7 +187,6 @@ pub async fn sign_and_send_reg_deposit_tx(
     let msg_any =
         create_register_btc_deposit_message(btc_address, 50_000, 10_000, sender_account.clone());
     let body = Body::new(vec![msg_any], "", 0u16);
-
     // --- On‑chain numbers
     let account_details = fetch_account_details(&sender_account).await?;
     let sequence = account_details.account.sequence;

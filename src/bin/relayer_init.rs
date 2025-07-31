@@ -359,7 +359,8 @@ pub fn deploy_relayer_initial_state(
             return Err("Failed to convert scalar_str to scalar".to_string());
         }
     };
-    let program_json_path: &str = "./relayerprogram.json";
+    let program_json_path: &str = &std::env::var("RELAYER_PROGRAM_JSON_PATH")
+        .unwrap_or_else(|_| "./relayerprogram.json".to_string());
     let chain_net = address::Network::default();
     let state_variables: Vec<u64> = vec![balance.clone() / 100];
     let program_tag: String = "RelayerInitializer".to_string();
