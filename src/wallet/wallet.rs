@@ -556,7 +556,7 @@ impl Wallet {
         Ok(seed)
     }
 }
-
+// #[cfg(feature = "testnet")]
 pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
     let balance = wallet.update_balance().await?;
     debug!("Checking balance values if nyks is less than 50000");

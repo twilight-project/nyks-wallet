@@ -3,8 +3,11 @@ use twilight_client_sdk::{
     chain::get_transaction_coin_input_from_address_fast,
     programcontroller::ContractManager,
     quisquislib::RistrettoSecretKey,
-    relayer_types::{OrderType, PositionType},
+    relayer::execute_order_zkos,
+    relayer_types::{OrderStatus, OrderType, PositionType, TXType},
+    zkvm::Output,
 };
+use uuid::Uuid;
 
 pub fn create_trader_order(
     sk: RistrettoSecretKey,
@@ -46,5 +49,30 @@ pub fn create_trader_order(
         order_tx_message.clone(),
     )?;
 
+    Ok(response.id_key.to_string())
+}
+
+pub fn close_trader_order(
+    output_memo: Output, // Provides the Prover Memo Output used to create the order. Input memo will be created by Exchange on behalf of the user
+    secret_key: &RistrettoSecretKey,
+    account_id: String,
+    uuid: Uuid,
+    order_type: OrderType,
+    execution_price: f64,
+) -> Result<String, String> {
+    let request_msg = execute_order_zkos(
+        output_memo,
+        secret_key,
+        account_id,
+        uuid,
+        order_type.to_str(),
+        0.0,
+        OrderStatus::FILLED.to_str(),
+        execution_price,
+        TXType::ORDERTX,
+    );
+    let response = twilight_client_sdk::relayer_types::ExecuteTraderOrderZkos::submit_order(
+        request_msg.clone(),
+    )?;
     Ok(response.id_key.to_string())
 }

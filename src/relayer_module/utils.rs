@@ -4,25 +4,16 @@ use crate::{
         txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams},
         txresult::parse_tx_response,
     },
-    zkos_accounts::{
-        ZkAccount, ZkAccountDB,
-        encrypted_account::{DERIVATION_MESSAGE, KeyManager},
-    },
+    zkos_accounts::ZkAccountDB,
     *,
 };
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Duration, sleep};
-use twilight_client_sdk::{
-    relayer_rpcclient::method::UtxoDetailResponse,
-    script,
-    transaction::Transaction,
-    util,
-    zkvm::{IOType, Output},
-};
+use twilight_client_sdk::{relayer_rpcclient::method::UtxoDetailResponse, zkvm::IOType};
 /// Constructs a `MsgMintBurnTradingBtc` for the given wallet/zk account, then signs it and
 /// returns the base64-encoded transaction ready for broadcast.
-pub fn build_and_sign_msgMintBurnTradingBtc(
+pub fn build_and_sign_msg_mint_burn_trading_btc(
     wallet: &Wallet,
     zk_accounts: &ZkAccountDB,
     index: u64,
@@ -121,6 +112,10 @@ pub async fn fetch_utxo_details_with_retry(
                 Err(err) => {
                     attempts += 1;
                     if attempts >= max_attempts {
+                        error!(
+                            "Failed to get utxo details after {} attempts: {}",
+                            max_attempts, err
+                        );
                         return Err(format!(
                             "Failed to get utxo details after {} attempts: {}",
                             max_attempts, err
@@ -131,11 +126,15 @@ pub async fn fetch_utxo_details_with_retry(
             Err(e) => {
                 attempts += 1;
                 if attempts >= max_attempts {
+                    error!(
+                        "Failed to spawn blocking task after {} attempts: {}",
+                        max_attempts, e
+                    );
                     return Err(format!("Failed to spawn blocking task: {}", e));
                 }
             }
         }
-        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+        sleep(Duration::from_millis(delay_ms)).await;
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

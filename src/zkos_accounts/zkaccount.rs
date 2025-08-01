@@ -1,4 +1,5 @@
 use super::encrypted_account::{EncryptedAccount, KeyManager};
+use address::Network;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,7 @@ use twilight_client_sdk::{
         Account, ElGamalCommitment, RistrettoSecretKey, keys::PublicKey,
         ristretto::RistrettoPublicKey,
     },
-    zkvm::IOType,
+    zkvm::{IOType, Input, Utxo},
 };
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -63,6 +64,27 @@ impl ZkAccount {
         let secret_key = key_manager.derive_child_key(self.index);
         secret_key
     }
+    pub fn get_qq_address(&self) -> Result<EncryptedAccount, String> {
+        EncryptedAccount::from_hex_str(self.qq_address.clone()).map_err(|e| e.to_string())
+    }
+    pub fn get_input(&self) -> Result<Input, String> {
+        let input = Input::input_from_quisquis_account(
+            &self.get_qq_address()?.into(),
+            Utxo::default(),
+            0,
+            Network::default(),
+        );
+        Ok(input)
+    }
+    pub fn get_input_string(&self) -> Result<String, String> {
+        let input = self.get_input()?;
+        serde_json::to_string(&input).map_err(|e| e.to_string())
+    }
+    pub fn get_scalar(&self) -> Result<Scalar, String> {
+        let scalar = twilight_client_sdk::util::hex_to_scalar(self.scalar.clone())
+            .ok_or("Failed to convert scalar_hex to scalar")?;
+        Ok(scalar)
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -98,10 +120,15 @@ impl ZkAccountDB {
         self.index += 1;
         Ok(self.index)
     }
-    pub fn get_account_address(&self, index: &u64) -> Option<String> {
-        self.accounts
+    pub fn get_account_address(&self, index: &u64) -> Result<String, String> {
+        let account = self
+            .accounts
             .get(index)
-            .map(|account| account.account.clone())
+            .map(|account| account.account.clone());
+        match account {
+            Some(account) => Ok(account),
+            None => Err(format!("Account with index {} does not exist", index)),
+        }
     }
     pub fn get_account(&self, index: &u64) -> Result<ZkAccount, String> {
         match self.accounts.get(index).cloned() {

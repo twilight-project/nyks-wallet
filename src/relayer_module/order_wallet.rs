@@ -9,15 +9,17 @@ use crate::{
     },
 };
 use log::{debug, error, info};
-use relayer_module::utils::{TxResult, build_and_sign_msgMintBurnTradingBtc, send_tx_to_chain};
+use relayer_module::utils::{TxResult, build_and_sign_msg_mint_burn_trading_btc, send_tx_to_chain};
 use serde::{Deserialize, Serialize};
 use twilight_client_sdk::{
     quisquislib::RistrettoSecretKey,
     relayer_rpcclient::method::UtxoDetailResponse,
     relayer_types::{OrderType, PositionType},
+    transfer::create_private_transfer_tx_single,
     zkvm::IOType,
 };
 pub type AccountIndex = u64;
+pub type RequestId = String;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderWallet {
     pub wallet: Wallet,
@@ -25,6 +27,7 @@ pub struct OrderWallet {
     pub chain_id: String,
     seed: String,
     pub utxo_details: HashMap<AccountIndex, UtxoDetailResponse>,
+    pub request_ids: HashMap<AccountIndex, RequestId>,
 }
 
 impl OrderWallet {
@@ -36,6 +39,7 @@ impl OrderWallet {
             chain_id: chain_id.to_string(),
             seed,
             utxo_details: HashMap::new(),
+            request_ids: HashMap::new(),
         })
     }
     pub fn get_zk_account_seed(&self, index: AccountIndex) -> RistrettoSecretKey {
@@ -69,7 +73,7 @@ impl OrderWallet {
             };
             let sequence = wallet_on_chain_info.account.sequence;
             let account_number = wallet_on_chain_info.account.account_number;
-            let signed_tx = build_and_sign_msgMintBurnTradingBtc(
+            let signed_tx = build_and_sign_msg_mint_burn_trading_btc(
                 &self.wallet,
                 &self.zk_accounts,
                 account_index,
@@ -81,12 +85,7 @@ impl OrderWallet {
             if result.code != 0 {
                 return Err(format!("Failed to send tx to chain: {}", result.tx_hash));
             } else {
-                let account_address = match self.zk_accounts.get_account_address(&account_index) {
-                    Some(address) => address,
-                    None => {
-                        return Err(format!("Failed to get account address"));
-                    }
-                };
+                let account_address = self.zk_accounts.get_account_address(&account_index)?;
                 let utxo_detail =
                     match fetch_utxo_details_with_retry(account_address, 20, 1000, IOType::Coin)
                         .await
@@ -102,28 +101,82 @@ impl OrderWallet {
             }
             Ok((result, account_index))
         } else {
+            error!("Insufficient balance");
             Err(format!("Insufficient balance"))
         }
     }
     //  -> Result<(TxResult, u64), String>
-    pub async fn trading_to_trading(&mut self, index: AccountIndex) -> Result<(), String> {
-        let account_address = match self.zk_accounts.get_account_address(&index) {
-            Some(address) => address,
-            None => {
-                error!("Failed to get account address for index {}", index);
-                return Err(format!("Failed to get account address for index {}", index));
-            }
-        };
+    pub async fn trading_to_trading(
+        &mut self,
+        index: AccountIndex,
+    ) -> Result<AccountIndex, String> {
+        let sender_account = self.zk_accounts.get_account(&index)?;
+        if sender_account.on_chain == false
+            || sender_account.io_type != IOType::Coin
+            || sender_account.balance == 0
+        {
+            error!("Account is not on chain or not a coin account");
+            return Err(format!("Account is not on chain or not a coin account"));
+        }
+        let sender_account_address = sender_account.account.clone();
+        let amount = sender_account.balance;
+        let new_account_index = self
+            .zk_accounts
+            .generate_new_account(amount, self.seed.clone())?;
+        let receiver_input_string = self
+            .zk_accounts
+            .get_account(&new_account_index)?
+            .get_input_string()?;
+
         let utxo_detail =
-            match fetch_utxo_details_with_retry(account_address, 20, 1000, IOType::Coin).await {
+            match fetch_utxo_details_with_retry(sender_account_address, 20, 1000, IOType::Coin)
+                .await
+            {
                 Ok(utxo_detail) => utxo_detail,
                 Err(e) => {
                     error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
                     return Err(e);
                 }
             };
+        let input = utxo_detail.get_input()?;
+        let tx_wallet = create_private_transfer_tx_single(
+            self.get_zk_account_seed(index),
+            input,
+            receiver_input_string,
+            amount,
+            true,
+            0,
+            1u64,
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            twilight_client_sdk::chain::tx_commit_broadcast_transaction(
+                tx_wallet.get_tx().ok_or("Failed to get tx")?,
+            )
+        })
+        .await
+        .map_err(|e| format!("Failed to send RPC request: {}", e))?;
+        debug!("response: {:?}", response);
+        let utxo_detail = match fetch_utxo_details_with_retry(
+            self.zk_accounts.get_account_address(&new_account_index)?,
+            20,
+            1000,
+            IOType::Coin,
+        )
+        .await
+        {
+            Ok(utxo_detail) => utxo_detail,
+            Err(e) => {
+                error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
+                return Err(e);
+            }
+        };
 
-        Ok(())
+        self.utxo_details.insert(new_account_index, utxo_detail);
+        self.utxo_details.remove(&index);
+        self.zk_accounts.update_on_chain(&new_account_index, true)?;
+        self.zk_accounts.update_on_chain(&index, false)?;
+
+        Ok(new_account_index)
     }
 
     pub async fn open_trader_order(
@@ -134,13 +187,7 @@ impl OrderWallet {
         entry_price: u64,
         leverage: u64,
     ) -> Result<String, String> {
-        let account_address = match self.zk_accounts.get_account_address(&index) {
-            Some(address) => address,
-            None => {
-                error!("Failed to get account address for index {}", index);
-                return Err(format!("Failed to get account address for index {}", index));
-            }
-        };
+        let account_address = self.zk_accounts.get_account_address(&index)?;
         let _utxo_detail =
             match fetch_utxo_details_with_retry(account_address.clone(), 60, 1000, IOType::Coin)
                 .await
@@ -152,9 +199,7 @@ impl OrderWallet {
                 }
             };
         let secret_key = self.get_zk_account_seed(index);
-        let r_scalar =
-            twilight_client_sdk::util::hex_to_scalar(self.zk_accounts.get_account(&index)?.scalar)
-                .ok_or("Failed to convert scalar_hex to scalar")?;
+        let r_scalar = self.zk_accounts.get_account(&index)?.get_scalar()?;
 
         let initial_margin = self.zk_accounts.get_account(&index)?.balance;
         let position_value = initial_margin * leverage;
@@ -178,9 +223,28 @@ impl OrderWallet {
             )
         })
         .await
-        .map_err(|e| format!("Failed to send RPC request: {}", e))?;
-        info!("request_id: {:?}", request_id);
-        request_id
+        .map_err(|e| {
+            error!("Failed to create order: {}", e);
+            format!("Failed to create order: {}", e)
+        })?;
+        match request_id {
+            Ok(request_id) => {
+                self.request_ids.insert(index, request_id.clone());
+                Ok(request_id)
+            }
+            Err(e) => {
+                error!("Failed to create order: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn close_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_zk_account_seed(index);
+        let r_scalar = self.zk_accounts.get_account(&index)?.get_scalar()?;
+
+        Ok(format!("close_trader_order"))
     }
 }
 
@@ -205,10 +269,12 @@ mod tests {
         });
     }
     async fn setup_wallet() -> Result<Wallet, String> {
-        info!("Creating new wallet with random BTC address");
-        let mut wallet = Wallet::create_new_with_random_btc_address()
-            .await
-            .map_err(|e| e.to_string())?;
+        // info!("Creating new wallet with random BTC address");
+        // let mut wallet = Wallet::create_new_with_random_btc_address()
+        //     .await
+        //     .map_err(|e| e.to_string())?;
+        info!("importing wallet from json");
+        let mut wallet = Wallet::import_from_json("test.json").map_err(|e| e.to_string())?;
         // info!("importing wallet from json");
         // let mut wallet = Wallet::import_from_json("test.json").map_err(|e| e.to_string())?;
         info!("Getting test tokens from faucet");
@@ -250,6 +316,45 @@ mod tests {
             .await;
         println!("result: {:?}", result);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_trading_to_trading() -> Result<(), String> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let wallet = setup_wallet().await.unwrap();
+        let zk_accounts = ZkAccountDB::new();
+        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks")?;
+        let (tx_result, sender_account_index) = order_wallet.funding_to_trading(6000).await?;
+        if tx_result.code != 0 {
+            return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
+        }
+        let receiver_account_index = order_wallet
+            .trading_to_trading(sender_account_index)
+            .await?;
+        assert_ne!(sender_account_index, receiver_account_index);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&sender_account_index)?
+                .on_chain,
+            false
+        );
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&receiver_account_index)?
+                .balance,
+            6000
+        );
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&receiver_account_index)?
+                .on_chain,
+            true
+        );
         Ok(())
     }
 }
