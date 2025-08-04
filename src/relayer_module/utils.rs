@@ -4,14 +4,16 @@ use crate::{
         txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams},
         txresult::parse_tx_response,
     },
-    relayer_module::{relayer_api::JsonRpcClient, relayer_types::TransactionHashArgs},
+    relayer_module::{relayer_api::RelayerJsonRpcClient, relayer_types::TransactionHashArgs},
     zkos_accounts::ZkAccountDB,
     *,
 };
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Duration, sleep};
-use twilight_client_sdk::{relayer_rpcclient::method::UtxoDetailResponse, zkvm::IOType};
+use twilight_client_sdk::{
+    relayer_rpcclient::method::UtxoDetailResponse, relayer_types::TxHash, zkvm::IOType,
+};
 /// Constructs a `MsgMintBurnTradingBtc` for the given wallet/zk account, then signs it and
 /// returns the base64-encoded transaction ready for broadcast.
 pub fn build_and_sign_msg_mint_burn_trading_btc(
@@ -140,17 +142,17 @@ pub async fn fetch_utxo_details_with_retry(
 }
 
 pub async fn fetch_tx_hash_with_retry(
-    request_id: String,
+    request_id: &str,
     max_attempts: u32,
     delay_ms: u64,
-) -> Result<String, String> {
+) -> Result<TxHash, String> {
     let mut attempts = 0;
     loop {
-        let request_id_clone = request_id.clone();
-        let relayer_connection = JsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
+        let relayer_connection =
+            RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
         let response = relayer_connection
             .transaction_hashes(TransactionHashArgs::RequestId {
-                id: request_id_clone,
+                id: request_id.to_string(),
                 status: None,
             })
             .await
@@ -165,7 +167,7 @@ pub async fn fetch_tx_hash_with_retry(
             }
             sleep(Duration::from_millis(delay_ms)).await;
         } else {
-            return Ok(response[0].tx_hash.clone());
+            return Ok(response[0].clone());
         }
     }
 }

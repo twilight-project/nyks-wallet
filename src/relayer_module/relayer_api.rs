@@ -22,11 +22,11 @@ pub struct HexEncodedData {
     pub data: String,
 }
 
-pub struct JsonRpcClient {
+pub struct RelayerJsonRpcClient {
     client: HttpClient,
 }
 
-impl JsonRpcClient {
+impl RelayerJsonRpcClient {
     pub fn new(url: &str) -> Result<Self, RpcError> {
         let client = HttpClientBuilder::default()
             .request_timeout(std::time::Duration::from_secs(30))
@@ -248,7 +248,7 @@ mod tests {
     const RELAYER_URL: &str = "https://relayer.twilight.rest/api";
     #[tokio::test]
     async fn test_transaction_hashes_by_request_id() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
 
         let request_id = TransactionHashArgs::RequestId {
             id: "REQID9804F25BCD722E00D408E3034B6E4EC144992DA7871A1F4DCEC86F0CBBCE81D1".to_string(),
@@ -266,7 +266,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_position_size() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
 
         match relayer.position_size().await {
             Ok(response) => println!("Position size response: {:?}", response),
@@ -278,7 +278,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_pool_share_value() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
 
         match relayer.pool_share_value().await {
             Ok(value) => println!("Pool share value: {}", value),
@@ -290,7 +290,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_lend_pool_info() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
 
         match relayer.lend_pool_info().await {
             Ok(info) => println!("Lend pool info: {:?}", info),
@@ -302,7 +302,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_historical_funding() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         let args = HistoricalFundingArgs {
             from: chrono::Utc::now() - chrono::Duration::hours(24),
             to: chrono::Utc::now(),
@@ -321,7 +321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_historical_fees() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         let args = HistoricalFeeArgs {
             from: chrono::Utc::now() - chrono::Duration::days(365),
             to: chrono::Utc::now(),
@@ -340,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_historical_prices() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         let args = HistoricalPriceArgs {
             from: chrono::Utc::now() - chrono::Duration::hours(24),
             to: chrono::Utc::now(),
@@ -360,7 +360,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_btc_usd_price() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         match relayer.btc_usd_price().await {
             Ok(price) => println!("BTC/USD price: {:?}", price),
             Err(e) => {
@@ -372,7 +372,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_open_limit_orders() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         match relayer.open_limit_orders().await {
             Ok(order_book) => println!("Open limit orders: {:?}", order_book),
             Err(e) => {
@@ -384,7 +384,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_recent_trade_orders() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         match relayer.recent_trade_orders().await {
             Ok(orders) => println!("Recent trade orders: {:?}", orders),
             Err(e) => {
@@ -396,7 +396,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_candle_data() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         let args = Candles {
             interval: Interval::ONE_MINUTE,
             since: chrono::Utc::now() - chrono::Duration::hours(1),
@@ -414,7 +414,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_funding_rate() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         match relayer.get_funding_rate().await {
             Ok(rate) => println!("Funding rate: {:?}", rate),
             Err(e) => {
@@ -426,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_fee_rate() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         match relayer.get_fee_rate().await {
             Ok(fee) => println!("Fee rate: {:?}", fee),
             Err(e) => {
@@ -438,7 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_historical_trader_order_info() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         let query_str = "8a00000000000000306339363431313165653936636436663332656333363734353065656130636464663632343439393766623339366265323464623335363063653831616133333435313633393733333265316135386131646162623135346134346539663631616163386436663264323366386338386464623435306332623065626663373831633239366638343761050000008a000000000000003063393634313131656539366364366633326563333637343530656561306364646636323434393937666233393662653234646233353630636538316161333334353136333937333332653161353861316461626231353461343465396636316161633864366632643233663863383864646234353063326230656266633738316332393666383437614000000000000000bcdd784e30b11b3d80b039e951e2de9ce68bc9e12254f588872a4cb05621916267f41835ff570ed81f53e4553f055b6b3e691d75910b4e5ae0d9d5556f5b0e08".to_string();
         let query = QueryTraderOrderZkos::decode_from_hex_string(query_str).unwrap();
         match relayer.historical_trader_order_info(query).await {
@@ -451,7 +451,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_trader_order_info() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         let query_str = "8a00000000000000306339363431313165653936636436663332656333363734353065656130636464663632343439393766623339366265323464623335363063653831616133333435313633393733333265316135386131646162623135346134346539663631616163386436663264323366386338386464623435306332623065626663373831633239366638343761050000008a000000000000003063393634313131656539366364366633326563333637343530656561306364646636323434393937666233393662653234646233353630636538316161333334353136333937333332653161353861316461626231353461343465396636316161633864366632643233663863383864646234353063326230656266633738316332393666383437614000000000000000bcdd784e30b11b3d80b039e951e2de9ce68bc9e12254f588872a4cb05621916267f41835ff570ed81f53e4553f055b6b3e691d75910b4e5ae0d9d5556f5b0e08".to_string();
         let query = QueryTraderOrderZkos::decode_from_hex_string(query_str).unwrap();
         match relayer.trader_order_info(query).await {
@@ -464,7 +464,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_lend_order_info() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         let query_str = "8a00000000000000306366383562333461346538383936643232333035623462333831636335663237383535373631616361356361323761376237636366663561663536623330343238336334303266656363363634346561323638663031643661643466356631663736663066383631386261323533353963623462353064623530653638363733313031653037653934050000008a000000000000003063663835623334613465383839366432323330356234623338316363356632373835353736316163613563613237613762376363666635616635366233303432383363343032666563633636343465613236386630316436616434663566316637366630663836313862613235333539636234623530646235306536383637333130316530376539344000000000000000622ec112f3087ef15f6265c4d600c53098ebb27310f3296f1dbcfa3c165a7b4ce780d5cf9fc7dd2ef89fe127ef16188fe5811b6e4a8f1e0c90c92bb96be7a302".to_string();
         let query = QueryLendOrderZkos::decode_from_hex_string(query_str).unwrap();
         match relayer.lend_order_info(query).await {
@@ -477,7 +477,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_server_time() {
-        let relayer = JsonRpcClient::new(RELAYER_URL).unwrap();
+        let relayer = RelayerJsonRpcClient::new(RELAYER_URL).unwrap();
         match relayer.server_time().await {
             Ok(time) => println!("Server time: {:?}", time),
             Err(e) => {

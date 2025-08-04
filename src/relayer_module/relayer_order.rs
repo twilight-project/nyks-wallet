@@ -4,12 +4,17 @@ use twilight_client_sdk::{
     programcontroller::ContractManager,
     quisquislib::RistrettoSecretKey,
     relayer::execute_order_zkos,
-    relayer_types::{OrderStatus, OrderType, PositionType, TXType},
+    relayer_types::{
+        CreateTraderOrderClientZkos, ExecuteTraderOrderZkos, OrderStatus, OrderType, PositionType,
+        TXType,
+    },
     zkvm::Output,
 };
 use uuid::Uuid;
 
-pub fn create_trader_order(
+use crate::relayer_module::relayer_api::RelayerJsonRpcClient;
+
+pub async fn create_trader_order(
     sk: RistrettoSecretKey,
     rscalar: Scalar,
     value: u64,
@@ -22,9 +27,12 @@ pub fn create_trader_order(
     contract_path: &str,
     address: String,
 ) -> Result<String, String> {
-    // let sk = wallet.signing_key().map_err(|e| e.to_string())?;
     let programs = ContractManager::import_program(&contract_path);
-    let input_coin = get_transaction_coin_input_from_address_fast(address)?;
+    let input_coin =
+        tokio::task::spawn_blocking(move || get_transaction_coin_input_from_address_fast(address))
+            .await
+            .map_err(|e| e.to_string())?;
+    let input_coin = input_coin.map_err(|e| e.to_string())?;
     let order_tx_message = twilight_client_sdk::relayer::create_trader_order_zkos(
         input_coin,
         sk,
@@ -45,14 +53,20 @@ pub fn create_trader_order(
         0u32,
     )
     .map_err(|e| e.to_string())?;
-    let response = twilight_client_sdk::relayer_types::CreateTraderOrderZkos::submit_order(
-        order_tx_message.clone(),
-    )?;
+
+    let relayer_connection =
+        RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
+    let response = relayer_connection
+        .submit_trade_order(CreateTraderOrderClientZkos::decode_from_hex_string(
+            order_tx_message.clone(),
+        )?)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(response.id_key.to_string())
 }
 
-pub fn close_trader_order(
+pub async fn close_trader_order(
     output_memo: Output, // Provides the Prover Memo Output used to create the order. Input memo will be created by Exchange on behalf of the user
     secret_key: &RistrettoSecretKey,
     account_id: String,
@@ -71,8 +85,13 @@ pub fn close_trader_order(
         execution_price,
         TXType::ORDERTX,
     );
-    let response = twilight_client_sdk::relayer_types::ExecuteTraderOrderZkos::submit_order(
-        request_msg.clone(),
-    )?;
+    let relayer_connection =
+        RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
+    let response = relayer_connection
+        .settle_trade_order(ExecuteTraderOrderZkos::decode_from_hex_string(
+            request_msg.clone(),
+        )?)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(response.id_key.to_string())
 }

@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use crate::{
     relayer_module::{
-        self, fetch_utxo_details_with_retry, relayer_api::JsonRpcClient,
-        relayer_order::create_trader_order,
+        self, fetch_tx_hash_with_retry, fetch_utxo_details_with_retry,
+        relayer_api::RelayerJsonRpcClient,
+        relayer_order::{close_trader_order, create_trader_order},
     },
     wallet::Wallet,
     zkos_accounts::{
@@ -18,7 +19,7 @@ use twilight_client_sdk::{
     quisquislib::RistrettoSecretKey,
     relayer::query_trader_order_zkos,
     relayer_rpcclient::method::UtxoDetailResponse,
-    relayer_types::{OrderType, PositionType, QueryTraderOrderZkos, TraderOrder},
+    relayer_types::{OrderStatus, OrderType, PositionType, QueryTraderOrderZkos, TraderOrder},
     transfer::create_private_transfer_tx_single,
     zkvm::IOType,
 };
@@ -208,48 +209,90 @@ impl OrderWallet {
         let initial_margin = self.zk_accounts.get_account(&index)?.balance;
         let position_value = initial_margin * leverage;
         let position_size = position_value * entry_price;
+        let contract_path: &str = &std::env::var("RELAYER_PROGRAM_JSON_PATH")
+            .unwrap_or_else(|_| "./relayerprogram.json".to_string());
+        let request_id = create_trader_order(
+            secret_key,
+            r_scalar,
+            initial_margin,
+            order_side,
+            order_type,
+            leverage,
+            entry_price,
+            position_value,
+            position_size,
+            contract_path,
+            account_address.clone(),
+        )
+        .await?;
 
-        let request_id = tokio::task::spawn_blocking(move || {
-            let contract_path: &str = &std::env::var("RELAYER_PROGRAM_JSON_PATH")
-                .unwrap_or_else(|_| "./relayerprogram.json".to_string());
-            create_trader_order(
-                secret_key,
-                r_scalar,
-                initial_margin,
-                order_side,
-                order_type,
-                leverage,
-                entry_price,
-                position_value,
-                position_size,
-                contract_path,
-                account_address,
-            )
-        })
-        .await
-        .map_err(|e| {
-            error!("Failed to create order: {}", e);
-            format!("Failed to create order: {}", e)
-        })?;
-        match request_id {
-            Ok(request_id) => {
-                self.request_ids.insert(index, request_id.clone());
-                Ok(request_id)
-            }
-            Err(e) => {
-                error!("Failed to create order: {}", e);
-                Err(e)
-            }
-        }
+        self.request_ids.insert(index, request_id.clone());
+        let utxo_detail =
+            match fetch_utxo_details_with_retry(account_address, 20, 1000, IOType::Memo).await {
+                Ok(utxo_detail) => utxo_detail,
+                Err(e) => {
+                    error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
+                    return Err(e);
+                }
+            };
+        self.utxo_details.insert(index, utxo_detail);
+        self.zk_accounts.update_io_type(&index, IOType::Memo)?;
+        Ok(request_id)
     }
 
-    // pub async fn close_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
-    //     let account_address = self.zk_accounts.get_account_address(&index)?;
-    //     let secret_key = self.get_zk_account_seed(index);
-    //     let r_scalar = self.zk_accounts.get_account(&index)?.get_scalar()?;
-
-    //     Ok(format!("close_trader_order"))
-    // }
+    pub async fn close_trader_order(
+        &mut self,
+        index: AccountIndex,
+        order_type: OrderType,
+        execution_price: f64,
+    ) -> Result<String, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_zk_account_seed(index);
+        let tx_hash =
+            fetch_tx_hash_with_retry(&self.request_ids.get(&index).unwrap().clone(), 20, 1000)
+                .await?;
+        if tx_hash.order_status != OrderStatus::FILLED {
+            return Err(format!(
+                "Order is not filled, status: {}",
+                tx_hash.order_status.to_str()
+            ));
+        }
+        let output = tx_hash.get_output()?;
+        let request_id = close_trader_order(
+            output,
+            &secret_key,
+            account_address.clone(),
+            tx_hash.order_id,
+            order_type,
+            execution_price,
+        )
+        .await?;
+        let tx_hash = fetch_tx_hash_with_retry(&request_id, 20, 1000).await?;
+        if tx_hash.order_status != OrderStatus::SETTLED {
+            return Err(format!(
+                "Order is not settled, status: {}",
+                tx_hash.order_status.to_str()
+            ));
+        }
+        let utxo_detail =
+            match fetch_utxo_details_with_retry(account_address, 20, 1000, IOType::Coin).await {
+                Ok(utxo_detail) => utxo_detail,
+                Err(e) => {
+                    error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
+                    return Err(e);
+                }
+            };
+        self.utxo_details.insert(index, utxo_detail);
+        let trader_order = self.query_trader_order(index).await?;
+        self.zk_accounts
+            .update_balance(&index, trader_order.available_margin as u64)?;
+        debug!(
+            "trader_order available_margin: {:?}",
+            trader_order.available_margin as u64
+        );
+        self.zk_accounts.update_io_type(&index, IOType::Coin)?;
+        Ok(request_id)
+    }
 
     pub async fn query_trader_order(&mut self, index: AccountIndex) -> Result<TraderOrder, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
@@ -262,7 +305,8 @@ impl OrderWallet {
             "PENDING".to_string(),
         );
         let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
-        let relayer_connection = JsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
+        let relayer_connection =
+            RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
         let response = relayer_connection
             .trader_order_info(query_order_zkos)
             .await
@@ -337,12 +381,30 @@ mod tests {
                 entry_price,
                 10,
             )
-            .await;
-        println!("result: {:?}", result);
-        let tx_hash = fetch_tx_hash_with_retry(result?, 20, 1000).await?;
-        println!("tx_hash: {:?}", tx_hash);
+            .await?;
+        let tx_hash = fetch_tx_hash_with_retry(&result, 20, 1000).await?;
+        assert_eq!(tx_hash.order_status, OrderStatus::FILLED);
         let response = order_wallet.query_trader_order(account_index).await?;
-        println!("response: {:?}", response);
+        assert_eq!(response.order_status, OrderStatus::FILLED);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&account_index)?
+                .io_type,
+            IOType::Memo
+        );
+
+        let result = order_wallet
+            .close_trader_order(account_index, OrderType::MARKET, 0.0)
+            .await?;
+
+        let tx_hash = fetch_tx_hash_with_retry(&result, 20, 1000).await?;
+        assert_eq!(tx_hash.order_status, OrderStatus::SETTLED);
+        let response = order_wallet.query_trader_order(account_index).await?;
+        assert_eq!(response.order_status, OrderStatus::SETTLED);
+        let zk_account = order_wallet.zk_accounts.get_account(&account_index)?;
+        assert_eq!(zk_account.io_type, IOType::Coin);
+        assert_eq!(zk_account.balance, response.available_margin as u64);
 
         Ok(())
     }
