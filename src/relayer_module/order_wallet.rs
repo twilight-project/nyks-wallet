@@ -275,7 +275,7 @@ impl OrderWallet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::get_test_tokens;
+    use crate::{get_test_tokens, relayer_module::fetch_tx_hash_with_retry};
     use log::info;
     use std::sync::Once;
     use tokio::time::{Duration, sleep};
@@ -339,7 +339,8 @@ mod tests {
             )
             .await;
         println!("result: {:?}", result);
-        sleep(Duration::from_secs(15)).await;
+        let tx_hash = fetch_tx_hash_with_retry(result?, 20, 1000).await?;
+        println!("tx_hash: {:?}", tx_hash);
         let response = order_wallet.query_trader_order(account_index).await?;
         println!("response: {:?}", response);
 

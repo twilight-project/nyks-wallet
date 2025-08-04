@@ -4,6 +4,7 @@ use crate::{
         txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams},
         txresult::parse_tx_response,
     },
+    relayer_module::{relayer_api::JsonRpcClient, relayer_types::TransactionHashArgs},
     zkos_accounts::ZkAccountDB,
     *,
 };
@@ -137,6 +138,38 @@ pub async fn fetch_utxo_details_with_retry(
         sleep(Duration::from_millis(delay_ms)).await;
     }
 }
+
+pub async fn fetch_tx_hash_with_retry(
+    request_id: String,
+    max_attempts: u32,
+    delay_ms: u64,
+) -> Result<String, String> {
+    let mut attempts = 0;
+    loop {
+        let request_id_clone = request_id.clone();
+        let relayer_connection = JsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
+        let response = relayer_connection
+            .transaction_hashes(TransactionHashArgs::RequestId {
+                id: request_id_clone,
+                status: None,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        if response.len() == 0 {
+            attempts += 1;
+            if attempts >= max_attempts {
+                return Err(format!(
+                    "Failed to get tx hash after {} attempts",
+                    max_attempts
+                ));
+            }
+            sleep(Duration::from_millis(delay_ms)).await;
+        } else {
+            return Ok(response[0].tx_hash.clone());
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct TxResult {
     pub tx_hash: String,
