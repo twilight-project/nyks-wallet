@@ -8,7 +8,7 @@ use crate::{
         zkaccount::ZkAccountDB,
     },
 };
-use log::{debug, error, info};
+use log::{debug, error};
 use relayer_module::utils::{TxResult, build_and_sign_msg_mint_burn_trading_btc, send_tx_to_chain};
 use serde::{Deserialize, Serialize};
 use twilight_client_sdk::{
@@ -239,25 +239,25 @@ impl OrderWallet {
         }
     }
 
-    pub async fn close_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_seed(index);
-        let r_scalar = self.zk_accounts.get_account(&index)?.get_scalar()?;
+    // pub async fn close_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
+    //     let account_address = self.zk_accounts.get_account_address(&index)?;
+    //     let secret_key = self.get_zk_account_seed(index);
+    //     let r_scalar = self.zk_accounts.get_account(&index)?.get_scalar()?;
 
-        Ok(format!("close_trader_order"))
-    }
+    //     Ok(format!("close_trader_order"))
+    // }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::get_test_tokens;
+    use log::info;
     use std::sync::Once;
     use tokio::time::{Duration, sleep};
     use twilight_client_sdk::{
         relayer_rpcclient::txrequest::get_recent_price_from_relayer, relayer_types::PositionType,
     };
-
     static INIT: Once = Once::new();
 
     // This function initializes the logger for the tests.

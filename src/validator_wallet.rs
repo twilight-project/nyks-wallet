@@ -6,7 +6,7 @@ use super::{
     },
     *,
 };
-use log::{debug, error, info};
+use log::{error, info};
 
 // Re-export primary async helpers when the `validator-wallet` feature is enabled.
 // These allow external callers to build & broadcast validator-side transactions.

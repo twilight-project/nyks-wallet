@@ -27,7 +27,7 @@ k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 hex = "0.4"
 prost = "0.12"
 prost-types = "0.12"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 
 #  json rpc dependencies #########################################################
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
@@ -55,6 +55,12 @@ serial_test = "2"
 curve25519-dalek = { version = "3", default-features = false }
 rand = "0.7"
 tendermint-rpc = { version = "0.34", features = ["http-client"] }
+jsonrpsee = { version = "0.25.1", features = [
+    "macros",
+    "http-client",
+    "client",
+] }
+# relayer-core = { version = "0.1.0", path = "../relayer-core" }
 [dependencies.twilight-client-sdk]
 git = "https://github.com/twilight-project/twilight-client-sdk.git"
 # branch = "develop"
