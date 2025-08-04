@@ -222,9 +222,8 @@ pub struct LendPoolInfo {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct RequestResponse {
-    pub id: String,
-    pub result: String,
-    pub public_key: String,
+    pub msg: String,
+    pub id_key: String,
 }
 
 // Custom (de)serializer to enforce RFC3339 formatted date strings when talking to the relayer
