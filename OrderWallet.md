@@ -405,14 +405,14 @@ async fn market_making_strategy(
     spread_pct: f64,
 ) -> Result<(), String> {
     // Create new account for each side
-    let long_account = order_wallet.trading_to_trading(account_index).await?;
-    let short_account = order_wallet.trading_to_trading(account_index).await?;
+    let (_, long_account_index) = order_wallet.funding_to_trading(10_000).await?;
+    let (_, short_account_index) = order_wallet.funding_to_trading(10_000).await?;
 
     let spread = (base_price as f64 * spread_pct / 100.0) as u64;
 
     // Open long position below market
     let long_request = order_wallet.open_trader_order(
-        long_account,
+        long_account_index,
         OrderType::LIMIT,
         PositionType::LONG,
         base_price - spread,
@@ -421,7 +421,7 @@ async fn market_making_strategy(
 
     // Open short position above market
     let short_request = order_wallet.open_trader_order(
-        short_account,
+        short_account_index,
         OrderType::LIMIT,
         PositionType::SHORT,
         base_price + spread,
