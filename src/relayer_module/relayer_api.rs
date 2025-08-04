@@ -160,9 +160,8 @@ impl JsonRpcClient {
         &self,
         tx: CreateTraderOrderClientZkos,
     ) -> Result<RequestResponse, RpcError> {
-        let data = bincode::serialize(&tx).unwrap();
         let params = HexEncodedData {
-            data: hex::encode(data),
+            data: tx.encode_as_hex_string().map_err(|e| RpcError::Custom(e))?,
         };
         self.client
             .request("submit_trade_order", AsRpcParams(params))
@@ -173,9 +172,8 @@ impl JsonRpcClient {
         &self,
         tx: CreateLendOrderZkos,
     ) -> Result<RequestResponse, RpcError> {
-        let data = bincode::serialize(&tx).unwrap();
         let params = HexEncodedData {
-            data: hex::encode(data),
+            data: tx.encode_as_hex_string(),
         };
         self.client
             .request("submit_lend_order", AsRpcParams(params))
@@ -186,9 +184,8 @@ impl JsonRpcClient {
         &self,
         tx: ExecuteTraderOrderZkos,
     ) -> Result<RequestResponse, RpcError> {
-        let data = bincode::serialize(&tx).unwrap();
         let params = HexEncodedData {
-            data: hex::encode(data),
+            data: tx.encode_as_hex_string(),
         };
         self.client
             .request("settle_trade_order", AsRpcParams(params))
@@ -199,9 +196,8 @@ impl JsonRpcClient {
         &self,
         tx: ExecuteLendOrderZkos,
     ) -> Result<RequestResponse, RpcError> {
-        let data = bincode::serialize(&tx).unwrap();
         let params = HexEncodedData {
-            data: hex::encode(data),
+            data: tx.encode_as_hex_string(),
         };
         self.client
             .request("settle_lend_order", AsRpcParams(params))
@@ -212,9 +208,8 @@ impl JsonRpcClient {
         &self,
         tx: CancelTraderOrderZkos,
     ) -> Result<RequestResponse, RpcError> {
-        let data = bincode::serialize(&tx).unwrap();
         let params = HexEncodedData {
-            data: hex::encode(data),
+            data: tx.encode_as_hex_string(),
         };
         self.client
             .request("cancel_trader_order", AsRpcParams(params))

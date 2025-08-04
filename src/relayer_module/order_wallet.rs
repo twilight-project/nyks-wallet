@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    relayer_module::{self, fetch_utxo_details_with_retry, relayer_order::create_trader_order},
+    relayer_module::{
+        self, fetch_utxo_details_with_retry, relayer_api::JsonRpcClient,
+        relayer_order::create_trader_order,
+    },
     wallet::Wallet,
     zkos_accounts::{
         encrypted_account::{DERIVATION_MESSAGE, KeyManager},
@@ -13,8 +16,9 @@ use relayer_module::utils::{TxResult, build_and_sign_msg_mint_burn_trading_btc, 
 use serde::{Deserialize, Serialize};
 use twilight_client_sdk::{
     quisquislib::RistrettoSecretKey,
+    relayer::query_trader_order_zkos,
     relayer_rpcclient::method::UtxoDetailResponse,
-    relayer_types::{OrderType, PositionType},
+    relayer_types::{OrderType, PositionType, QueryTraderOrderZkos, TraderOrder},
     transfer::create_private_transfer_tx_single,
     zkvm::IOType,
 };
@@ -246,6 +250,26 @@ impl OrderWallet {
 
     //     Ok(format!("close_trader_order"))
     // }
+
+    pub async fn query_trader_order(&mut self, index: AccountIndex) -> Result<TraderOrder, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_zk_account_seed(index);
+        // let request_id = self.request_ids.get(&index).unwrap();
+        let query_order = query_trader_order_zkos(
+            account_address.clone(),
+            &secret_key,
+            account_address.clone(),
+            "PENDING".to_string(),
+        );
+        let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
+        let relayer_connection = JsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
+        let response = relayer_connection
+            .trader_order_info(query_order_zkos)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(response)
+    }
 }
 
 #[cfg(test)]
@@ -315,6 +339,9 @@ mod tests {
             )
             .await;
         println!("result: {:?}", result);
+        sleep(Duration::from_secs(15)).await;
+        let response = order_wallet.query_trader_order(account_index).await?;
+        println!("response: {:?}", response);
 
         Ok(())
     }
