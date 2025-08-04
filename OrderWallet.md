@@ -283,12 +283,15 @@ assert_eq!(new_account.on_chain, true);  // New account created
 
 ### 9.1 Required Variables
 
-| Variable                    | Default                 | Description             |
-| --------------------------- | ----------------------- | ----------------------- |
-| `NYKS_RPC_BASE_URL`         | `http://0.0.0.0:26657`  | Cosmos RPC endpoint     |
-| `NYKS_LCD_BASE_URL`         | `http://0.0.0.0:1317`   | Cosmos LCD endpoint     |
-| `RELAYER_PROGRAM_JSON_PATH` | `./relayerprogram.json` | Relayer contract config |
-| `RUST_LOG`                  | `info`                  | Logging level           |
+| Variable                    | Default                                   | Description                |
+| --------------------------- | ----------------------------------------- | -------------------------- |
+| `NYKS_RPC_BASE_URL`         | `http://0.0.0.0:26657`                    | Cosmos RPC endpoint        |
+| `NYKS_LCD_BASE_URL`         | `http://0.0.0.0:1317`                     | Cosmos LCD endpoint        |
+| `RELAYER_PROGRAM_JSON_PATH` | `./relayerprogram.json`                   | Relayer contract config    |
+| `FAUCET_BASE_URL`           | `https://faucet-rpc.twilight.rest`        | Faucet endpoint            |
+| `PUBLIC_API_RPC_SERVER_URL` | `https://relayer.twilight.rest/api`       | Relayer data api endpoint  |
+| `RELAYER_RPC_SERVER_URL`    | `https://relayer.twilight.rest/clientapi` | Relayer order api endpoint |
+| `RUST_LOG`                  | `info`                                    | Logging level              |
 
 ### 9.2 Production Configuration
 
@@ -297,7 +300,8 @@ assert_eq!(new_account.on_chain, true);  // New account created
 export NYKS_RPC_BASE_URL="https://rpc.twilight.rest"
 export NYKS_LCD_BASE_URL="https://lcd.twilight.rest"
 export FAUCET_BASE_URL="https://faucet-rpc.twilight.rest"
-
+export PUBLIC_API_RPC_SERVER_URL="https://relayer.twilight.rest/api"
+export RELAYER_RPC_SERVER_URL="https://relayer.twilight.rest/clientapi"
 # Relayer integration
 export RELAYER_PROGRAM_JSON_PATH="/path/to/relayerprogram.json"
 
@@ -444,23 +448,8 @@ async fn lending_strategy(
     let lend_request = order_wallet.open_lend_order(account_index).await?;
 
     // Monitor lending status
-    // loop {
-    //     let lend_order = order_wallet.query_lend_order(account_index).await?;
 
-    //     match lend_order.order_status {
-    //         OrderStatus::FILLED => {
-    //             println!("Lending active, earning interest...");
-    //             tokio::time::sleep(Duration::from_secs(3600)).await; // Check hourly
-    //         },
-    //         OrderStatus::SETTLED => {
-    //             println!("Lending completed, collecting funds...");
-    //             break;
-    //         },
-    //         _ => {
-    //             tokio::time::sleep(Duration::from_secs(60)).await; // Check every minute
-    //         }
-    //     }
-    // }
+    let lend_order = order_wallet.query_lend_order(account_index).await?;
 
     // Close lending position
     let close_request = order_wallet.close_lend_order(account_index).await?;
