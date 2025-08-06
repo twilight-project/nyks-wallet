@@ -131,7 +131,7 @@ pub async fn transfer_tx(
     tx_fee: u64,
 ) -> Result<(String, u32), String> {
     dotenv::dotenv().ok();
-    env_logger::init();
+    // env_logger::init();
 
     let wallet = setup_wallet().await?;
     let signed_tx = build_and_sign_msg_transfer_tx(
@@ -160,7 +160,7 @@ pub async fn mint_burn_trading_btc_tx(
     twilight_address: String,
 ) -> Result<(String, u32), String> {
     dotenv::dotenv().ok();
-    env_logger::init();
+    // env_logger::init();
 
     let wallet = setup_wallet().await?;
     let signed_tx = build_and_sign_msg_mint_burn_trading_btc(
