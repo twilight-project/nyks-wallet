@@ -3,7 +3,7 @@
 mod tests {
     use crate::nyks_fn::MsgMintBurnTradingBtc;
     use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
-    use crate::nyks_rpc::rpcclient::txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams};
+    use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
     use crate::nyks_rpc::rpcclient::txresult::from_rpc_response;
     use crate::seed_signer::{build_sign_doc, sign_adr036, signature_bundle};
     use crate::wallet::*;
@@ -115,8 +115,10 @@ mod tests {
     async fn test_wallet_from_mnemonic() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
         init_logger();
-        let wallet =
-            Wallet::from_mnemonic("test test test test test test test test test test test junk")?;
+        let wallet = Wallet::from_mnemonic(
+            "test test test test test test test test test test test junk",
+            None,
+        )?;
         println!("wallet: {:?}", wallet);
         Ok(())
     }
@@ -130,6 +132,7 @@ mod tests {
         init_logger();
         let wallet = Wallet::from_private_key(
             "e64e7928d4f6c06f01fefd31f760c51f59a16426e792761cd00529b76501c8a0",
+            None,
         )?;
         println!("wallet: {:?}", wallet);
         Ok(())
@@ -144,7 +147,9 @@ mod tests {
         init_logger();
         global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
-        let account_details = fetch_account_details(&wallet.twilightaddress).await?;
+        let account_details =
+            fetch_account_details(&wallet.twilightaddress, &wallet.chain_config.lcd_endpoint)
+                .await?;
         println!("Account details: {:?}", account_details);
         Ok(())
     }
@@ -158,7 +163,8 @@ mod tests {
         init_logger();
         global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
-        let balance = check_balance(&wallet.twilightaddress).await?;
+        let balance =
+            check_balance(&wallet.twilightaddress, &wallet.chain_config.lcd_endpoint).await?;
         println!("Balance: {:?}", balance);
         Ok(())
     }
@@ -203,8 +209,7 @@ mod tests {
         );
 
         // Send RPC request
-        let url = NYKS_RPC_BASE_URL.to_string();
-        let response = match tokio::task::spawn_blocking(move || tx_send.send(url))
+        let response = match tokio::task::spawn_blocking(move || tx_send.send(wallet.chain_config.rpc_endpoint))
             .await // wait for the blocking task to finish
             {
                 Ok(response) => response,
@@ -302,7 +307,8 @@ mod tests {
         init_logger();
         // global_setup().await;
         let wallet = Wallet::from_mnemonic_file("validator-self.mnemonic")?;
-        let balance = check_balance(&wallet.twilightaddress).await?;
+        let balance =
+            check_balance(&wallet.twilightaddress, &wallet.chain_config.lcd_endpoint).await?;
         println!("balance: {:?}", balance);
         println!("wallet: {:?}", wallet);
         Ok(())

@@ -1,4 +1,4 @@
-use crate::nyks_rpc::rpcclient::txrequest::{FAUCET_BASE_URL, NYKS_LCD_BASE_URL};
+// use crate::nyks_rpc::rpcclient::txrequest::{FAUCET_BASE_URL, NYKS_LCD_BASE_URL};
 
 use super::super::MsgRegisterBtcDepositAddress;
 use anyhow::anyhow;
@@ -80,12 +80,11 @@ where
     s.parse::<u64>().map_err(serde::de::Error::custom)
 }
 
-pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountResponse> {
-    let url = format!(
-        "{}/cosmos/auth/v1beta1/accounts/{}",
-        NYKS_LCD_BASE_URL.as_str(),
-        address
-    );
+pub async fn fetch_account_details(
+    address: &str,
+    lcd_endpoint: &str,
+) -> anyhow::Result<AccountResponse> {
+    let url = format!("{}/cosmos/auth/v1beta1/accounts/{}", lcd_endpoint, address);
     let client = Client::new();
     let response = client.get(&url).send().await?;
 
@@ -107,8 +106,11 @@ pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountRespo
     }
 }
 
-pub async fn get_nyks(recipient_address: &str) -> Result<(), Box<dyn Error>> {
-    let url = format!("{}/faucet", FAUCET_BASE_URL.as_str());
+pub async fn get_nyks(
+    recipient_address: &str,
+    faucet_endpoint: &str,
+) -> Result<(), Box<dyn Error>> {
+    let url = format!("{}/faucet", faucet_endpoint);
     let payload = json!({ "recipientAddress": recipient_address });
     let client = Client::new();
     let response = client.post(url).json(&payload).send().await?;
@@ -130,8 +132,11 @@ pub async fn get_nyks(recipient_address: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
-pub async fn mint_sats(recipient_address: &str) -> Result<(), Box<dyn Error>> {
-    let url = format!("{}/mint", FAUCET_BASE_URL.as_str());
+pub async fn mint_sats(
+    recipient_address: &str,
+    faucet_endpoint: &str,
+) -> Result<(), Box<dyn Error>> {
+    let url = format!("{}/mint", faucet_endpoint);
 
     let payload = json!({ "recipientAddress": recipient_address });
     let client = Client::new();
@@ -153,8 +158,11 @@ pub async fn mint_sats(recipient_address: &str) -> Result<(), Box<dyn Error>> {
         .into())
     }
 }
-pub async fn mint_sats_5btc(recipient_address: &str) -> Result<(), Box<dyn Error>> {
-    let url = format!("{}/mint-relayer-wallet", FAUCET_BASE_URL.as_str());
+pub async fn mint_sats_5btc(
+    recipient_address: &str,
+    faucet_endpoint: &str,
+) -> Result<(), Box<dyn Error>> {
+    let url = format!("{}/mint-relayer-wallet", faucet_endpoint);
 
     let payload = json!({ "recipientAddress": recipient_address });
     let client = Client::new();
@@ -182,13 +190,14 @@ pub async fn sign_and_send_reg_deposit_tx(
     public_key: PublicKey,
     sender_account: String,
     btc_address: String,
+    lcd_endpoint: &str,
 ) -> anyhow::Result<()> {
     // --- Msg & body
     let msg_any =
         create_register_btc_deposit_message(btc_address, 50_000, 10_000, sender_account.clone());
     let body = Body::new(vec![msg_any], "", 0u16);
     // --- On‑chain numbers
-    let account_details = fetch_account_details(&sender_account).await?;
+    let account_details = fetch_account_details(&sender_account, lcd_endpoint).await?;
     let sequence = account_details.account.sequence;
     let account_number = account_details.account.account_number;
 
@@ -212,10 +221,7 @@ pub async fn sign_and_send_reg_deposit_tx(
     let tx_base64 = general_purpose::STANDARD.encode(&tx_bytes);
     let client = Client::new();
     let res = client
-        .post(format!(
-            "{}/cosmos/tx/v1beta1/txs",
-            NYKS_LCD_BASE_URL.as_str()
-        ))
+        .post(format!("{}/cosmos/tx/v1beta1/txs", lcd_endpoint))
         .json(&json!({ "tx_bytes": tx_base64, "mode": "BROADCAST_MODE_SYNC" }))
         .send()
         .await?;

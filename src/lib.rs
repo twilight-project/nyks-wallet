@@ -1,9 +1,9 @@
 pub mod nyks_rpc;
 pub mod wallet;
 pub use wallet::*;
+pub mod config;
 pub mod test;
 pub mod zkos_accounts;
-
 #[macro_use]
 extern crate lazy_static;
 // ----------------------------------------------------------------------------

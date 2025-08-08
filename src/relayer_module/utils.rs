@@ -1,7 +1,7 @@
 use crate::{
     nyks_rpc::rpcclient::{
         method::{Method, MethodTypeURL},
-        txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams},
+        txrequest::{RpcBody, RpcRequest, TxParams},
         txresult::parse_tx_response,
     },
     relayer_module::{relayer_api::RelayerJsonRpcClient, relayer_types::TransactionHashArgs},
@@ -58,17 +58,17 @@ pub fn build_and_sign_msg_mint_burn_trading_btc(
 }
 
 /// Broadcasts the signed transaction to the NYKS RPC endpoint and logs the response.
-pub async fn send_tx_to_chain(signed_tx: String) -> Result<TxResult, String> {
+pub async fn send_tx_to_chain(signed_tx: String, rpc_endpoint: &str) -> Result<TxResult, String> {
     // Prepare the RPC request body
     let method = Method::broadcast_tx_sync;
     let (tx_send, _): (RpcBody<TxParams>, String) =
         RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
 
     // RPC endpoint URL (consider moving to an env var later)
-    let url = NYKS_RPC_BASE_URL.to_string();
+    let rpc_endpoint = rpc_endpoint.to_string();
 
     // Execute the blocking HTTP request on a separate thread
-    let response = tokio::task::spawn_blocking(move || tx_send.send(url))
+    let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
 
@@ -145,12 +145,11 @@ pub async fn fetch_tx_hash_with_retry(
     request_id: &str,
     max_attempts: u32,
     delay_ms: u64,
+    relayer_api_client: &RelayerJsonRpcClient,
 ) -> Result<TxHash, String> {
     let mut attempts = 0;
     loop {
-        let relayer_connection =
-            RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
-        let response = relayer_connection
+        let response = relayer_api_client
             .transaction_hashes(TransactionHashArgs::RequestId {
                 id: request_id.to_string(),
                 status: None,

@@ -2,7 +2,7 @@ use log::{debug, error, info};
 use nyks_wallet::{
     nyks_rpc::rpcclient::{
         method::{Method, MethodTypeURL},
-        txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams},
+        txrequest::{RpcBody, RpcRequest, TxParams},
         txresult::parse_tx_response,
     },
     zkos_accounts::{
@@ -114,17 +114,17 @@ fn build_and_sign_msg(
 }
 
 /// Broadcasts the signed transaction to the NYKS RPC endpoint and logs the response.
-async fn send_rpc_request(signed_tx: String) -> Result<(), String> {
+async fn send_rpc_request(signed_tx: String, rpc_endpoint: &str) -> Result<(), String> {
     // Prepare the RPC request body
     let method = Method::broadcast_tx_sync;
     let (tx_send, _): (RpcBody<TxParams>, String) =
         RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
 
     // RPC endpoint URL (consider moving to an env var later)
-    let url = NYKS_RPC_BASE_URL.to_string();
+    let rpc_endpoint = rpc_endpoint.to_string();
 
     // Execute the blocking HTTP request on a separate thread
-    let response = tokio::task::spawn_blocking(move || tx_send.send(url))
+    let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
 
@@ -246,7 +246,7 @@ async fn main() -> Result<(), String> {
     info!("    Message signed successfully");
     // Broadcast the transaction
     info!("Broadcasting transaction...");
-    send_rpc_request(signed_tx.clone()).await?;
+    send_rpc_request(signed_tx.clone(), &wallet.chain_config.rpc_endpoint).await?;
     info!("    Transaction broadcasted successfully");
 
     // Retrieve the zk account and ensure it exists

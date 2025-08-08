@@ -1,7 +1,7 @@
 use super::{
     nyks_rpc::rpcclient::{
         method::{Method, MethodTypeURL},
-        txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams},
+        txrequest::{RpcBody, RpcRequest, TxParams},
         txresult::parse_tx_response,
     },
     *,
@@ -94,13 +94,12 @@ fn build_and_sign_msg_mint_burn_trading_btc(
     Ok(signed_tx)
 }
 
-async fn send_rpc_request(signed_tx: String) -> Result<(String, u32), String> {
+async fn send_rpc_request(signed_tx: String, rpc_endpoint: &str) -> Result<(String, u32), String> {
     let method = Method::broadcast_tx_sync;
     let (tx_send, _): (RpcBody<TxParams>, String) =
         RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
-    let url = NYKS_RPC_BASE_URL.to_string();
-
-    let response = tokio::task::spawn_blocking(move || tx_send.send(url))
+    let rpc_endpoint = rpc_endpoint.to_string();
+    let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
 
@@ -147,7 +146,7 @@ pub async fn transfer_tx(
             .account_number,
     )?;
 
-    send_rpc_request(signed_tx).await
+    send_rpc_request(signed_tx, &wallet.chain_config.rpc_endpoint).await
 }
 
 /// Broadcast a MsgMintBurnTradingBtc transaction to mint or burn BTC in zkOS trading.
@@ -178,5 +177,5 @@ pub async fn mint_burn_trading_btc_tx(
         twilight_address,
     )?;
 
-    send_rpc_request(signed_tx).await
+    send_rpc_request(signed_tx, &wallet.chain_config.rpc_endpoint).await
 }

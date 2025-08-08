@@ -27,6 +27,7 @@ pub async fn create_trader_order(
     position_size: u64,
     contract_path: &str,
     address: String,
+    relayer_api_client: &RelayerJsonRpcClient,
 ) -> Result<String, String> {
     let programs = ContractManager::import_program(&contract_path);
     let input_coin =
@@ -55,9 +56,7 @@ pub async fn create_trader_order(
     )
     .map_err(|e| e.to_string())?;
 
-    let relayer_connection =
-        RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
-    let response = relayer_connection
+    let response = relayer_api_client
         .submit_trade_order(CreateTraderOrderClientZkos::decode_from_hex_string(
             order_tx_message.clone(),
         )?)
@@ -74,6 +73,7 @@ pub async fn close_trader_order(
     uuid: Uuid,
     order_type: OrderType,
     execution_price: f64,
+    relayer_api_client: &RelayerJsonRpcClient,
 ) -> Result<String, String> {
     let request_msg = execute_order_zkos(
         output_memo,
@@ -86,9 +86,7 @@ pub async fn close_trader_order(
         execution_price,
         TXType::ORDERTX,
     );
-    let relayer_connection =
-        RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
-    let response = relayer_connection
+    let response = relayer_api_client
         .settle_trade_order(ExecuteTraderOrderZkos::decode_from_hex_string(
             request_msg.clone(),
         )?)
@@ -103,6 +101,7 @@ pub async fn close_lend_order(
     account_id: String,
     uuid: Uuid,
     order_type: OrderType,
+    relayer_api_client: &RelayerJsonRpcClient,
 ) -> Result<String, String> {
     let request_msg = execute_order_zkos(
         output_memo,
@@ -115,9 +114,7 @@ pub async fn close_lend_order(
         0.0,
         TXType::LENDTX,
     );
-    let relayer_connection =
-        RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
-    let response = relayer_connection
+    let response = relayer_api_client
         .settle_lend_order(ExecuteLendOrderZkos::decode_from_hex_string(
             request_msg.clone(),
         )?)
@@ -132,6 +129,7 @@ pub async fn create_lend_order(
     amount: u64,
     contract_path: &str,
     scalar_hex: String,
+    relayer_api_client: &RelayerJsonRpcClient,
 ) -> Result<String, String> {
     let account_address_clone = account_address.clone();
     let input_coin = tokio::task::spawn_blocking(move || {
@@ -164,9 +162,7 @@ pub async fn create_lend_order(
         OrderStatus::PENDING.to_str(),
         amount as f64,
     );
-    let relayer_connection =
-        RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
-    let response = relayer_connection
+    let response = relayer_api_client
         .submit_lend_order(CreateLendOrderZkos::decode_from_hex_string(request_msg?)?)
         .await
         .map_err(|e| e.to_string())?;
@@ -178,6 +174,7 @@ pub async fn cancel_trader_order(
     secret_key: &RistrettoSecretKey,
     account_id: String,
     uuid: Uuid,
+    relayer_api_client: &RelayerJsonRpcClient,
 ) -> Result<String, String> {
     let request_msg = cancel_trader_order_zkos(
         account_address,
@@ -187,9 +184,7 @@ pub async fn cancel_trader_order(
         OrderType::LIMIT.to_str(),
         OrderStatus::CANCELLED.to_str(),
     );
-    let relayer_connection =
-        RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
-    let response = relayer_connection
+    let response = relayer_api_client
         .cancel_trader_order(CancelTraderOrderZkos::decode_from_hex_string(
             request_msg.clone(),
         )?)

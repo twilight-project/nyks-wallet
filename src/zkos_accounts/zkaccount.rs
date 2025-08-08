@@ -92,6 +92,7 @@ pub struct ZkAccountDB {
     pub accounts: HashMap<u64, ZkAccount>,
     pub index: u64,
 }
+
 impl ZkAccountDB {
     pub fn new() -> Self {
         Self {

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    config::RelayerEndPointConfig,
     relayer_module::{
         self, fetch_tx_hash_with_retry, fetch_utxo_details_with_retry,
         relayer_api::RelayerJsonRpcClient,
@@ -31,7 +32,7 @@ use twilight_client_sdk::{
 };
 pub type AccountIndex = u64;
 pub type RequestId = String;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OrderWallet {
     pub wallet: Wallet,
     pub zk_accounts: ZkAccountDB,
@@ -39,10 +40,20 @@ pub struct OrderWallet {
     seed: String,
     pub utxo_details: HashMap<AccountIndex, UtxoDetailResponse>,
     pub request_ids: HashMap<AccountIndex, RequestId>,
+    #[serde(skip)]
+    pub relayer_api_client: RelayerJsonRpcClient,
+    pub relayer_endpoint_config: RelayerEndPointConfig,
 }
 
 impl OrderWallet {
-    pub fn new(wallet: Wallet, zk_accounts: ZkAccountDB, chain_id: &str) -> Result<Self, String> {
+    pub fn new(
+        wallet: Wallet,
+        zk_accounts: ZkAccountDB,
+        chain_id: &str,
+        relayer_endpoint_config: Option<RelayerEndPointConfig>,
+    ) -> Result<Self, String> {
+        let relayer_endpoint_config =
+            relayer_endpoint_config.unwrap_or(RelayerEndPointConfig::default());
         let seed = wallet.get_zk_account_seed(chain_id, DERIVATION_MESSAGE)?;
         Ok(Self {
             wallet,
@@ -51,6 +62,11 @@ impl OrderWallet {
             seed,
             utxo_details: HashMap::new(),
             request_ids: HashMap::new(),
+            relayer_api_client: RelayerJsonRpcClient::new(
+                &relayer_endpoint_config.relayer_api_endpoint,
+            )
+            .map_err(|e| e.to_string())?,
+            relayer_endpoint_config: relayer_endpoint_config,
         })
     }
     pub fn get_zk_account_seed(&self, index: AccountIndex) -> RistrettoSecretKey {
@@ -92,7 +108,8 @@ impl OrderWallet {
                 account_number,
                 amount,
             )?;
-            let result = send_tx_to_chain(signed_tx.clone()).await?;
+            let result =
+                send_tx_to_chain(signed_tx.clone(), &self.wallet.chain_config.rpc_endpoint).await?;
             if result.code != 0 {
                 return Err(format!("Failed to send tx to chain: {}", result.tx_hash));
             } else {
@@ -215,8 +232,6 @@ impl OrderWallet {
         let initial_margin = self.zk_accounts.get_account(&index)?.balance;
         let position_value = initial_margin * leverage;
         let position_size = position_value * entry_price;
-        let contract_path: &str = &std::env::var("RELAYER_PROGRAM_JSON_PATH")
-            .unwrap_or_else(|_| "./relayerprogram.json".to_string());
         let request_id = create_trader_order(
             secret_key,
             r_scalar,
@@ -227,8 +242,9 @@ impl OrderWallet {
             entry_price,
             position_value,
             position_size,
-            contract_path,
+            &self.relayer_endpoint_config.relayer_program_json_path,
             account_address.clone(),
+            &self.relayer_api_client,
         )
         .await?;
 
@@ -266,9 +282,13 @@ impl OrderWallet {
     ) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_zk_account_seed(index);
-        let tx_hash =
-            fetch_tx_hash_with_retry(&self.request_ids.get(&index).unwrap().clone(), 20, 1000)
-                .await?;
+        let tx_hash = fetch_tx_hash_with_retry(
+            &self.request_ids.get(&index).unwrap().clone(),
+            20,
+            1000,
+            &self.relayer_api_client,
+        )
+        .await?;
         if tx_hash.order_status != OrderStatus::FILLED {
             return Err(format!(
                 "Order is not filled, status: {}",
@@ -283,9 +303,11 @@ impl OrderWallet {
             tx_hash.order_id,
             order_type,
             execution_price,
+            &self.relayer_api_client,
         )
         .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&request_id, 20, 1000).await?;
+        let tx_hash =
+            fetch_tx_hash_with_retry(&request_id, 20, 1000, &self.relayer_api_client).await?;
         if tx_hash.order_status != OrderStatus::SETTLED {
             return Err(format!(
                 "Order is not settled, status: {}",
@@ -323,9 +345,8 @@ impl OrderWallet {
             "PENDING".to_string(),
         );
         let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
-        let relayer_connection =
-            RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
-        let response = relayer_connection
+        let response = self
+            .relayer_api_client
             .trader_order_info(query_order_zkos)
             .await
             .map_err(|e| e.to_string())?;
@@ -343,9 +364,8 @@ impl OrderWallet {
             OrderStatus::LENDED.to_str(),
         );
         let query_order_zkos = QueryLendOrderZkos::decode_from_hex_string(query_order)?;
-        let relayer_connection =
-            RelayerJsonRpcClient::new("https://relayer.twilight.rest/api").unwrap();
-        let response = relayer_connection
+        let response = self
+            .relayer_api_client
             .lend_order_info(query_order_zkos)
             .await
             .map_err(|e| e.to_string())?;
@@ -369,14 +389,13 @@ impl OrderWallet {
         let scalar_hex: String = self.zk_accounts.get_account(&index)?.scalar.clone();
         let amount = self.zk_accounts.get_account(&index)?.balance;
 
-        let contract_path: &str = &std::env::var("RELAYER_PROGRAM_JSON_PATH")
-            .unwrap_or_else(|_| "./relayerprogram.json".to_string());
         let request_id = create_lend_order(
             account_address.clone(),
             secret_key,
             amount,
-            contract_path,
+            &self.relayer_endpoint_config.relayer_program_json_path,
             scalar_hex,
+            &self.relayer_api_client,
         )
         .await?;
         self.request_ids.insert(index, request_id.clone());
@@ -396,9 +415,13 @@ impl OrderWallet {
     pub async fn close_lend_order(&mut self, index: AccountIndex) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_zk_account_seed(index);
-        let tx_hash =
-            fetch_tx_hash_with_retry(&self.request_ids.get(&index).unwrap().clone(), 20, 1000)
-                .await?;
+        let tx_hash = fetch_tx_hash_with_retry(
+            &self.request_ids.get(&index).unwrap().clone(),
+            20,
+            1000,
+            &self.relayer_api_client,
+        )
+        .await?;
         if tx_hash.order_status != OrderStatus::FILLED {
             return Err(format!(
                 "Order is not filled, status: {}",
@@ -412,9 +435,11 @@ impl OrderWallet {
             account_address.clone(),
             tx_hash.order_id,
             OrderType::LEND,
+            &self.relayer_api_client,
         )
         .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&request_id, 20, 1000).await?;
+        let tx_hash =
+            fetch_tx_hash_with_retry(&request_id, 20, 1000, &self.relayer_api_client).await?;
         if tx_hash.order_status != OrderStatus::SETTLED {
             return Err(format!(
                 "Order is not settled, status: {}",
@@ -441,9 +466,13 @@ impl OrderWallet {
     pub async fn cancel_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_zk_account_seed(index);
-        let tx_hash =
-            fetch_tx_hash_with_retry(&self.request_ids.get(&index).unwrap().clone(), 20, 1000)
-                .await?;
+        let tx_hash = fetch_tx_hash_with_retry(
+            &self.request_ids.get(&index).unwrap().clone(),
+            20,
+            1000,
+            &self.relayer_api_client,
+        )
+        .await?;
         if tx_hash.order_status != OrderStatus::PENDING {
             return Err(format!(
                 "Order is not pending, status: {}",
@@ -455,9 +484,11 @@ impl OrderWallet {
             &secret_key,
             account_address.clone(),
             tx_hash.order_id,
+            &self.relayer_api_client,
         )
         .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&request_id, 20, 1000).await?;
+        let tx_hash =
+            fetch_tx_hash_with_retry(&request_id, 20, 1000, &self.relayer_api_client).await?;
         if tx_hash.order_status != OrderStatus::CANCELLED {
             return Err(format!(
                 "Order is not cancelled, status: {}",
@@ -475,11 +506,10 @@ mod tests {
     use super::*;
     use crate::{get_test_tokens, relayer_module::fetch_tx_hash_with_retry};
     use log::info;
+    use serial_test::serial;
     use std::sync::Once;
     use tokio::time::{Duration, sleep};
-    use twilight_client_sdk::{
-        relayer_rpcclient::txrequest::get_recent_price_from_relayer, relayer_types::PositionType,
-    };
+    use twilight_client_sdk::relayer_types::PositionType;
     static INIT: Once = Once::new();
 
     // This function initializes the logger for the tests.
@@ -491,14 +521,13 @@ mod tests {
         });
     }
     async fn setup_wallet() -> Result<Wallet, String> {
-        // info!("Creating new wallet with random BTC address");
-        // let mut wallet = Wallet::create_new_with_random_btc_address()
-        //     .await
-        //     .map_err(|e| e.to_string())?;
-        info!("importing wallet from json");
-        let mut wallet = Wallet::import_from_json("test.json").map_err(|e| e.to_string())?;
+        info!("Creating new wallet with random BTC address");
+        let mut wallet = Wallet::create_new_with_random_btc_address()
+            .await
+            .map_err(|e| e.to_string())?;
         // info!("importing wallet from json");
         // let mut wallet = Wallet::import_from_json("test.json").map_err(|e| e.to_string())?;
+
         info!("Getting test tokens from faucet");
         match get_test_tokens(&mut wallet).await {
             Ok(_) => info!("Tokens received successfully"),
@@ -511,22 +540,26 @@ mod tests {
         Ok(wallet)
     }
     #[tokio::test]
+    #[serial]
     async fn test_create_order() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
         let wallet = setup_wallet().await.unwrap();
         let zk_accounts = ZkAccountDB::new();
 
-        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks")?;
+        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks", None)?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
         }
 
-        let btc_price = tokio::task::spawn_blocking(move || get_recent_price_from_relayer())
+        let btc_price = order_wallet
+            .relayer_api_client
+            .btc_usd_price()
             .await
-            .map_err(|e| format!("Failed to send RPC request: {}", e))?;
-        let entry_price = btc_price?.result.price as u64;
+            .map_err(|e| e.to_string())?;
+        info!("btc_price: {:?}", btc_price);
+        let entry_price = btc_price.price as u64;
         let result = order_wallet
             .open_trader_order(
                 account_index,
@@ -536,9 +569,13 @@ mod tests {
                 10,
             )
             .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&result, 20, 1000).await?;
+        info!("result: {:?}", result);
+        let tx_hash =
+            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
+        info!("tx_hash: {:?}", tx_hash);
         assert_eq!(tx_hash.order_status, OrderStatus::FILLED);
         let response = order_wallet.query_trader_order(account_index).await?;
+        info!("response: {:?}", response);
         assert_eq!(response.order_status, OrderStatus::FILLED);
         assert_eq!(
             order_wallet
@@ -552,7 +589,8 @@ mod tests {
             .close_trader_order(account_index, OrderType::MARKET, 0.0)
             .await?;
 
-        let tx_hash = fetch_tx_hash_with_retry(&result, 20, 1000).await?;
+        let tx_hash =
+            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::SETTLED);
         let response = order_wallet.query_trader_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::SETTLED);
@@ -564,12 +602,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_trading_to_trading() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
         let wallet = setup_wallet().await.unwrap();
         let zk_accounts = ZkAccountDB::new();
-        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks")?;
+        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks", None)?;
         let (tx_result, sender_account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
@@ -603,18 +642,20 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_open_lend_order() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
         let wallet = setup_wallet().await.unwrap();
         let zk_accounts = ZkAccountDB::new();
-        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks")?;
+        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks", None)?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
         }
         let result = order_wallet.open_lend_order(account_index).await?;
-        let tx_hash = fetch_tx_hash_with_retry(&result, 20, 1000).await?;
+        let tx_hash =
+            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::FILLED);
         let response = order_wallet.query_lend_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::FILLED);
@@ -626,7 +667,8 @@ mod tests {
             IOType::Memo
         );
         let result = order_wallet.close_lend_order(account_index).await?;
-        let tx_hash = fetch_tx_hash_with_retry(&result, 20, 1000).await?;
+        let tx_hash =
+            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::SETTLED);
         let response = order_wallet.query_lend_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::SETTLED);
@@ -637,22 +679,26 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_order_with_cancel() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
         let wallet = setup_wallet().await.unwrap();
         let zk_accounts = ZkAccountDB::new();
 
-        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks")?;
+        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks", None)?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
         }
 
-        let btc_price = tokio::task::spawn_blocking(move || get_recent_price_from_relayer())
+        let btc_price = order_wallet
+            .relayer_api_client
+            .btc_usd_price()
             .await
-            .map_err(|e| format!("Failed to send RPC request: {}", e))?;
-        let entry_price = btc_price?.result.price as u64;
+            .map_err(|e| e.to_string())?;
+        info!("btc_price: {:?}", btc_price);
+        let entry_price = btc_price.price as u64;
         let result = order_wallet
             .open_trader_order(
                 account_index,
@@ -662,7 +708,8 @@ mod tests {
                 10,
             )
             .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&result, 20, 1000).await?;
+        let tx_hash =
+            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::PENDING);
         let response = order_wallet.query_trader_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::PENDING);
@@ -676,7 +723,8 @@ mod tests {
 
         let result = order_wallet.cancel_trader_order(account_index).await?;
 
-        let tx_hash = fetch_tx_hash_with_retry(&result, 20, 1000).await?;
+        let tx_hash =
+            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::CANCELLED);
         let response = order_wallet.query_trader_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::CANCELLED);

@@ -1,4 +1,4 @@
-use crate::nyks_rpc::rpcclient::txrequest::NYKS_RPC_BASE_URL;
+// use crate::nyks_rpc::rpcclient::txrequest::NYKS_RPC_BASE_URL;
 
 pub use super::super::MsgMintBurnTradingBtc;
 use super::faucet::fetch_account_details;
@@ -35,12 +35,16 @@ pub fn get_quisquis_account() -> (String, String) {
     (account.to_string(), scalar.to_string())
 }
 
-pub async fn send_tx(msg: MsgMintBurnTradingBtc) -> anyhow::Result<()> {
+pub async fn send_tx(
+    msg: MsgMintBurnTradingBtc,
+    rpc_endpoint: &str,
+    lcd_endpoint: &str,
+) -> anyhow::Result<()> {
     // 1. Load your key
     let wallet = Wallet::import_from_json("test.json")?;
     let sk = wallet.signing_key()?;
     let pk = wallet.public_key()?;
-    let account_details = fetch_account_details(&wallet.twilightaddress).await?;
+    let account_details = fetch_account_details(&wallet.twilightaddress, lcd_endpoint).await?;
     let sequence = account_details.account.sequence;
     let account_number = account_details.account.account_number;
     // 2. Craft the custom message
@@ -87,7 +91,7 @@ pub async fn send_tx(msg: MsgMintBurnTradingBtc) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let clint_clone = client.clone();
     let res = clint_clone
-        .post(NYKS_RPC_BASE_URL.as_str())
+        .post(rpc_endpoint)
         .headers(construct_headers())
         .body(tx)
         .send();
@@ -118,6 +122,11 @@ mod tests {
     }
     #[tokio::test]
     async fn test_send_tx() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        let rpc_endpoint =
+            std::env::var("NYKS_RPC_BASE_URL").unwrap_or("http://0.0.0.0:26657".to_string());
+        let lcd_endpoint =
+            std::env::var("NYKS_LCD_BASE_URL").unwrap_or("http://0.0.0.0:1317".to_string());
         let (qq_account, encrypt_scalar) = get_quisquis_account();
         let twilight_address = "twilight1ykm5td5kw2hwafmhn7qha54p20veh9um05dpjn".to_string();
         let msg = create_funiding_to_trading_tx_msg(
@@ -127,7 +136,7 @@ mod tests {
             encrypt_scalar,
             twilight_address,
         );
-        send_tx(msg).await?;
+        send_tx(msg, rpc_endpoint.as_str(), lcd_endpoint.as_str()).await?;
         Ok(())
     }
 }
