@@ -36,10 +36,13 @@ impl SecurePassword {
     pub fn get_passphrase_with_prompt(prompt: &str) -> Result<SecretString> {
         // Try environment variable first
         if let Ok(passphrase) = env::var("NYKS_WALLET_PASSPHRASE") {
-            let mut passphrase_mut = passphrase;
-            let secret = SecretString::new(passphrase_mut.clone());
-            passphrase_mut.zeroize();
-            return Ok(secret);
+            if passphrase.is_empty() {
+            } else {
+                let mut passphrase_mut = passphrase;
+                let secret = SecretString::new(passphrase_mut.clone());
+                passphrase_mut.zeroize();
+                return Ok(secret);
+            }
         }
 
         // Use custom prompt
@@ -149,5 +152,30 @@ mod tests {
 
         let strong = SecretString::new("MySecurePass123!".to_string());
         assert!(SecurePassword::validate_passphrase_strength(&strong).is_ok());
+    }
+    #[test]
+    fn test_get_passphrase_with_prompt() {
+        use dotenv::dotenv;
+        use std::env;
+
+        // Load environment variables
+        dotenv().ok();
+
+        // Set empty password in environment
+        // env::set_var("NYKS_WALLET_PASSPHRASE", "");
+
+        // Test with empty password
+        let result = SecurePassword::get_passphrase_with_prompt(
+            "Could not find passphrase from environment, \nplease enter wallet encryption password: ",
+        );
+        assert!(result.is_ok());
+        // assert!(
+        //     result
+        //         .unwrap_err()
+
+        //         .contains("Password cannot be empty")
+        // );
+
+        // Clean up
     }
 }

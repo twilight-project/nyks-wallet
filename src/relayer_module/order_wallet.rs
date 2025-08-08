@@ -670,6 +670,7 @@ impl OrderWallet {
         (
             Option<Wallet>,
             HashMap<u64, crate::zkos_accounts::zkaccount::ZkAccount>,
+            u64,
         ),
         String,
     > {
@@ -687,8 +688,8 @@ impl OrderWallet {
 
         // Load zk accounts
         let zk_accounts = db_manager.load_all_zk_accounts(&mut conn)?;
-
-        Ok((wallet, zk_accounts))
+        let max_account_index = db_manager.get_max_account_index(&mut conn)?;
+        Ok((wallet, zk_accounts, max_account_index))
     }
 
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -799,6 +800,7 @@ impl OrderWallet {
         (
             Option<Wallet>,
             HashMap<u64, crate::zkos_accounts::zkaccount::ZkAccount>,
+            AccountIndex,
         ),
         String,
     > {
@@ -858,6 +860,34 @@ impl OrderWallet {
         } else {
             Ok(false)
         }
+    }
+
+    /// Load OrderWallet configuration from database with password
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn load_order_wallet(wallet_id: String) -> Result<Self, String> {
+        let password = SecurePassword::get_passphrase_with_prompt(
+            "Could not find passphrase from environment, \nplease enter wallet encryption password: ",
+        )
+        .map_err(|e| format!("Failed to get password: {}", e))?;
+        let (option_wallet, zk_accounts, zk_db_index) =
+            Self::load_from_database(wallet_id, Some(password.clone()))?;
+        let wallet = option_wallet.ok_or("Wallet not found")?;
+        let zk_accounts_db = ZkAccountDB {
+            accounts: zk_accounts,
+            index: zk_db_index,
+        };
+        let relayer_endpoint_config = RelayerEndPointConfig::default();
+        let chain_id = wallet.chain_config.chain_id.clone();
+        let mut order_wallet = OrderWallet::new(
+            wallet,
+            zk_accounts_db,
+            &chain_id,
+            Some(relayer_endpoint_config),
+        )?;
+        order_wallet.load_order_wallet_from_db(&password)?;
+        order_wallet.load_all_utxo_details_from_db()?;
+        order_wallet.load_all_request_ids_from_db()?;
+        Ok(order_wallet)
     }
 
     /// Sync UTXO detail to database

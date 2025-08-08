@@ -131,6 +131,16 @@ impl DatabaseManager {
 
         Ok(accounts)
     }
+    pub fn get_max_account_index(&self, conn: &mut DbConnection) -> Result<u64, String> {
+        let max_index: Option<i64> = zk_accounts::table
+            .filter(zk_accounts::wallet_id.eq(&self.wallet_id))
+            .select(zk_accounts::account_index)
+            .order(zk_accounts::account_index.desc())
+            .first(conn)
+            .optional()
+            .map_err(|e| format!("Failed to get max account index: {}", e))?;
+        Ok(max_index.unwrap_or(0) as u64)
+    }
 
     // Wallet encryption operations
     pub fn save_encrypted_wallet(
