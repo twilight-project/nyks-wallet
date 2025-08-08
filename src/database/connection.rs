@@ -71,6 +71,59 @@ pub fn run_migrations(conn: &mut DbConnection) -> Result<(), String> {
         )
         .execute(conn)
         .map_err(|e| format!("Failed to create encrypted_wallets table: {}", e))?;
+
+        diesel::sql_query(
+            r#"
+            CREATE TABLE IF NOT EXISTS order_wallets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wallet_id TEXT UNIQUE NOT NULL,
+                chain_id TEXT NOT NULL,
+                seed_encrypted BLOB NOT NULL,
+                seed_salt BLOB NOT NULL,
+                seed_nonce BLOB NOT NULL,
+                relayer_api_endpoint TEXT NOT NULL,
+                zkos_server_endpoint TEXT NOT NULL,
+                relayer_program_json_path TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            "#,
+        )
+        .execute(conn)
+        .map_err(|e| format!("Failed to create order_wallets table: {}", e))?;
+
+        diesel::sql_query(
+            r#"
+            CREATE TABLE IF NOT EXISTS utxo_details (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wallet_id TEXT NOT NULL,
+                account_index INTEGER NOT NULL,
+                utxo_data TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(wallet_id, account_index)
+            );
+            "#,
+        )
+        .execute(conn)
+        .map_err(|e| format!("Failed to create utxo_details table: {}", e))?;
+
+        diesel::sql_query(
+            r#"
+            CREATE TABLE IF NOT EXISTS request_ids (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wallet_id TEXT NOT NULL,
+                account_index INTEGER NOT NULL,
+                request_id TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(wallet_id, account_index)
+            );
+            "#,
+        )
+        .execute(conn)
+        .map_err(|e| format!("Failed to create request_ids table: {}", e))?;
     }
 
     #[cfg(feature = "postgresql")]
@@ -112,6 +165,59 @@ pub fn run_migrations(conn: &mut DbConnection) -> Result<(), String> {
         )
         .execute(conn)
         .map_err(|e| format!("Failed to create encrypted_wallets table: {}", e))?;
+
+        diesel::sql_query(
+            r#"
+            CREATE TABLE IF NOT EXISTS order_wallets (
+                id SERIAL PRIMARY KEY,
+                wallet_id VARCHAR UNIQUE NOT NULL,
+                chain_id VARCHAR NOT NULL,
+                seed_encrypted BYTEA NOT NULL,
+                seed_salt BYTEA NOT NULL,
+                seed_nonce BYTEA NOT NULL,
+                relayer_api_endpoint VARCHAR NOT NULL,
+                zkos_server_endpoint VARCHAR NOT NULL,
+                relayer_program_json_path VARCHAR NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+            );
+            "#,
+        )
+        .execute(conn)
+        .map_err(|e| format!("Failed to create order_wallets table: {}", e))?;
+
+        diesel::sql_query(
+            r#"
+            CREATE TABLE IF NOT EXISTS utxo_details (
+                id SERIAL PRIMARY KEY,
+                wallet_id VARCHAR NOT NULL,
+                account_index BIGINT NOT NULL,
+                utxo_data TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE(wallet_id, account_index)
+            );
+            "#,
+        )
+        .execute(conn)
+        .map_err(|e| format!("Failed to create utxo_details table: {}", e))?;
+
+        diesel::sql_query(
+            r#"
+            CREATE TABLE IF NOT EXISTS request_ids (
+                id SERIAL PRIMARY KEY,
+                wallet_id VARCHAR NOT NULL,
+                account_index BIGINT NOT NULL,
+                request_id VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE(wallet_id, account_index)
+            );
+            "#,
+        )
+        .execute(conn)
+        .map_err(|e| format!("Failed to create request_ids table: {}", e))?;
     }
 
     Ok(())

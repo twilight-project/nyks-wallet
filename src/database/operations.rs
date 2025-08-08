@@ -1,8 +1,10 @@
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::database::{
     connection::DbConnection,
-    models::{DbZkAccount, EncryptedWallet, NewEncryptedWallet},
-    schema::{encrypted_wallets, zk_accounts},
+    models::{
+        DbOrderWallet, DbRequestId, DbUtxoDetail, DbZkAccount, EncryptedWallet, NewEncryptedWallet,
+    },
+    schema::{encrypted_wallets, order_wallets, request_ids, utxo_details, zk_accounts},
 };
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::security::SecurePassword;
@@ -188,6 +190,237 @@ impl DatabaseManager {
             }
             None => Ok(None),
         }
+    }
+
+    // OrderWallet operations
+    pub fn save_order_wallet(
+        &self,
+        conn: &mut DbConnection,
+        chain_id: &str,
+        seed: &str,
+        relayer_config: &crate::config::RelayerEndPointConfig,
+        password: &str,
+    ) -> Result<(), String> {
+        let new_order_wallet = DbOrderWallet::new_from_order_wallet(
+            self.wallet_id.clone(),
+            chain_id.to_string(),
+            seed,
+            relayer_config,
+            password,
+        )?;
+
+        diesel::insert_into(order_wallets::table)
+            .values(&new_order_wallet)
+            .on_conflict(order_wallets::wallet_id)
+            .do_update()
+            .set((
+                order_wallets::chain_id.eq(&new_order_wallet.chain_id),
+                order_wallets::seed_encrypted.eq(&new_order_wallet.seed_encrypted),
+                order_wallets::seed_salt.eq(&new_order_wallet.seed_salt),
+                order_wallets::seed_nonce.eq(&new_order_wallet.seed_nonce),
+                order_wallets::relayer_api_endpoint.eq(&new_order_wallet.relayer_api_endpoint),
+                order_wallets::zkos_server_endpoint.eq(&new_order_wallet.zkos_server_endpoint),
+                order_wallets::relayer_program_json_path
+                    .eq(&new_order_wallet.relayer_program_json_path),
+                order_wallets::updated_at.eq(new_order_wallet.updated_at),
+            ))
+            .execute(conn)
+            .map_err(|e| format!("Failed to save order wallet: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn load_order_wallet(
+        &self,
+        conn: &mut DbConnection,
+        password: &str,
+    ) -> Result<Option<(String, String, crate::config::RelayerEndPointConfig)>, String> {
+        let db_order_wallet: Option<DbOrderWallet> = order_wallets::table
+            .filter(order_wallets::wallet_id.eq(&self.wallet_id))
+            .filter(order_wallets::is_active.eq(true))
+            .first(conn)
+            .optional()
+            .map_err(|e| format!("Failed to load order wallet: {}", e))?;
+
+        match db_order_wallet {
+            Some(order_wallet) => {
+                let seed = order_wallet.decrypt_seed(password)?;
+                let relayer_config = order_wallet.to_relayer_config();
+                Ok(Some((order_wallet.chain_id, seed, relayer_config)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn deactivate_order_wallet(&self, conn: &mut DbConnection) -> Result<(), String> {
+        diesel::update(order_wallets::table.filter(order_wallets::wallet_id.eq(&self.wallet_id)))
+            .set((
+                order_wallets::is_active.eq(false),
+                order_wallets::updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(conn)
+            .map_err(|e| format!("Failed to deactivate order wallet: {}", e))?;
+
+        Ok(())
+    }
+
+    // UTXO Details operations
+    pub fn save_utxo_detail(
+        &self,
+        conn: &mut DbConnection,
+        account_index: u64,
+        utxo_detail: &twilight_client_sdk::relayer_rpcclient::method::UtxoDetailResponse,
+    ) -> Result<(), String> {
+        let new_utxo_detail =
+            DbUtxoDetail::from_utxo_detail(self.wallet_id.clone(), account_index, utxo_detail)?;
+
+        diesel::insert_into(utxo_details::table)
+            .values(&new_utxo_detail)
+            .on_conflict((utxo_details::wallet_id, utxo_details::account_index))
+            .do_update()
+            .set((
+                utxo_details::utxo_data.eq(&new_utxo_detail.utxo_data),
+                utxo_details::updated_at.eq(new_utxo_detail.updated_at),
+            ))
+            .execute(conn)
+            .map_err(|e| format!("Failed to save UTXO detail: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn load_utxo_detail(
+        &self,
+        conn: &mut DbConnection,
+        account_index: u64,
+    ) -> Result<Option<twilight_client_sdk::relayer_rpcclient::method::UtxoDetailResponse>, String>
+    {
+        let db_utxo_detail: Option<DbUtxoDetail> = utxo_details::table
+            .filter(utxo_details::wallet_id.eq(&self.wallet_id))
+            .filter(utxo_details::account_index.eq(account_index as i64))
+            .first(conn)
+            .optional()
+            .map_err(|e| format!("Failed to load UTXO detail: {}", e))?;
+
+        match db_utxo_detail {
+            Some(utxo_detail) => Ok(Some(utxo_detail.to_utxo_detail()?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn load_all_utxo_details(
+        &self,
+        conn: &mut DbConnection,
+    ) -> Result<
+        HashMap<u64, twilight_client_sdk::relayer_rpcclient::method::UtxoDetailResponse>,
+        String,
+    > {
+        let db_utxo_details: Vec<DbUtxoDetail> = utxo_details::table
+            .filter(utxo_details::wallet_id.eq(&self.wallet_id))
+            .load(conn)
+            .map_err(|e| format!("Failed to load UTXO details: {}", e))?;
+
+        let mut utxo_details_map = HashMap::new();
+        for db_utxo_detail in db_utxo_details {
+            let utxo_detail = db_utxo_detail.to_utxo_detail()?;
+            utxo_details_map.insert(db_utxo_detail.account_index as u64, utxo_detail);
+        }
+
+        Ok(utxo_details_map)
+    }
+
+    pub fn remove_utxo_detail(
+        &self,
+        conn: &mut DbConnection,
+        account_index: u64,
+    ) -> Result<(), String> {
+        diesel::delete(
+            utxo_details::table.filter(
+                utxo_details::wallet_id
+                    .eq(&self.wallet_id)
+                    .and(utxo_details::account_index.eq(account_index as i64)),
+            ),
+        )
+        .execute(conn)
+        .map_err(|e| format!("Failed to remove UTXO detail: {}", e))?;
+
+        Ok(())
+    }
+
+    // Request ID operations
+    pub fn save_request_id(
+        &self,
+        conn: &mut DbConnection,
+        account_index: u64,
+        request_id: &str,
+    ) -> Result<(), String> {
+        let new_request_id = DbRequestId::new(
+            self.wallet_id.clone(),
+            account_index,
+            request_id.to_string(),
+        );
+
+        diesel::insert_into(request_ids::table)
+            .values(&new_request_id)
+            .on_conflict((request_ids::wallet_id, request_ids::account_index))
+            .do_update()
+            .set((
+                request_ids::request_id.eq(&new_request_id.request_id),
+                request_ids::updated_at.eq(new_request_id.updated_at),
+            ))
+            .execute(conn)
+            .map_err(|e| format!("Failed to save request ID: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn load_request_id(
+        &self,
+        conn: &mut DbConnection,
+        account_index: u64,
+    ) -> Result<Option<String>, String> {
+        let db_request_id: Option<DbRequestId> = request_ids::table
+            .filter(request_ids::wallet_id.eq(&self.wallet_id))
+            .filter(request_ids::account_index.eq(account_index as i64))
+            .first(conn)
+            .optional()
+            .map_err(|e| format!("Failed to load request ID: {}", e))?;
+
+        Ok(db_request_id.map(|r| r.request_id))
+    }
+
+    pub fn load_all_request_ids(
+        &self,
+        conn: &mut DbConnection,
+    ) -> Result<HashMap<u64, String>, String> {
+        let db_request_ids: Vec<DbRequestId> = request_ids::table
+            .filter(request_ids::wallet_id.eq(&self.wallet_id))
+            .load(conn)
+            .map_err(|e| format!("Failed to load request IDs: {}", e))?;
+
+        let mut request_ids_map = HashMap::new();
+        for db_request_id in db_request_ids {
+            request_ids_map.insert(db_request_id.account_index as u64, db_request_id.request_id);
+        }
+
+        Ok(request_ids_map)
+    }
+
+    pub fn remove_request_id(
+        &self,
+        conn: &mut DbConnection,
+        account_index: u64,
+    ) -> Result<(), String> {
+        diesel::delete(
+            request_ids::table.filter(
+                request_ids::wallet_id
+                    .eq(&self.wallet_id)
+                    .and(request_ids::account_index.eq(account_index as i64)),
+            ),
+        )
+        .execute(conn)
+        .map_err(|e| format!("Failed to remove request ID: {}", e))?;
+
+        Ok(())
     }
 }
 

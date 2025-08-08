@@ -32,4 +32,52 @@ diesel::table! {
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-diesel::allow_tables_to_appear_in_same_query!(zk_accounts, encrypted_wallets,);
+diesel::table! {
+    order_wallets (id) {
+        id -> Nullable<Integer>,
+        wallet_id -> Text,
+        chain_id -> Text,
+        seed_encrypted -> Binary,
+        seed_salt -> Binary,
+        seed_nonce -> Binary,
+        relayer_api_endpoint -> Text,
+        zkos_server_endpoint -> Text,
+        relayer_program_json_path -> Text,
+        is_active -> Bool,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+diesel::table! {
+    utxo_details (id) {
+        id -> Nullable<Integer>,
+        wallet_id -> Text,
+        account_index -> BigInt,
+        utxo_data -> Text, // JSON serialized UtxoDetailResponse
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+diesel::table! {
+    request_ids (id) {
+        id -> Nullable<Integer>,
+        wallet_id -> Text,
+        account_index -> BigInt,
+        request_id -> Text,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+diesel::allow_tables_to_appear_in_same_query!(
+    zk_accounts,
+    encrypted_wallets,
+    order_wallets,
+    utxo_details,
+    request_ids,
+);
