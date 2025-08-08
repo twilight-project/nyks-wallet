@@ -14,7 +14,9 @@ path = "src/lib.rs"
 
 # Optional crate features
 [features]
-default = []
+default = ["sqlite"]
+sqlite = ["diesel/sqlite", "diesel_migrations"]
+postgresql = ["diesel/postgres", "diesel_migrations"]
 validator-wallet = []
 
 
@@ -60,6 +62,13 @@ jsonrpsee = { version = "0.25.1", features = [
     "http-client",
     "client",
 ] }
+diesel = { version = "2.1", features = ["chrono"], optional = true }
+diesel_migrations = { version = "2.1", optional = true }
+aes-gcm = "0.10"
+rand_core = "0.6"
+secrecy = "0.8"
+zeroize = "1.7"
+subtle = "2.5"
 # relayer-core = { version = "0.1.0", path = "../relayer-core" }
 [dependencies.twilight-client-sdk]
 git = "https://github.com/twilight-project/twilight-client-sdk.git"

@@ -16,9 +16,16 @@ use crate::{
         zkaccount::ZkAccountDB,
     },
 };
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+use crate::database::{DatabaseManager, establish_connection, run_migrations};
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+use crate::security::SecurePassword;
 use log::{debug, error};
 use relayer_module::utils::{TxResult, build_and_sign_msg_mint_burn_trading_btc, send_tx_to_chain};
-use serde::{Deserialize, Serialize};
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+use secrecy::SecretString;
+use serde::Serialize;
 use twilight_client_sdk::{
     quisquislib::RistrettoSecretKey,
     relayer::{query_lend_order_zkos, query_trader_order_zkos},
@@ -43,6 +50,12 @@ pub struct OrderWallet {
     #[serde(skip)]
     pub relayer_api_client: RelayerJsonRpcClient,
     pub relayer_endpoint_config: RelayerEndPointConfig,
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    #[serde(skip)]
+    db_manager: Option<DatabaseManager>,
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    #[serde(skip)]
+    wallet_password: Option<SecretString>,
 }
 
 impl OrderWallet {
@@ -67,11 +80,169 @@ impl OrderWallet {
             )
             .map_err(|e| e.to_string())?,
             relayer_endpoint_config: relayer_endpoint_config,
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            db_manager: None,
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            wallet_password: None,
         })
     }
     pub fn get_zk_account_seed(&self, index: AccountIndex) -> RistrettoSecretKey {
         let key_manager = KeyManager::from_cosmos_signature(self.seed.as_bytes());
         key_manager.derive_child_key(index)
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn enable_database_persistence(
+        &mut self,
+        wallet_password: Option<SecretString>,
+    ) -> Result<(), String> {
+        // Generate wallet ID from wallet address
+        let wallet_id = self.wallet.twilightaddress.clone();
+
+        // Initialize database connection and run migrations
+        let mut conn = establish_connection()?;
+        run_migrations(&mut conn)?;
+
+        // Create database manager
+        let db_manager = DatabaseManager::new(wallet_id);
+
+        // Save encrypted wallet if password is provided
+        if let Some(ref password) = wallet_password {
+            db_manager.save_encrypted_wallet(&mut conn, &self.wallet, password)?;
+        }
+
+        // Save existing zk accounts
+        for account in self.zk_accounts.get_all_accounts() {
+            db_manager.save_zk_account(&mut conn, account)?;
+        }
+
+        self.db_manager = Some(db_manager);
+        self.wallet_password = wallet_password;
+
+        Ok(())
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn load_from_database(
+        wallet_id: String,
+        password: Option<SecretString>,
+    ) -> Result<
+        (
+            Option<Wallet>,
+            HashMap<u64, crate::zkos_accounts::zkaccount::ZkAccount>,
+        ),
+        String,
+    > {
+        let mut conn = establish_connection()?;
+        run_migrations(&mut conn)?;
+
+        let db_manager = DatabaseManager::new(wallet_id);
+
+        // Load wallet if password is provided
+        let wallet = if let Some(ref pwd) = password {
+            db_manager.load_encrypted_wallet(&mut conn, pwd)?
+        } else {
+            None
+        };
+
+        // Load zk accounts
+        let zk_accounts = db_manager.load_all_zk_accounts(&mut conn)?;
+
+        Ok((wallet, zk_accounts))
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    fn sync_zk_account_to_db(
+        &self,
+        account: &crate::zkos_accounts::zkaccount::ZkAccount,
+    ) -> Result<(), String> {
+        if let Some(ref db_manager) = self.db_manager {
+            let mut conn = establish_connection()?;
+            db_manager.save_zk_account(&mut conn, account)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    fn update_zk_account_in_db(
+        &self,
+        account: &crate::zkos_accounts::zkaccount::ZkAccount,
+    ) -> Result<(), String> {
+        if let Some(ref db_manager) = self.db_manager {
+            let mut conn = establish_connection()?;
+            db_manager.update_zk_account(&mut conn, account)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn remove_zk_account_from_db(&self, account_index: u64) -> Result<(), String> {
+        if let Some(ref db_manager) = self.db_manager {
+            let mut conn = establish_connection()?;
+            db_manager.remove_zk_account(&mut conn, account_index)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn get_all_zk_accounts_from_db(
+        &self,
+    ) -> Result<HashMap<u64, crate::zkos_accounts::zkaccount::ZkAccount>, String> {
+        if let Some(ref db_manager) = self.db_manager {
+            let mut conn = establish_connection()?;
+            db_manager.load_all_zk_accounts(&mut conn)
+        } else {
+            Err("Database manager not initialized".to_string())
+        }
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    /// Enable database persistence with automatic password prompt
+    pub fn enable_database_persistence_with_prompt(&mut self) -> Result<(), String> {
+        let password = SecurePassword::get_passphrase()
+            .map_err(|e| format!("Failed to get password: {}", e))?;
+        self.enable_database_persistence(Some(password))
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    /// Create new wallet with database persistence and secure password
+    pub async fn create_new_with_database(
+        chain_id: &str,
+        relayer_endpoint_config: Option<RelayerEndPointConfig>,
+    ) -> Result<Self, String> {
+        // Create new wallet
+        let wallet = Wallet::create_new_with_random_btc_address()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let zk_accounts = ZkAccountDB::new();
+
+        // Create OrderWallet
+        let mut order_wallet = Self::new(wallet, zk_accounts, chain_id, relayer_endpoint_config)?;
+
+        // Get secure password and enable persistence
+        let password = SecurePassword::create_new_passphrase()
+            .map_err(|e| format!("Failed to create password: {}", e))?;
+
+        order_wallet.enable_database_persistence(Some(password))?;
+
+        Ok(order_wallet)
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    /// Load wallet from database with automatic password prompt
+    pub fn load_from_database_with_prompt(
+        wallet_id: String,
+    ) -> Result<
+        (
+            Option<Wallet>,
+            HashMap<u64, crate::zkos_accounts::zkaccount::ZkAccount>,
+        ),
+        String,
+    > {
+        let password = SecurePassword::get_passphrase()
+            .map_err(|e| format!("Failed to get password: {}", e))?;
+        Self::load_from_database(wallet_id, Some(password))
     }
 
     // Create a new zk_account and transfer sats from wallet to zk_account
@@ -86,6 +257,11 @@ impl OrderWallet {
             let account_index = self
                 .zk_accounts
                 .generate_new_account(amount, self.seed.clone())?;
+
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            if let Ok(account) = self.zk_accounts.get_account(&account_index) {
+                let _ = self.sync_zk_account_to_db(&account);
+            }
             self.wallet
                 .update_account_info()
                 .await
@@ -126,6 +302,11 @@ impl OrderWallet {
                     };
                 self.utxo_details.insert(account_index, utxo_detail);
                 self.zk_accounts.update_on_chain(&account_index, true)?;
+
+                #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+                if let Ok(account) = self.zk_accounts.get_account(&account_index) {
+                    let _ = self.update_zk_account_in_db(&account);
+                }
             }
             Ok((result, account_index))
         } else {
@@ -151,6 +332,11 @@ impl OrderWallet {
         let new_account_index = self
             .zk_accounts
             .generate_new_account(amount, self.seed.clone())?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(&new_account_index) {
+            let _ = self.sync_zk_account_to_db(&account);
+        }
         let receiver_input_string = self
             .zk_accounts
             .get_account(&new_account_index)?
@@ -203,6 +389,16 @@ impl OrderWallet {
         self.utxo_details.remove(&index);
         self.zk_accounts.update_on_chain(&new_account_index, true)?;
         self.zk_accounts.update_on_chain(&index, false)?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        {
+            if let Ok(account) = self.zk_accounts.get_account(&new_account_index) {
+                let _ = self.update_zk_account_in_db(&account);
+            }
+            if let Ok(account) = self.zk_accounts.get_account(&index) {
+                let _ = self.update_zk_account_in_db(&account);
+            }
+        }
 
         Ok(new_account_index)
     }
@@ -271,6 +467,12 @@ impl OrderWallet {
         }
 
         self.zk_accounts.update_io_type(&index, IOType::Memo)?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(&index) {
+            let _ = self.update_zk_account_in_db(&account);
+        }
+
         Ok(request_id)
     }
 
@@ -331,6 +533,11 @@ impl OrderWallet {
             trader_order.available_margin as u64
         );
         self.zk_accounts.update_io_type(&index, IOType::Coin)?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(&index) {
+            let _ = self.update_zk_account_in_db(&account);
+        }
         Ok(request_id)
     }
 
@@ -409,6 +616,12 @@ impl OrderWallet {
             };
         self.utxo_details.insert(index, utxo_detail);
         self.zk_accounts.update_io_type(&index, IOType::Memo)?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(&index) {
+            let _ = self.update_zk_account_in_db(&account);
+        }
+
         Ok(request_id)
     }
 
@@ -460,6 +673,12 @@ impl OrderWallet {
         self.zk_accounts.update_balance(&index, balance)?;
         debug!("lend_order balance: {:?}", balance);
         self.zk_accounts.update_io_type(&index, IOType::Coin)?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(&index) {
+            let _ = self.update_zk_account_in_db(&account);
+        }
+
         Ok(request_id)
     }
 
@@ -497,7 +716,45 @@ impl OrderWallet {
         }
 
         self.zk_accounts.update_io_type(&index, IOType::Coin)?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(&index) {
+            let _ = self.update_zk_account_in_db(&account);
+        }
+
         Ok(request_id)
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+impl Drop for OrderWallet {
+    fn drop(&mut self) {
+        if let Some(ref db_manager) = self.db_manager {
+            if let Ok(mut conn) = establish_connection() {
+                // Save all current zk accounts to database
+                for account in self.zk_accounts.get_all_accounts() {
+                    if let Err(e) = db_manager.save_zk_account(&mut conn, account) {
+                        error!(
+                            "Failed to persist zk_account {} during drop: {}",
+                            account.index, e
+                        );
+                    }
+                }
+
+                // Save encrypted wallet if password is available
+                if let Some(ref password) = self.wallet_password {
+                    if let Err(e) =
+                        db_manager.save_encrypted_wallet(&mut conn, &self.wallet, password)
+                    {
+                        error!("Failed to persist wallet during drop: {}", e);
+                    }
+                }
+
+                debug!("OrderWallet data persisted to database during drop");
+            } else {
+                error!("Failed to establish database connection during drop");
+            }
+        }
     }
 }
 

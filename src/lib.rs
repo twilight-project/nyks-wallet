@@ -35,3 +35,10 @@ pub mod validator_wallet;
 pub use validator_wallet::*;
 
 pub mod relayer_module;
+
+// Database module (optional, based on features)
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+pub mod database;
+
+// Security module for secure password and wallet management
+pub mod security;
