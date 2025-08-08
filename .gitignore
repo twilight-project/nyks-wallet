@@ -40,3 +40,4 @@ test3.json
 pre_boot.sh
 validator-self.mnemonic
 nyksd
+wallet_data.db

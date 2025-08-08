@@ -15,8 +15,8 @@ path = "src/lib.rs"
 # Optional crate features
 [features]
 default = ["sqlite"]
-sqlite = ["diesel/sqlite", "diesel_migrations"]
-postgresql = ["diesel/postgres", "diesel_migrations"]
+sqlite = ["diesel/sqlite", "diesel_migrations", "libsqlite3-sys/bundled"]
+postgresql = ["diesel/postgres", "diesel_migrations", "pq-sys"]
 validator-wallet = []
 
 
@@ -62,8 +62,13 @@ jsonrpsee = { version = "0.25.1", features = [
     "http-client",
     "client",
 ] }
+# Database dependencies (optional, feature-gated)
 diesel = { version = "2.1", features = ["chrono"], optional = true }
 diesel_migrations = { version = "2.1", optional = true }
+
+# Optional system dependencies (will be included based on features)
+libsqlite3-sys = { version = "0.27", optional = true }
+pq-sys = { version = "0.4", optional = true }
 aes-gcm = "0.10"
 rand_core = "0.6"
 secrecy = "0.8"

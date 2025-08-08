@@ -86,6 +86,7 @@ impl OrderWallet {
             wallet_password: None,
         })
     }
+
     pub fn get_zk_account_seed(&self, index: AccountIndex) -> RistrettoSecretKey {
         let key_manager = KeyManager::from_cosmos_signature(self.seed.as_bytes());
         key_manager.derive_child_key(index)
@@ -199,9 +200,31 @@ impl OrderWallet {
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     /// Enable database persistence with automatic password prompt
     pub fn enable_database_persistence_with_prompt(&mut self) -> Result<(), String> {
-        let password = SecurePassword::get_passphrase()
+        let wallet_password = SecurePassword::get_passphrase()
             .map_err(|e| format!("Failed to get password: {}", e))?;
-        self.enable_database_persistence(Some(password))
+
+        // Generate wallet ID from wallet address
+        let wallet_id = self.wallet.twilightaddress.clone();
+
+        // Initialize database connection and run migrations
+        let mut conn = establish_connection()?;
+        run_migrations(&mut conn)?;
+
+        // Create database manager
+        let db_manager = DatabaseManager::new(wallet_id);
+
+        // Save encrypted wallet if password is provided
+
+        db_manager.save_encrypted_wallet(&mut conn, &self.wallet, &wallet_password)?;
+
+        // Save existing zk accounts
+        for account in self.zk_accounts.get_all_accounts() {
+            db_manager.save_zk_account(&mut conn, account)?;
+        }
+
+        self.db_manager = Some(db_manager);
+        self.wallet_password = Some(wallet_password);
+        Ok(())
     }
 
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -805,6 +828,7 @@ mod tests {
         let zk_accounts = ZkAccountDB::new();
 
         let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks", None)?;
+        order_wallet.enable_database_persistence_with_prompt()?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
