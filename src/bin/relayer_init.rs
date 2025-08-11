@@ -12,6 +12,7 @@ use nyks_wallet::{
     *,
 };
 
+use secrecy::ExposeSecret;
 use tokio::time::{Duration, sleep};
 use twilight_client_sdk::{
     script,
@@ -59,7 +60,7 @@ fn setup_zk_accounts(
 
     // Create new zk account
     let index = zk_accounts
-        .generate_new_account(wallet.balance_sats, seed_signature.clone())
+        .generate_new_account(wallet.balance_sats, &seed_signature)
         .map_err(|e| format!("Failed to generate new zk account: {}", e))?;
     info!("    New zk account generated with index: {}", index);
     // Persist DB
@@ -68,7 +69,7 @@ fn setup_zk_accounts(
         .export_to_json("ZkAccounts.json")
         .map_err(|e| format!("Failed to export to json: {}", e))?;
 
-    Ok((zk_accounts, index, seed_signature))
+    Ok((zk_accounts, index, seed_signature.expose_secret().clone()))
 }
 
 /// Constructs a `MsgMintBurnTradingBtc` for the given wallet/zk account, then signs it and

@@ -11,6 +11,7 @@ mod tests {
     use crate::zkos_accounts::encrypted_account::DERIVATION_MESSAGE;
     use cosmrs::crypto::secp256k1::SigningKey;
     use log::warn;
+    use secrecy::SecretString;
     use serial_test::serial;
 
     use std::sync::Once;
@@ -130,8 +131,18 @@ mod tests {
     async fn test_wallet_from_private_key() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
         init_logger();
+        let random_key = SigningKey::random();
+        let pubkey_bytes = random_key.public_key().to_bytes();
+        let btc_address = format!(
+            "bc1q{}",
+            hex::encode(&pubkey_bytes[..19])
+                .chars()
+                .take(38)
+                .collect::<String>()
+        );
         let wallet = Wallet::from_private_key(
             "e64e7928d4f6c06f01fefd31f760c51f59a16426e792761cd00529b76501c8a0",
+            &btc_address,
             None,
         )?;
         println!("wallet: {:?}", wallet);
@@ -209,7 +220,7 @@ mod tests {
         );
 
         // Send RPC request
-        let response = match tokio::task::spawn_blocking(move || tx_send.send(wallet.chain_config.rpc_endpoint))
+        let response = match tokio::task::spawn_blocking(move || tx_send.send(wallet.chain_config.rpc_endpoint.clone()))
             .await // wait for the blocking task to finish
             {
                 Ok(response) => response,
@@ -289,7 +300,9 @@ mod tests {
                 ZkAccountDB::new()
             }
         };
-        let index = db.generate_new_account(balance, seed_str).unwrap();
+        let index = db
+            .generate_new_account(balance, &SecretString::new(seed_str))
+            .unwrap();
         println!("{}", index);
         println!("{}", db.get_all_accounts_as_json());
         match db.export_to_json("ZkAccounts.json") {
@@ -310,6 +323,15 @@ mod tests {
         let balance =
             check_balance(&wallet.twilightaddress, &wallet.chain_config.lcd_endpoint).await?;
         println!("balance: {:?}", balance);
+        println!("wallet: {:?}", wallet);
+        Ok(())
+    }
+    #[tokio::test]
+    #[serial]
+    async fn test_wallet_from_mnemonic_new() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let wallet = Wallet::new(None)?;
         println!("wallet: {:?}", wallet);
         Ok(())
     }

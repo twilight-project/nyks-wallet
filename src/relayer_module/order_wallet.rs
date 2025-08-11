@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    config::RelayerEndPointConfig,
+    config::{EndpointConfig, RelayerEndPointConfig},
     relayer_module::{
         self, fetch_tx_hash_with_retry, fetch_utxo_details_with_retry,
         relayer_api::RelayerJsonRpcClient,
@@ -37,6 +37,7 @@ use twilight_client_sdk::{
     transfer::create_private_transfer_tx_single,
     zkvm::IOType,
 };
+
 pub type AccountIndex = u64;
 pub type RequestId = String;
 #[derive(Debug, Clone, Serialize)]
@@ -44,7 +45,8 @@ pub struct OrderWallet {
     pub wallet: Wallet,
     pub zk_accounts: ZkAccountDB,
     pub chain_id: String,
-    seed: String,
+    #[serde(skip)]
+    seed: SecretString,
     pub utxo_details: HashMap<AccountIndex, UtxoDetailResponse>,
     pub request_ids: HashMap<AccountIndex, RequestId>,
     #[serde(skip)]
@@ -59,7 +61,64 @@ pub struct OrderWallet {
 }
 
 impl OrderWallet {
-    pub fn new(
+    pub fn new(endpoint_config: Option<EndpointConfig>) -> Result<Self, String> {
+        let endpoint_config = endpoint_config.unwrap_or(EndpointConfig::default());
+        let relayer_endpoint_config = endpoint_config.to_relayer_endpoint_config();
+        let wallet_endpoint_config = endpoint_config.to_wallet_endpoint_config();
+        let wallet = Wallet::new(Some(wallet_endpoint_config)).map_err(|e| e.to_string())?;
+        let zk_accounts = ZkAccountDB::new();
+        let utxo_details = HashMap::new();
+        let request_ids = HashMap::new();
+        let relayer_api_client =
+            RelayerJsonRpcClient::new(&relayer_endpoint_config.relayer_api_endpoint)
+                .map_err(|e| e.to_string())?;
+        let seed = wallet.get_zk_account_seed(&endpoint_config.chain_id, DERIVATION_MESSAGE)?;
+
+        let order_wallet = Self {
+            wallet,
+            zk_accounts,
+            chain_id: endpoint_config.chain_id,
+            seed,
+            utxo_details,
+            request_ids,
+            relayer_api_client,
+            relayer_endpoint_config,
+            db_manager: None,
+            wallet_password: None,
+        };
+        Ok(order_wallet)
+    }
+
+    pub fn import_from_mnemonic(
+        mnemonic: &str,
+        endpoint_config: Option<EndpointConfig>,
+    ) -> Result<Self, String> {
+        let endpoint_config = endpoint_config.unwrap_or(EndpointConfig::default());
+        let relayer_endpoint_config = endpoint_config.to_relayer_endpoint_config();
+        let wallet_endpoint_config = endpoint_config.to_wallet_endpoint_config();
+        let wallet = Wallet::from_mnemonic(mnemonic, Some(wallet_endpoint_config))
+            .map_err(|e| e.to_string())?;
+        let zk_accounts = ZkAccountDB::new();
+        let utxo_details = HashMap::new();
+        let request_ids = HashMap::new();
+        let relayer_api_client =
+            RelayerJsonRpcClient::new(&relayer_endpoint_config.relayer_api_endpoint)
+                .map_err(|e| e.to_string())?;
+        let seed = wallet.get_zk_account_seed(&endpoint_config.chain_id, DERIVATION_MESSAGE)?;
+        Ok(Self {
+            wallet,
+            zk_accounts,
+            chain_id: endpoint_config.chain_id,
+            seed,
+            utxo_details,
+            request_ids,
+            relayer_api_client,
+            relayer_endpoint_config,
+            db_manager: None,
+            wallet_password: None,
+        })
+    }
+    pub fn new_old(
         wallet: Wallet,
         zk_accounts: ZkAccountDB,
         chain_id: &str,
@@ -86,9 +145,20 @@ impl OrderWallet {
             wallet_password: None,
         })
     }
+    // deafault feature is sqlite, if postgresql is enabled, then use postgresql
+    // mnnomenic will be securely printed for the first time and then deleted from memory and will not be stored in the database or any other storage
+    pub fn with_db(&mut self) -> Result<Self, String> {
+        // look for env var NYKS_WALLET_PASSPHRASE for password, if not found then prompt for password
+        let password = SecurePassword::get_passphrase_with_prompt(
+            "Could not find passphrase from environment, \nplease enter wallet encryption password: ",
+        )
+        .map_err(|e| e.to_string())?;
+        self.enable_database_persistence(Some(password))?;
+        Ok(self.clone())
+    }
 
-    pub fn get_zk_account_seed(&self, index: AccountIndex) -> RistrettoSecretKey {
-        let key_manager = KeyManager::from_cosmos_signature(self.seed.as_bytes());
+    pub fn get_zk_account_child_seed(&self, index: AccountIndex) -> RistrettoSecretKey {
+        let key_manager = KeyManager::from_cosmos_signature(self.seed.expose_secret().as_bytes());
         key_manager.derive_child_key(index)
     }
 
@@ -101,9 +171,7 @@ impl OrderWallet {
             .await
             .map_err(|e| e.to_string())?;
         if wallet_balance.nyks > 0 && wallet_balance.sats >= amount {
-            let account_index = self
-                .zk_accounts
-                .generate_new_account(amount, self.seed.clone())?;
+            let account_index = self.zk_accounts.generate_new_account(amount, &self.seed)?;
 
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             if let Ok(account) = self.zk_accounts.get_account(&account_index) {
@@ -183,9 +251,7 @@ impl OrderWallet {
         }
         let sender_account_address = sender_account.account.clone();
         let amount = sender_account.balance;
-        let new_account_index = self
-            .zk_accounts
-            .generate_new_account(amount, self.seed.clone())?;
+        let new_account_index = self.zk_accounts.generate_new_account(amount, &self.seed)?;
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         if let Ok(account) = self.zk_accounts.get_account(&new_account_index) {
@@ -208,7 +274,7 @@ impl OrderWallet {
             };
         let input = utxo_detail.get_input()?;
         let tx_wallet = create_private_transfer_tx_single(
-            self.get_zk_account_seed(index),
+            self.get_zk_account_child_seed(index),
             input,
             receiver_input_string,
             amount,
@@ -288,7 +354,7 @@ impl OrderWallet {
                     return Err(e);
                 }
             };
-        let secret_key = self.get_zk_account_seed(index);
+        let secret_key = self.get_zk_account_child_seed(index);
         let r_scalar = self.zk_accounts.get_account(&index)?.get_scalar()?;
 
         let initial_margin = self.zk_accounts.get_account(&index)?.balance;
@@ -361,7 +427,7 @@ impl OrderWallet {
         execution_price: f64,
     ) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_seed(index);
+        let secret_key = self.get_zk_account_child_seed(index);
         let tx_hash = fetch_tx_hash_with_retry(
             &self.request_ids.get(&index).unwrap().clone(),
             20,
@@ -428,7 +494,7 @@ impl OrderWallet {
 
     pub async fn query_trader_order(&mut self, index: AccountIndex) -> Result<TraderOrder, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_seed(index);
+        let secret_key = self.get_zk_account_child_seed(index);
         // let request_id = self.request_ids.get(&index).unwrap();
         let query_order = query_trader_order_zkos(
             account_address.clone(),
@@ -448,7 +514,7 @@ impl OrderWallet {
 
     pub async fn query_lend_order(&mut self, index: AccountIndex) -> Result<LendOrder, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_seed(index);
+        let secret_key = self.get_zk_account_child_seed(index);
         let query_order = query_lend_order_zkos(
             account_address.clone(),
             &secret_key,
@@ -477,7 +543,7 @@ impl OrderWallet {
                     return Err(e);
                 }
             };
-        let secret_key = self.get_zk_account_seed(index);
+        let secret_key = self.get_zk_account_child_seed(index);
         let scalar_hex: String = self.zk_accounts.get_account(&index)?.scalar.clone();
         let amount = self.zk_accounts.get_account(&index)?.balance;
 
@@ -526,7 +592,7 @@ impl OrderWallet {
 
     pub async fn close_lend_order(&mut self, index: AccountIndex) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_seed(index);
+        let secret_key = self.get_zk_account_child_seed(index);
         let tx_hash = fetch_tx_hash_with_retry(
             &self.request_ids.get(&index).unwrap().clone(),
             20,
@@ -590,7 +656,7 @@ impl OrderWallet {
 
     pub async fn cancel_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_seed(index);
+        let secret_key = self.get_zk_account_child_seed(index);
         let tx_hash = fetch_tx_hash_with_retry(
             &self.request_ids.get(&index).unwrap().clone(),
             20,
@@ -781,7 +847,8 @@ impl OrderWallet {
         let zk_accounts = ZkAccountDB::new();
 
         // Create OrderWallet
-        let mut order_wallet = Self::new(wallet, zk_accounts, chain_id, relayer_endpoint_config)?;
+        let mut order_wallet =
+            Self::new_old(wallet, zk_accounts, chain_id, relayer_endpoint_config)?;
 
         // Get secure password and enable persistence
         let password = SecurePassword::create_new_passphrase()
@@ -820,7 +887,7 @@ impl OrderWallet {
                 db_manager.save_order_wallet(
                     &mut conn,
                     &self.chain_id,
-                    &self.seed,
+                    &self.seed.expose_secret().as_str(),
                     &self.relayer_endpoint_config,
                     password.expose_secret(),
                 )?;
@@ -841,11 +908,13 @@ impl OrderWallet {
             let mut conn = establish_connection()
                 .map_err(|e| format!("Failed to connect to database: {}", e))?;
 
-            if let Some((chain_id, seed, relayer_config)) =
+            if let Some((chain_id, _seed, relayer_config)) =
                 db_manager.load_order_wallet(&mut conn, password.expose_secret())?
             {
+                self.seed = self
+                    .wallet
+                    .get_zk_account_seed(&chain_id, DERIVATION_MESSAGE)?;
                 self.chain_id = chain_id;
-                self.seed = seed;
                 self.relayer_endpoint_config = relayer_config;
 
                 // Update relayer client
@@ -878,7 +947,7 @@ impl OrderWallet {
         };
         let relayer_endpoint_config = RelayerEndPointConfig::default();
         let chain_id = wallet.chain_config.chain_id.clone();
-        let mut order_wallet = OrderWallet::new(
+        let mut order_wallet = OrderWallet::new_old(
             wallet,
             zk_accounts_db,
             &chain_id,
@@ -1000,7 +1069,7 @@ impl Drop for OrderWallet {
                     if let Err(e) = db_manager.save_order_wallet(
                         &mut conn,
                         &self.chain_id,
-                        &self.seed,
+                        &self.seed.expose_secret().clone(),
                         &self.relayer_endpoint_config,
                         password.expose_secret(),
                     ) {
@@ -1089,7 +1158,7 @@ mod tests {
         let wallet = setup_wallet().await.unwrap();
         let zk_accounts = ZkAccountDB::new();
 
-        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks", None)?;
+        let mut order_wallet = OrderWallet::new_old(wallet, zk_accounts, "nyks", None)?;
         order_wallet.enable_database_persistence_with_prompt()?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
@@ -1151,7 +1220,7 @@ mod tests {
         init_logger();
         let wallet = setup_wallet().await.unwrap();
         let zk_accounts = ZkAccountDB::new();
-        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks", None)?;
+        let mut order_wallet = OrderWallet::new_old(wallet, zk_accounts, "nyks", None)?;
         let (tx_result, sender_account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
@@ -1191,7 +1260,7 @@ mod tests {
         init_logger();
         let wallet = setup_wallet().await.unwrap();
         let zk_accounts = ZkAccountDB::new();
-        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks", None)?;
+        let mut order_wallet = OrderWallet::new_old(wallet, zk_accounts, "nyks", None)?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
@@ -1229,7 +1298,7 @@ mod tests {
         let wallet = setup_wallet().await.unwrap();
         let zk_accounts = ZkAccountDB::new();
 
-        let mut order_wallet = OrderWallet::new(wallet, zk_accounts, "nyks", None)?;
+        let mut order_wallet = OrderWallet::new_old(wallet, zk_accounts, "nyks", None)?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));

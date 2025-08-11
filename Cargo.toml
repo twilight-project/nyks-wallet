@@ -74,6 +74,8 @@ rand_core = "0.6"
 secrecy = "0.8"
 zeroize = "1.7"
 subtle = "2.5"
+keyring = "3.0"
+thiserror = "2.0.12"
 # relayer-core = { version = "0.1.0", path = "../relayer-core" }
 [dependencies.twilight-client-sdk]
 git = "https://github.com/twilight-project/twilight-client-sdk.git"

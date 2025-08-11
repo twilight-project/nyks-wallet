@@ -1,4 +1,5 @@
 use crate::config::WalletEndPointConfig;
+use crate::security::print_secret_to_tty;
 // use crate::nyks_rpc::rpcclient::txrequest::NYKS_LCD_BASE_URL;
 use crate::{faucet::*, generate_seed};
 use anyhow::anyhow;
@@ -10,10 +11,12 @@ use log::{debug, error, info};
 use reqwest::Client;
 use ripemd::Ripemd160;
 use rpassword::prompt_password;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::time::{Duration, sleep};
+use zeroize::ZeroizeOnDrop;
 pub const BECH_PREFIX: &str = "twilight";
 pub type NYKS = u64;
 pub type SATS = u64;
@@ -301,7 +304,7 @@ pub async fn create_and_export_randmon_wallet_account(name: &str) -> anyhow::Res
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ZeroizeOnDrop)]
 pub struct Wallet {
     pub private_key: Vec<u8>,
     pub public_key: Vec<u8>,
@@ -311,10 +314,49 @@ pub struct Wallet {
     pub sequence: u64,
     pub btc_address: String,
     pub btc_address_registered: bool,
+    #[zeroize(skip)]
     pub account_info: Option<Account>,
+    #[zeroize(skip)]
     pub chain_config: WalletEndPointConfig,
 }
 impl Wallet {
+    pub fn new(chain_config: Option<WalletEndPointConfig>) -> anyhow::Result<Self> {
+        let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
+        let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
+        let seed = mnemonic.to_seed("");
+        let path: DerivationPath = "m/44'/118'/0'/0/0"
+            .parse()
+            .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
+
+        let xprv = XPrv::derive_from_path(&seed, &path)
+            .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
+
+        let private_key_bytes = xprv.private_key().to_bytes();
+
+        let signing_key = SigningKey::from_slice(&private_key_bytes)
+            .map_err(|e| anyhow!("Invalid private key: {}", e))?;
+        let public_key = signing_key.public_key();
+        let account_id = public_key
+            .account_id(BECH_PREFIX)
+            .map_err(|e| anyhow!("Address generation failed: {}", e))?;
+        let (_wif, btc_address) =
+            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
+        // save_mnemonic(&account_id.to_string(), mnemonic.to_string())?;
+        print_secret_to_tty(&mut mnemonic.to_string())?;
+        Ok(Wallet {
+            private_key: private_key_bytes.to_vec(),
+            public_key: public_key.to_bytes().to_vec(),
+            twilightaddress: account_id.to_string(),
+            balance_nyks: 0,
+            balance_sats: 0,
+            sequence: 0,
+            btc_address,
+            btc_address_registered: false,
+            account_info: None,
+            chain_config,
+        })
+    }
+
     pub async fn create_new_with_random_btc_address() -> anyhow::Result<Wallet> {
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
         let seed = mnemonic.to_seed("");
@@ -399,15 +441,8 @@ impl Wallet {
         let account_id = public_key
             .account_id(BECH_PREFIX)
             .map_err(|e| anyhow!("Address generation failed: {}", e))?;
-        let random_key = SigningKey::random();
-        let pubkey_bytes = random_key.public_key().to_bytes();
-        let btc_address = format!(
-            "bc1q{}",
-            hex::encode(&pubkey_bytes[..19])
-                .chars()
-                .take(38)
-                .collect::<String>()
-        );
+        let (_wif, btc_address) =
+            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
         Ok(Wallet {
             private_key: private_key_bytes.to_vec(),
             public_key: public_key.to_bytes().to_vec(),
@@ -424,6 +459,7 @@ impl Wallet {
 
     pub fn from_private_key(
         private_key: &str,
+        btc_address: &str,
         chain_config: Option<WalletEndPointConfig>,
     ) -> anyhow::Result<Wallet> {
         let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
@@ -433,15 +469,7 @@ impl Wallet {
         let account_id = public_key
             .account_id(BECH_PREFIX)
             .map_err(|e| anyhow!("Address generation failed: {}", e))?;
-        let random_key = SigningKey::random();
-        let pubkey_bytes = random_key.public_key().to_bytes();
-        let btc_address = format!(
-            "bc1q{}",
-            hex::encode(&pubkey_bytes[..19])
-                .chars()
-                .take(38)
-                .collect::<String>()
-        );
+
         Ok(Wallet {
             private_key: private_key.to_vec(),
             public_key: public_key.to_bytes().to_vec(),
@@ -449,7 +477,7 @@ impl Wallet {
             balance_nyks: 0,
             balance_sats: 0,
             sequence: 0,
-            btc_address,
+            btc_address: btc_address.to_string(),
             btc_address_registered: false,
             account_info: None,
             chain_config,
@@ -580,16 +608,17 @@ impl Wallet {
         &self,
         chain_id: &str,
         derivation_message: &str,
-    ) -> Result<String, String> {
-        let seed = generate_seed(
-            &self.private_key,
-            &self.twilightaddress,
-            derivation_message,
-            chain_id,
-        )
-        .map_err(|e| format!("Failed to generate seed: {}", e))?
-        .get_signature();
-        Ok(seed)
+    ) -> Result<SecretString, String> {
+        Ok(SecretString::new(
+            generate_seed(
+                &self.private_key,
+                &self.twilightaddress,
+                derivation_message,
+                chain_id,
+            )
+            .map_err(|e| format!("Failed to generate seed: {}", e))?
+            .get_signature(),
+        ))
     }
 }
 // #[cfg(feature = "testnet")]

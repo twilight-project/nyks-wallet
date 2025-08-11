@@ -2,6 +2,7 @@ use super::encrypted_account::{EncryptedAccount, KeyManager};
 use address::Network;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use twilight_client_sdk::{
@@ -41,8 +42,8 @@ impl ZkAccount {
         }
     }
 
-    pub fn from_seed(index: u64, seed: String, balance: u64) -> Self {
-        let key_manager = KeyManager::from_cosmos_signature(seed.as_bytes());
+    pub fn from_seed(index: u64, seed: &SecretString, balance: u64) -> Self {
+        let key_manager = KeyManager::from_cosmos_signature(seed.expose_secret().as_bytes());
 
         let secret_key = key_manager.derive_child_key(index);
         let pk_in = RistrettoPublicKey::from_secret_key(&secret_key, &mut OsRng);
@@ -105,7 +106,11 @@ impl ZkAccountDB {
         self.index += 1;
         result
     }
-    pub fn generate_new_account(&mut self, balance: u64, seed: String) -> Result<u64, String> {
+    pub fn generate_new_account(
+        &mut self,
+        balance: u64,
+        seed: &SecretString,
+    ) -> Result<u64, String> {
         let zk_account = ZkAccount::from_seed(self.index, seed, balance);
         self.add_account(zk_account);
         Ok(self.index - 1)
