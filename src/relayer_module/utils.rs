@@ -14,6 +14,11 @@ use tokio::time::{Duration, sleep};
 use twilight_client_sdk::{
     relayer_rpcclient::method::UtxoDetailResponse, relayer_types::TxHash, zkvm::IOType,
 };
+// Retry configuration constants
+const DEFAULT_UTXO_ATTEMPTS: u32 = 20;
+// const LONG_UTXO_ATTEMPTS: u32 = 60;
+const TXHASH_ATTEMPTS: u32 = 20;
+const RETRY_DELAY_MS: u64 = 1000;
 /// Constructs a `MsgMintBurnTradingBtc` for the given wallet/zk account, then signs it and
 /// returns the base64-encoded transaction ready for broadcast.
 pub fn build_and_sign_msg_mint_burn_trading_btc(
@@ -95,8 +100,7 @@ pub async fn send_tx_to_chain(signed_tx: String, rpc_endpoint: &str) -> Result<T
 /// Repeatedly queries the chain for UTXO details until success or `max_attempts` reached.
 pub async fn fetch_utxo_details_with_retry(
     account_id: String,
-    max_attempts: u32,
-    delay_ms: u64,
+
     io_type: IOType,
 ) -> Result<UtxoDetailResponse, String> {
     let mut attempts = 0;
@@ -114,37 +118,36 @@ pub async fn fetch_utxo_details_with_retry(
                 }
                 Err(err) => {
                     attempts += 1;
-                    if attempts >= max_attempts {
+                    if attempts >= DEFAULT_UTXO_ATTEMPTS {
                         error!(
                             "Failed to get utxo details after {} attempts: {}",
-                            max_attempts, err
+                            DEFAULT_UTXO_ATTEMPTS, err
                         );
                         return Err(format!(
                             "Failed to get utxo details after {} attempts: {}",
-                            max_attempts, err
+                            DEFAULT_UTXO_ATTEMPTS, err
                         ));
                     }
                 }
             },
             Err(e) => {
                 attempts += 1;
-                if attempts >= max_attempts {
+                if attempts >= DEFAULT_UTXO_ATTEMPTS {
                     error!(
                         "Failed to spawn blocking task after {} attempts: {}",
-                        max_attempts, e
+                        DEFAULT_UTXO_ATTEMPTS, e
                     );
                     return Err(format!("Failed to spawn blocking task: {}", e));
                 }
             }
         }
-        sleep(Duration::from_millis(delay_ms)).await;
+        sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
     }
 }
 
 pub async fn fetch_tx_hash_with_retry(
     request_id: &str,
-    max_attempts: u32,
-    delay_ms: u64,
+
     relayer_api_client: &RelayerJsonRpcClient,
 ) -> Result<TxHash, String> {
     let mut attempts = 0;
@@ -158,13 +161,13 @@ pub async fn fetch_tx_hash_with_retry(
             .map_err(|e| e.to_string())?;
         if response.len() == 0 {
             attempts += 1;
-            if attempts >= max_attempts {
+            if attempts >= TXHASH_ATTEMPTS {
                 return Err(format!(
                     "Failed to get tx hash after {} attempts",
-                    max_attempts
+                    TXHASH_ATTEMPTS
                 ));
             }
-            sleep(Duration::from_millis(delay_ms)).await;
+            sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
         } else {
             return Ok(response[0].clone());
         }

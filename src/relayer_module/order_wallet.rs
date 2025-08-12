@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     config::{EndpointConfig, RelayerEndPointConfig},
+    error::{Result as WalletResult, WalletError},
     relayer_module::{
         self, fetch_tx_hash_with_retry, fetch_utxo_details_with_retry,
         relayer_api::RelayerJsonRpcClient,
@@ -18,7 +19,7 @@ use crate::{
 };
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use crate::database::{DatabaseManager, establish_connection, run_migrations};
+use crate::database::{DatabaseManager, WalletList, connection::run_migrations_once};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::security::SecurePassword;
 use log::{debug, error};
@@ -61,32 +62,45 @@ pub struct OrderWallet {
 }
 
 impl OrderWallet {
-    pub fn new(endpoint_config: Option<EndpointConfig>) -> Result<Self, String> {
-        let endpoint_config = endpoint_config.unwrap_or(EndpointConfig::default());
+    // -------------------------
+    // Constructors
+    // -------------------------
+    fn init(
+        wallet: Wallet,
+        zk_accounts: ZkAccountDB,
+        endpoint_config: EndpointConfig,
+    ) -> WalletResult<Self> {
         let relayer_endpoint_config = endpoint_config.to_relayer_endpoint_config();
-        let wallet_endpoint_config = endpoint_config.to_wallet_endpoint_config();
-        let wallet = Wallet::new(Some(wallet_endpoint_config)).map_err(|e| e.to_string())?;
-        let zk_accounts = ZkAccountDB::new();
-        let utxo_details = HashMap::new();
-        let request_ids = HashMap::new();
         let relayer_api_client =
             RelayerJsonRpcClient::new(&relayer_endpoint_config.relayer_api_endpoint)
-                .map_err(|e| e.to_string())?;
-        let seed = wallet.get_zk_account_seed(&endpoint_config.chain_id, DERIVATION_MESSAGE)?;
+                .map_err(|e| WalletError::RelayerClient(e.to_string()))?;
+        let seed = wallet
+            .get_zk_account_seed(&endpoint_config.chain_id, DERIVATION_MESSAGE)
+            .map_err(|e| WalletError::ZkAccountSeedNotFound(e.to_string()))?;
 
-        let order_wallet = Self {
+        Ok(Self {
             wallet,
             zk_accounts,
             chain_id: endpoint_config.chain_id,
-            seed,
-            utxo_details,
-            request_ids,
+            seed: seed,
+            utxo_details: HashMap::new(),
+            request_ids: HashMap::new(),
             relayer_api_client,
             relayer_endpoint_config,
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             db_manager: None,
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             wallet_password: None,
-        };
-        Ok(order_wallet)
+        })
+    }
+
+    pub fn new(endpoint_config: Option<EndpointConfig>) -> WalletResult<Self> {
+        let endpoint_config = endpoint_config.unwrap_or(EndpointConfig::default());
+        let wallet_endpoint_config = endpoint_config.to_wallet_endpoint_config();
+        let wallet = Wallet::new(Some(wallet_endpoint_config))
+            .map_err(|e| WalletError::WalletCreation(e.to_string()))?;
+        let zk_accounts = ZkAccountDB::new();
+        Self::init(wallet, zk_accounts, endpoint_config)
     }
 
     pub fn import_from_mnemonic(
@@ -118,35 +132,10 @@ impl OrderWallet {
             wallet_password: None,
         })
     }
-    pub fn new_old(
-        wallet: Wallet,
-        zk_accounts: ZkAccountDB,
-        chain_id: &str,
-        relayer_endpoint_config: Option<RelayerEndPointConfig>,
-    ) -> Result<Self, String> {
-        let relayer_endpoint_config =
-            relayer_endpoint_config.unwrap_or(RelayerEndPointConfig::default());
-        let seed = wallet.get_zk_account_seed(chain_id, DERIVATION_MESSAGE)?;
-        Ok(Self {
-            wallet,
-            zk_accounts,
-            chain_id: chain_id.to_string(),
-            seed,
-            utxo_details: HashMap::new(),
-            request_ids: HashMap::new(),
-            relayer_api_client: RelayerJsonRpcClient::new(
-                &relayer_endpoint_config.relayer_api_endpoint,
-            )
-            .map_err(|e| e.to_string())?,
-            relayer_endpoint_config: relayer_endpoint_config,
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            db_manager: None,
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            wallet_password: None,
-        })
-    }
+
     // deafault feature is sqlite, if postgresql is enabled, then use postgresql
-    // mnnomenic will be securely printed for the first time and then deleted from memory and will not be stored in the database or any other storage
+    // mnemonic will be securely printed for the first time and then deleted from memory and will not be stored in the database or any other storage
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn with_db(&mut self) -> Result<Self, String> {
         // look for env var NYKS_WALLET_PASSPHRASE for password, if not found then prompt for password
         let password = SecurePassword::get_passphrase_with_prompt(
@@ -157,9 +146,77 @@ impl OrderWallet {
         Ok(self.clone())
     }
 
-    pub fn get_zk_account_child_seed(&self, index: AccountIndex) -> RistrettoSecretKey {
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn load_from_db(
+        wallet_id: String,
+        password: Option<SecretString>,
+        db_url: Option<String>,
+    ) -> Result<OrderWallet, String> {
+        let pool = crate::database::connection::init_pool(db_url)?;
+        run_migrations_once(&pool)?;
+
+        let db_manager = DatabaseManager::new(wallet_id, pool);
+        let secure_password;
+        let wallet = match password {
+            Some(pwd) => {
+                secure_password = pwd.clone();
+                db_manager.load_encrypted_wallet(&pwd)?
+            }
+            None => {
+                let pwd = SecurePassword::get_passphrase_with_prompt(
+                    "Could not find passphrase from environment, \nplease enter wallet encryption password: ",
+                )
+                .map_err(|e| format!("Failed to get password: {}", e))?;
+                secure_password = pwd.clone();
+                db_manager.load_encrypted_wallet(&pwd)?
+            }
+        };
+
+        // Load zk accounts
+        let zk_accounts = db_manager.load_all_zk_accounts()?;
+        let max_account_index = db_manager.get_max_account_index()?;
+        let zk_accounts_db = ZkAccountDB {
+            accounts: zk_accounts,
+            index: max_account_index,
+        };
+
+        let mut order_wallet = OrderWallet::init(wallet, zk_accounts_db, EndpointConfig::default())
+            .map_err(|e| e.to_string())?;
+        order_wallet.wallet_password = Some(secure_password);
+        order_wallet.db_manager = Some(db_manager);
+        order_wallet.load_all_utxo_details_from_db()?;
+        order_wallet.load_all_request_ids_from_db()?;
+
+        Ok(order_wallet)
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn get_wallet_list_from_db() -> Result<Vec<WalletList>, String> {
+        let pool = crate::database::connection::init_pool(None)?;
+        run_migrations_once(&pool)?;
+        let wallet_list = DatabaseManager::get_wallet_list(&pool)?;
+        Ok(wallet_list)
+    }
+    pub fn get_secret_key(&self, index: AccountIndex) -> RistrettoSecretKey {
         let key_manager = KeyManager::from_cosmos_signature(self.seed.expose_secret().as_bytes());
         key_manager.derive_child_key(index)
+    }
+    pub fn request_id(&self, index: AccountIndex) -> Result<&str, String> {
+        self.request_ids
+            .get(&index)
+            .map(|s| s.as_str())
+            .ok_or(format!("Request ID not found for account index: {}", index))
+    }
+
+    pub fn ensure_coin_onchain(&self, index: AccountIndex) -> Result<(), String> {
+        let a = self
+            .zk_accounts
+            .get_account(&index)
+            .map_err(|e| e.to_string())?;
+        if !a.on_chain || a.io_type != IOType::Coin || a.balance == 0 {
+            return Err(format!("Account is not on chain or not a coin account"));
+        }
+        Ok(())
     }
 
     // Create a new zk_account and transfer sats from wallet to zk_account
@@ -200,21 +257,14 @@ impl OrderWallet {
                 amount,
             )?;
             let result =
-                send_tx_to_chain(signed_tx.clone(), &self.wallet.chain_config.rpc_endpoint).await?;
+                send_tx_to_chain(signed_tx, &self.wallet.chain_config.rpc_endpoint).await?;
             if result.code != 0 {
                 return Err(format!("Failed to send tx to chain: {}", result.tx_hash));
             } else {
                 let account_address = self.zk_accounts.get_account_address(&account_index)?;
                 let utxo_detail =
-                    match fetch_utxo_details_with_retry(account_address, 20, 1000, IOType::Coin)
-                        .await
-                    {
-                        Ok(utxo_detail) => utxo_detail,
-                        Err(e) => {
-                            error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
-                            return Err(e);
-                        }
-                    };
+                    fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
+
                 self.utxo_details.insert(account_index, utxo_detail.clone());
 
                 // Sync to database
@@ -241,14 +291,8 @@ impl OrderWallet {
         &mut self,
         index: AccountIndex,
     ) -> Result<AccountIndex, String> {
+        self.ensure_coin_onchain(index)?;
         let sender_account = self.zk_accounts.get_account(&index)?;
-        if sender_account.on_chain == false
-            || sender_account.io_type != IOType::Coin
-            || sender_account.balance == 0
-        {
-            error!("Account is not on chain or not a coin account");
-            return Err(format!("Account is not on chain or not a coin account"));
-        }
         let sender_account_address = sender_account.account.clone();
         let amount = sender_account.balance;
         let new_account_index = self.zk_accounts.generate_new_account(amount, &self.seed)?;
@@ -263,18 +307,10 @@ impl OrderWallet {
             .get_input_string()?;
 
         let utxo_detail =
-            match fetch_utxo_details_with_retry(sender_account_address, 20, 1000, IOType::Coin)
-                .await
-            {
-                Ok(utxo_detail) => utxo_detail,
-                Err(e) => {
-                    error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
-                    return Err(e);
-                }
-            };
+            fetch_utxo_details_with_retry(sender_account_address, IOType::Coin).await?;
         let input = utxo_detail.get_input()?;
         let tx_wallet = create_private_transfer_tx_single(
-            self.get_zk_account_child_seed(index),
+            self.get_secret_key(index),
             input,
             receiver_input_string,
             amount,
@@ -290,20 +326,11 @@ impl OrderWallet {
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
         debug!("response: {:?}", response);
-        let utxo_detail = match fetch_utxo_details_with_retry(
+        let utxo_detail = fetch_utxo_details_with_retry(
             self.zk_accounts.get_account_address(&new_account_index)?,
-            20,
-            1000,
             IOType::Coin,
         )
-        .await
-        {
-            Ok(utxo_detail) => utxo_detail,
-            Err(e) => {
-                error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
-                return Err(e);
-            }
-        };
+        .await?;
 
         self.utxo_details
             .insert(new_account_index, utxo_detail.clone());
@@ -343,23 +370,27 @@ impl OrderWallet {
         entry_price: u64,
         leverage: u64,
     ) -> Result<String, String> {
+        self.ensure_coin_onchain(index)?;
+        if leverage == 0 || leverage > 50 {
+            return Err("Leverage must be greater than 0 and less than 50".to_string());
+        }
+        if entry_price == 0 {
+            return Err("Entry price must be greater than 0".to_string());
+        }
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let _utxo_detail =
-            match fetch_utxo_details_with_retry(account_address.clone(), 60, 1000, IOType::Coin)
-                .await
-            {
-                Ok(utxo_detail) => utxo_detail,
-                Err(e) => {
-                    error!("Failed to fetch utxo details after {} attempts: {}", 60, e);
-                    return Err(e);
-                }
-            };
-        let secret_key = self.get_zk_account_child_seed(index);
+            fetch_utxo_details_with_retry(account_address.clone(), IOType::Coin).await?;
+
+        let secret_key = self.get_secret_key(index);
         let r_scalar = self.zk_accounts.get_account(&index)?.get_scalar()?;
 
         let initial_margin = self.zk_accounts.get_account(&index)?.balance;
-        let position_value = initial_margin * leverage;
-        let position_size = position_value * entry_price;
+        let position_value = initial_margin
+            .checked_mul(leverage)
+            .ok_or_else(|| "position_value overflow".to_string())?;
+        let position_size = position_value
+            .checked_mul(entry_price)
+            .ok_or_else(|| "position_size overflow".to_string())?;
         let request_id = create_trader_order(
             secret_key,
             r_scalar,
@@ -384,23 +415,10 @@ impl OrderWallet {
             error!("Failed to sync request ID to database: {}", e);
         }
 
-        let utxo_detail;
         if order_type == OrderType::LIMIT {
         } else {
-            utxo_detail = match fetch_utxo_details_with_retry(
-                account_address,
-                20,
-                1000,
-                IOType::Memo,
-            )
-            .await
-            {
-                Ok(utxo_detail) => utxo_detail,
-                Err(e) => {
-                    error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
-                    return Err(e);
-                }
-            };
+            let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Memo).await?;
+
             self.utxo_details.insert(index, utxo_detail.clone());
 
             // Sync to database
@@ -427,14 +445,9 @@ impl OrderWallet {
         execution_price: f64,
     ) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_child_seed(index);
-        let tx_hash = fetch_tx_hash_with_retry(
-            &self.request_ids.get(&index).unwrap().clone(),
-            20,
-            1000,
-            &self.relayer_api_client,
-        )
-        .await?;
+        let secret_key = self.get_secret_key(index);
+        let request_id = self.request_id(index)?;
+        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
         if tx_hash.order_status != OrderStatus::FILLED {
             return Err(format!(
                 "Order is not filled, status: {}",
@@ -452,22 +465,14 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-        let tx_hash =
-            fetch_tx_hash_with_retry(&request_id, 20, 1000, &self.relayer_api_client).await?;
+        let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
         if tx_hash.order_status != OrderStatus::SETTLED {
             return Err(format!(
                 "Order is not settled, status: {}",
                 tx_hash.order_status.to_str()
             ));
         }
-        let utxo_detail =
-            match fetch_utxo_details_with_retry(account_address, 20, 1000, IOType::Coin).await {
-                Ok(utxo_detail) => utxo_detail,
-                Err(e) => {
-                    error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
-                    return Err(e);
-                }
-            };
+        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
         self.utxo_details.insert(index, utxo_detail.clone());
 
         // Sync to database
@@ -494,8 +499,7 @@ impl OrderWallet {
 
     pub async fn query_trader_order(&mut self, index: AccountIndex) -> Result<TraderOrder, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_child_seed(index);
-        // let request_id = self.request_ids.get(&index).unwrap();
+        let secret_key = self.get_secret_key(index);
         let query_order = query_trader_order_zkos(
             account_address.clone(),
             &secret_key,
@@ -514,7 +518,7 @@ impl OrderWallet {
 
     pub async fn query_lend_order(&mut self, index: AccountIndex) -> Result<LendOrder, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_child_seed(index);
+        let secret_key = self.get_secret_key(index);
         let query_order = query_lend_order_zkos(
             account_address.clone(),
             &secret_key,
@@ -532,18 +536,12 @@ impl OrderWallet {
     }
 
     pub async fn open_lend_order(&mut self, index: AccountIndex) -> Result<String, String> {
+        self.ensure_coin_onchain(index)?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let _utxo_detail =
-            match fetch_utxo_details_with_retry(account_address.clone(), 60, 1000, IOType::Coin)
-                .await
-            {
-                Ok(utxo_detail) => utxo_detail,
-                Err(e) => {
-                    error!("Failed to fetch utxo details after {} attempts: {}", 60, e);
-                    return Err(e);
-                }
-            };
-        let secret_key = self.get_zk_account_child_seed(index);
+            fetch_utxo_details_with_retry(account_address.clone(), IOType::Coin).await?;
+
+        let secret_key = self.get_secret_key(index);
         let scalar_hex: String = self.zk_accounts.get_account(&index)?.scalar.clone();
         let amount = self.zk_accounts.get_account(&index)?.balance;
 
@@ -564,14 +562,8 @@ impl OrderWallet {
             error!("Failed to sync request ID to database: {}", e);
         }
 
-        let utxo_detail =
-            match fetch_utxo_details_with_retry(account_address, 20, 1000, IOType::Memo).await {
-                Ok(utxo_detail) => utxo_detail,
-                Err(e) => {
-                    error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
-                    return Err(e);
-                }
-            };
+        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Memo).await?;
+
         self.utxo_details.insert(index, utxo_detail.clone());
 
         // Sync to database
@@ -592,14 +584,9 @@ impl OrderWallet {
 
     pub async fn close_lend_order(&mut self, index: AccountIndex) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_child_seed(index);
-        let tx_hash = fetch_tx_hash_with_retry(
-            &self.request_ids.get(&index).unwrap().clone(),
-            20,
-            1000,
-            &self.relayer_api_client,
-        )
-        .await?;
+        let secret_key = self.get_secret_key(index);
+        let request_id = self.request_id(index)?;
+        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
         if tx_hash.order_status != OrderStatus::FILLED {
             return Err(format!(
                 "Order is not filled, status: {}",
@@ -616,22 +603,14 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-        let tx_hash =
-            fetch_tx_hash_with_retry(&request_id, 20, 1000, &self.relayer_api_client).await?;
+        let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
         if tx_hash.order_status != OrderStatus::SETTLED {
             return Err(format!(
                 "Order is not settled, status: {}",
                 tx_hash.order_status.to_str()
             ));
         }
-        let utxo_detail =
-            match fetch_utxo_details_with_retry(account_address, 20, 1000, IOType::Coin).await {
-                Ok(utxo_detail) => utxo_detail,
-                Err(e) => {
-                    error!("Failed to fetch utxo details after {} attempts: {}", 10, e);
-                    return Err(e);
-                }
-            };
+        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
         self.utxo_details.insert(index, utxo_detail.clone());
 
         // Sync to database
@@ -656,14 +635,9 @@ impl OrderWallet {
 
     pub async fn cancel_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_zk_account_child_seed(index);
-        let tx_hash = fetch_tx_hash_with_retry(
-            &self.request_ids.get(&index).unwrap().clone(),
-            20,
-            1000,
-            &self.relayer_api_client,
-        )
-        .await?;
+        let secret_key = self.get_secret_key(index);
+        let request_id = self.request_id(index)?;
+        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
         if tx_hash.order_status != OrderStatus::PENDING {
             return Err(format!(
                 "Order is not pending, status: {}",
@@ -678,8 +652,7 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-        let tx_hash =
-            fetch_tx_hash_with_retry(&request_id, 20, 1000, &self.relayer_api_client).await?;
+        let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
         if tx_hash.order_status != OrderStatus::CANCELLED {
             return Err(format!(
                 "Order is not cancelled, status: {}",
@@ -698,74 +671,12 @@ impl OrderWallet {
     }
 
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    pub fn enable_database_persistence(
-        &mut self,
-        wallet_password: Option<SecretString>,
-    ) -> Result<(), String> {
-        // Generate wallet ID from wallet address
-        let wallet_id = self.wallet.twilightaddress.clone();
-
-        // Initialize database connection and run migrations
-        let mut conn = establish_connection()?;
-        run_migrations(&mut conn)?;
-
-        // Create database manager
-        let db_manager = DatabaseManager::new(wallet_id);
-
-        // Save encrypted wallet if password is provided
-        if let Some(ref password) = wallet_password {
-            db_manager.save_encrypted_wallet(&mut conn, &self.wallet, password)?;
-        }
-
-        // Save existing zk accounts
-        for account in self.zk_accounts.get_all_accounts() {
-            db_manager.save_zk_account(&mut conn, account)?;
-        }
-
-        self.db_manager = Some(db_manager);
-        self.wallet_password = wallet_password;
-
-        Ok(())
-    }
-
-    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    pub fn load_from_database(
-        wallet_id: String,
-        password: Option<SecretString>,
-    ) -> Result<
-        (
-            Option<Wallet>,
-            HashMap<u64, crate::zkos_accounts::zkaccount::ZkAccount>,
-            u64,
-        ),
-        String,
-    > {
-        let mut conn = establish_connection()?;
-        run_migrations(&mut conn)?;
-
-        let db_manager = DatabaseManager::new(wallet_id);
-
-        // Load wallet if password is provided
-        let wallet = if let Some(ref pwd) = password {
-            db_manager.load_encrypted_wallet(&mut conn, pwd)?
-        } else {
-            None
-        };
-
-        // Load zk accounts
-        let zk_accounts = db_manager.load_all_zk_accounts(&mut conn)?;
-        let max_account_index = db_manager.get_max_account_index(&mut conn)?;
-        Ok((wallet, zk_accounts, max_account_index))
-    }
-
-    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     fn sync_zk_account_to_db(
         &self,
         account: &crate::zkos_accounts::zkaccount::ZkAccount,
     ) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()?;
-            db_manager.save_zk_account(&mut conn, account)?;
+            db_manager.save_zk_account(account)?;
         }
         Ok(())
     }
@@ -776,8 +687,7 @@ impl OrderWallet {
         account: &crate::zkos_accounts::zkaccount::ZkAccount,
     ) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()?;
-            db_manager.update_zk_account(&mut conn, account)?;
+            db_manager.update_zk_account(account)?;
         }
         Ok(())
     }
@@ -785,8 +695,7 @@ impl OrderWallet {
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn remove_zk_account_from_db(&self, account_index: u64) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()?;
-            db_manager.remove_zk_account(&mut conn, account_index)?;
+            db_manager.remove_zk_account(account_index)?;
         }
         Ok(())
     }
@@ -796,8 +705,7 @@ impl OrderWallet {
         &self,
     ) -> Result<HashMap<u64, crate::zkos_accounts::zkaccount::ZkAccount>, String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()?;
-            db_manager.load_all_zk_accounts(&mut conn)
+            db_manager.load_all_zk_accounts()
         } else {
             Err("Database manager not initialized".to_string())
         }
@@ -805,27 +713,35 @@ impl OrderWallet {
 
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     /// Enable database persistence with automatic password prompt
-    pub fn enable_database_persistence_with_prompt(&mut self) -> Result<(), String> {
-        let wallet_password = SecurePassword::get_passphrase()
-            .map_err(|e| format!("Failed to get password: {}", e))?;
+    pub fn enable_database_persistence(
+        &mut self,
+        wallet_password: Option<SecretString>,
+    ) -> Result<(), String> {
+        let wallet_password = match wallet_password {
+            Some(password) => password,
+            None => SecurePassword::get_passphrase_with_prompt(
+                "Could not find passphrase from environment, \nplease enter wallet encryption password: ",
+            )
+            .map_err(|e| format!("Failed to get password: {}", e))?,
+        };
 
         // Generate wallet ID from wallet address
         let wallet_id = self.wallet.twilightaddress.clone();
 
         // Initialize database connection and run migrations
-        let mut conn = establish_connection()?;
-        run_migrations(&mut conn)?;
+        let pool = crate::database::connection::init_pool(None)?;
+        run_migrations_once(&pool)?;
 
         // Create database manager
-        let db_manager = DatabaseManager::new(wallet_id);
+        let db_manager = DatabaseManager::new(wallet_id, pool);
 
         // Save encrypted wallet if password is provided
 
-        db_manager.save_encrypted_wallet(&mut conn, &self.wallet, &wallet_password)?;
+        db_manager.save_encrypted_wallet(&self.wallet, &wallet_password)?;
 
         // Save existing zk accounts
         for account in self.zk_accounts.get_all_accounts() {
-            db_manager.save_zk_account(&mut conn, account)?;
+            db_manager.save_zk_account(account)?;
         }
 
         self.db_manager = Some(db_manager);
@@ -833,61 +749,14 @@ impl OrderWallet {
         Ok(())
     }
 
-    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    /// Create new wallet with database persistence and secure password
-    pub async fn create_new_with_database(
-        chain_id: &str,
-        relayer_endpoint_config: Option<RelayerEndPointConfig>,
-    ) -> Result<Self, String> {
-        // Create new wallet
-        let wallet = Wallet::create_new_with_random_btc_address()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let zk_accounts = ZkAccountDB::new();
-
-        // Create OrderWallet
-        let mut order_wallet =
-            Self::new_old(wallet, zk_accounts, chain_id, relayer_endpoint_config)?;
-
-        // Get secure password and enable persistence
-        let password = SecurePassword::create_new_passphrase()
-            .map_err(|e| format!("Failed to create password: {}", e))?;
-
-        order_wallet.enable_database_persistence(Some(password))?;
-
-        Ok(order_wallet)
-    }
-
-    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    /// Load wallet from database with automatic password prompt
-    pub fn load_from_database_with_prompt(
-        wallet_id: String,
-    ) -> Result<
-        (
-            Option<Wallet>,
-            HashMap<u64, crate::zkos_accounts::zkaccount::ZkAccount>,
-            AccountIndex,
-        ),
-        String,
-    > {
-        let password = SecurePassword::get_passphrase()
-            .map_err(|e| format!("Failed to get password: {}", e))?;
-        Self::load_from_database(wallet_id, Some(password))
-    }
-
     /// Save the OrderWallet configuration to database
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn save_order_wallet_to_db(&self) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
             if let Some(ref password) = self.wallet_password {
-                let mut conn = establish_connection()
-                    .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
                 db_manager.save_order_wallet(
-                    &mut conn,
                     &self.chain_id,
-                    &self.seed.expose_secret().as_str(),
+                    self.seed.expose_secret(),
                     &self.relayer_endpoint_config,
                     password.expose_secret(),
                 )?;
@@ -901,64 +770,6 @@ impl OrderWallet {
         }
     }
 
-    /// Load OrderWallet configuration from database
-    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    pub fn load_order_wallet_from_db(&mut self, password: &SecretString) -> Result<bool, String> {
-        if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()
-                .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-            if let Some((chain_id, _seed, relayer_config)) =
-                db_manager.load_order_wallet(&mut conn, password.expose_secret())?
-            {
-                self.seed = self
-                    .wallet
-                    .get_zk_account_seed(&chain_id, DERIVATION_MESSAGE)?;
-                self.chain_id = chain_id;
-                self.relayer_endpoint_config = relayer_config;
-
-                // Update relayer client
-                self.relayer_api_client =
-                    RelayerJsonRpcClient::new(&self.relayer_endpoint_config.relayer_api_endpoint)
-                        .map_err(|e| format!("Failed to create relayer API client: {}", e))?;
-
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Load OrderWallet configuration from database with password
-    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    pub fn load_order_wallet(wallet_id: String) -> Result<Self, String> {
-        let password = SecurePassword::get_passphrase_with_prompt(
-            "Could not find passphrase from environment, \nplease enter wallet encryption password: ",
-        )
-        .map_err(|e| format!("Failed to get password: {}", e))?;
-        let (option_wallet, zk_accounts, zk_db_index) =
-            Self::load_from_database(wallet_id, Some(password.clone()))?;
-        let wallet = option_wallet.ok_or("Wallet not found")?;
-        let zk_accounts_db = ZkAccountDB {
-            accounts: zk_accounts,
-            index: zk_db_index,
-        };
-        let relayer_endpoint_config = RelayerEndPointConfig::default();
-        let chain_id = wallet.chain_config.chain_id.clone();
-        let mut order_wallet = OrderWallet::new_old(
-            wallet,
-            zk_accounts_db,
-            &chain_id,
-            Some(relayer_endpoint_config),
-        )?;
-        order_wallet.load_order_wallet_from_db(&password)?;
-        order_wallet.load_all_utxo_details_from_db()?;
-        order_wallet.load_all_request_ids_from_db()?;
-        Ok(order_wallet)
-    }
-
     /// Sync UTXO detail to database
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn sync_utxo_detail_to_db(
@@ -967,10 +778,7 @@ impl OrderWallet {
         utxo_detail: &UtxoDetailResponse,
     ) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()
-                .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-            db_manager.save_utxo_detail(&mut conn, account_index, utxo_detail)?;
+            db_manager.save_utxo_detail(account_index, utxo_detail)?;
         }
         Ok(())
     }
@@ -983,10 +791,7 @@ impl OrderWallet {
         request_id: &str,
     ) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()
-                .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-            db_manager.save_request_id(&mut conn, account_index, request_id)?;
+            db_manager.save_request_id(account_index, request_id)?;
         }
         Ok(())
     }
@@ -995,10 +800,7 @@ impl OrderWallet {
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn load_all_utxo_details_from_db(&mut self) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()
-                .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-            let utxo_details = db_manager.load_all_utxo_details(&mut conn)?;
+            let utxo_details = db_manager.load_all_utxo_details()?;
             self.utxo_details = utxo_details;
         }
         Ok(())
@@ -1008,10 +810,7 @@ impl OrderWallet {
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn load_all_request_ids_from_db(&mut self) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()
-                .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-            let request_ids = db_manager.load_all_request_ids(&mut conn)?;
+            let request_ids = db_manager.load_all_request_ids()?;
             self.request_ids = request_ids;
         }
         Ok(())
@@ -1021,10 +820,7 @@ impl OrderWallet {
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn remove_utxo_detail_from_db(&self, account_index: u64) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()
-                .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-            db_manager.remove_utxo_detail(&mut conn, account_index)?;
+            db_manager.remove_utxo_detail(account_index)?;
         }
         Ok(())
     }
@@ -1033,10 +829,7 @@ impl OrderWallet {
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn remove_request_id_from_db(&self, account_index: u64) -> Result<(), String> {
         if let Some(ref db_manager) = self.db_manager {
-            let mut conn = establish_connection()
-                .map_err(|e| format!("Failed to connect to database: {}", e))?;
-
-            db_manager.remove_request_id(&mut conn, account_index)?;
+            db_manager.remove_request_id(account_index)?;
         }
         Ok(())
     }
@@ -1046,68 +839,57 @@ impl OrderWallet {
 impl Drop for OrderWallet {
     fn drop(&mut self) {
         if let Some(ref db_manager) = self.db_manager {
-            if let Ok(mut conn) = establish_connection() {
-                // Save all current zk accounts to database
-                for account in self.zk_accounts.get_all_accounts() {
-                    if let Err(e) = db_manager.save_zk_account(&mut conn, account) {
-                        error!(
-                            "Failed to persist zk_account {} during drop: {}",
-                            account.index, e
-                        );
-                    }
+            // Save all current zk accounts to database
+            for account in self.zk_accounts.get_all_accounts() {
+                if let Err(e) = db_manager.save_zk_account(account) {
+                    error!(
+                        "Failed to persist zk_account {} during drop: {}",
+                        account.index, e
+                    );
                 }
-
-                // Save encrypted wallet if password is available
-                if let Some(ref password) = self.wallet_password {
-                    if let Err(e) =
-                        db_manager.save_encrypted_wallet(&mut conn, &self.wallet, password)
-                    {
-                        error!("Failed to persist wallet during drop: {}", e);
-                    }
-
-                    // Save OrderWallet configuration
-                    if let Err(e) = db_manager.save_order_wallet(
-                        &mut conn,
-                        &self.chain_id,
-                        &self.seed.expose_secret().clone(),
-                        &self.relayer_endpoint_config,
-                        password.expose_secret(),
-                    ) {
-                        error!(
-                            "Failed to persist OrderWallet configuration during drop: {}",
-                            e
-                        );
-                    }
-                }
-
-                // Save all UTXO details
-                for (account_index, utxo_detail) in &self.utxo_details {
-                    if let Err(e) =
-                        db_manager.save_utxo_detail(&mut conn, *account_index, utxo_detail)
-                    {
-                        error!(
-                            "Failed to persist UTXO detail for account {} during drop: {}",
-                            account_index, e
-                        );
-                    }
-                }
-
-                // Save all request IDs
-                for (account_index, request_id) in &self.request_ids {
-                    if let Err(e) =
-                        db_manager.save_request_id(&mut conn, *account_index, request_id)
-                    {
-                        error!(
-                            "Failed to persist request ID for account {} during drop: {}",
-                            account_index, e
-                        );
-                    }
-                }
-
-                debug!("OrderWallet data persisted to database during drop");
-            } else {
-                error!("Failed to establish database connection during drop");
             }
+
+            // Save encrypted wallet if password is available
+            if let Some(ref password) = self.wallet_password {
+                if let Err(e) = db_manager.save_encrypted_wallet(&self.wallet, password) {
+                    error!("Failed to persist wallet during drop: {}", e);
+                }
+
+                // Save OrderWallet configuration
+                if let Err(e) = db_manager.save_order_wallet(
+                    &self.chain_id,
+                    self.seed.expose_secret(),
+                    &self.relayer_endpoint_config,
+                    password.expose_secret(),
+                ) {
+                    error!(
+                        "Failed to persist OrderWallet configuration during drop: {}",
+                        e
+                    );
+                }
+            }
+
+            // Save all UTXO details
+            for (account_index, utxo_detail) in &self.utxo_details {
+                if let Err(e) = db_manager.save_utxo_detail(*account_index, utxo_detail) {
+                    error!(
+                        "Failed to persist UTXO detail for account {} during drop: {}",
+                        account_index, e
+                    );
+                }
+            }
+
+            // Save all request IDs
+            for (account_index, request_id) in &self.request_ids {
+                if let Err(e) = db_manager.save_request_id(*account_index, request_id) {
+                    error!(
+                        "Failed to persist request ID for account {} during drop: {}",
+                        account_index, e
+                    );
+                }
+            }
+
+            debug!("OrderWallet data persisted to database during drop");
         }
     }
 }
@@ -1133,9 +915,7 @@ mod tests {
     }
     async fn setup_wallet() -> Result<Wallet, String> {
         info!("Creating new wallet with random BTC address");
-        let mut wallet = Wallet::create_new_with_random_btc_address()
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut wallet = Wallet::new(None).map_err(|e| e.to_string())?;
         // info!("importing wallet from json");
         // let mut wallet = Wallet::import_from_json("test.json").map_err(|e| e.to_string())?;
 
@@ -1150,16 +930,25 @@ mod tests {
 
         Ok(wallet)
     }
+    // cargo test --no-default-features --features postgresql --lib -- relayer_module::order_wallet::tests::test_create_order --exact --show-output
+    // cargo test --no-default-features --features sqlite --lib -- relayer_module::order_wallet::tests::test_create_order --exact --show-output
+    // cargo test --all-features --lib -- relayer_module::order_wallet::tests::test_create_order --exact --show-output
+    // #[cfg(feature = "sqlite")]
     #[tokio::test]
     #[serial]
     async fn test_create_order() -> Result<(), String> {
         dotenv::dotenv().ok();
+        unsafe {
+            // std::env::set_var("DATABASE_URL", "./test.db");
+            std::env::set_var("NYKS_WALLET_PASSPHRASE", "test1_password");
+        }
         init_logger();
-        let wallet = setup_wallet().await.unwrap();
+        let wallet = setup_wallet().await.map_err(|e| e.to_string())?;
         let zk_accounts = ZkAccountDB::new();
 
-        let mut order_wallet = OrderWallet::new_old(wallet, zk_accounts, "nyks", None)?;
-        order_wallet.enable_database_persistence_with_prompt()?;
+        let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
+            .map_err(|e| e.to_string())?;
+        order_wallet.with_db()?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
@@ -1182,8 +971,7 @@ mod tests {
             )
             .await?;
         info!("result: {:?}", result);
-        let tx_hash =
-            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
         info!("tx_hash: {:?}", tx_hash);
         assert_eq!(tx_hash.order_status, OrderStatus::FILLED);
         let response = order_wallet.query_trader_order(account_index).await?;
@@ -1201,8 +989,7 @@ mod tests {
             .close_trader_order(account_index, OrderType::MARKET, 0.0)
             .await?;
 
-        let tx_hash =
-            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::SETTLED);
         let response = order_wallet.query_trader_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::SETTLED);
@@ -1218,9 +1005,10 @@ mod tests {
     async fn test_trading_to_trading() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
-        let wallet = setup_wallet().await.unwrap();
+        let wallet = setup_wallet().await.map_err(|e| e.to_string())?;
         let zk_accounts = ZkAccountDB::new();
-        let mut order_wallet = OrderWallet::new_old(wallet, zk_accounts, "nyks", None)?;
+        let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
+            .map_err(|e| e.to_string())?;
         let (tx_result, sender_account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
@@ -1258,16 +1046,16 @@ mod tests {
     async fn test_open_lend_order() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
-        let wallet = setup_wallet().await.unwrap();
+        let wallet = setup_wallet().await.map_err(|e| e.to_string())?;
         let zk_accounts = ZkAccountDB::new();
-        let mut order_wallet = OrderWallet::new_old(wallet, zk_accounts, "nyks", None)?;
+        let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
+            .map_err(|e| e.to_string())?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
         }
         let result = order_wallet.open_lend_order(account_index).await?;
-        let tx_hash =
-            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::FILLED);
         let response = order_wallet.query_lend_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::FILLED);
@@ -1279,8 +1067,7 @@ mod tests {
             IOType::Memo
         );
         let result = order_wallet.close_lend_order(account_index).await?;
-        let tx_hash =
-            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::SETTLED);
         let response = order_wallet.query_lend_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::SETTLED);
@@ -1295,10 +1082,11 @@ mod tests {
     async fn test_create_order_with_cancel() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
-        let wallet = setup_wallet().await.unwrap();
+        let wallet = setup_wallet().await.map_err(|e| e.to_string())?;
         let zk_accounts = ZkAccountDB::new();
 
-        let mut order_wallet = OrderWallet::new_old(wallet, zk_accounts, "nyks", None)?;
+        let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
+            .map_err(|e| e.to_string())?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
@@ -1320,8 +1108,7 @@ mod tests {
                 10,
             )
             .await?;
-        let tx_hash =
-            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::PENDING);
         let response = order_wallet.query_trader_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::PENDING);
@@ -1335,8 +1122,7 @@ mod tests {
 
         let result = order_wallet.cancel_trader_order(account_index).await?;
 
-        let tx_hash =
-            fetch_tx_hash_with_retry(&result, 20, 1000, &order_wallet.relayer_api_client).await?;
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
         assert_eq!(tx_hash.order_status, OrderStatus::CANCELLED);
         let response = order_wallet.query_trader_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::CANCELLED);

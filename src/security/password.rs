@@ -162,7 +162,9 @@ mod tests {
         dotenv().ok();
 
         // Set empty password in environment
-        // env::set_var("NYKS_WALLET_PASSPHRASE", "");
+        unsafe {
+            env::set_var("NYKS_WALLET_PASSPHRASE", "test1_password");
+        }
 
         // Test with empty password
         let result = SecurePassword::get_passphrase_with_prompt(

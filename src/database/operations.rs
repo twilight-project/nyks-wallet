@@ -1,6 +1,5 @@
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::database::{
-    connection::DbConnection,
     models::{
         DbOrderWallet, DbRequestId, DbUtxoDetail, DbZkAccount, EncryptedWallet, NewEncryptedWallet,
     },
@@ -27,34 +26,52 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use sha2::{Digest, Sha256};
+
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+use crate::database::connection::{DbPool, get_conn};
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+use chrono::NaiveDateTime;
+use log::debug;
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Debug, Clone, Serialize)]
+pub struct DatabaseManager {
+    wallet_id: String,
+    #[serde(skip)]
+    pool: Arc<DbPool>,
+}
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DatabaseManager {
-    wallet_id: String,
+pub struct WalletList {
+    pub wallet_id: String,
+    pub created_at: NaiveDateTime,
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 impl DatabaseManager {
-    pub fn new(wallet_id: String) -> Self {
-        Self { wallet_id }
+    pub fn new(wallet_id: String, pool: DbPool) -> Self {
+        Self {
+            wallet_id,
+            pool: Arc::new(pool),
+        }
     }
 
     pub fn get_wallet_id(&self) -> &str {
         &self.wallet_id
     }
+    pub fn pool(&self) -> &DbPool {
+        &self.pool
+    }
 
     // ZkAccount operations
-    pub fn save_zk_account(
-        &self,
-        conn: &mut DbConnection,
-        zk_account: &ZkAccount,
-    ) -> Result<(), String> {
+    pub fn save_zk_account(&self, zk_account: &ZkAccount) -> Result<(), String> {
         let new_account = DbZkAccount::from_zk_account(zk_account, self.wallet_id.clone());
-
-        diesel::insert_into(zk_accounts::table)
+        let mut conn = get_conn(self.pool())?;
+        let n = diesel::insert_into(zk_accounts::table)
             .values(&new_account)
             .on_conflict((zk_accounts::wallet_id, zk_accounts::account_index))
             .do_update()
@@ -64,20 +81,16 @@ impl DatabaseManager {
                 zk_accounts::on_chain.eq(new_account.on_chain),
                 zk_accounts::updated_at.eq(new_account.updated_at),
             ))
-            .execute(conn)
+            .execute(&mut conn)
             .map_err(|e| format!("Failed to save zk_account: {}", e))?;
-
+        debug!("The upserted row: {}", n);
         Ok(())
     }
 
-    pub fn update_zk_account(
-        &self,
-        conn: &mut DbConnection,
-        zk_account: &ZkAccount,
-    ) -> Result<(), String> {
+    pub fn update_zk_account(&self, zk_account: &ZkAccount) -> Result<(), String> {
         let now = chrono::Utc::now().naive_utc();
-
-        diesel::update(
+        let mut conn = get_conn(self.pool())?;
+        let n = diesel::update(
             zk_accounts::table.filter(
                 zk_accounts::wallet_id
                     .eq(&self.wallet_id)
@@ -90,37 +103,32 @@ impl DatabaseManager {
             zk_accounts::on_chain.eq(zk_account.on_chain),
             zk_accounts::updated_at.eq(now),
         ))
-        .execute(conn)
+        .execute(&mut conn)
         .map_err(|e| format!("Failed to update zk_account: {}", e))?;
-
+        debug!("The updated row: {}", n);
         Ok(())
     }
 
-    pub fn remove_zk_account(
-        &self,
-        conn: &mut DbConnection,
-        account_index: u64,
-    ) -> Result<(), String> {
-        diesel::delete(
+    pub fn remove_zk_account(&self, account_index: u64) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        let n = diesel::delete(
             zk_accounts::table.filter(
                 zk_accounts::wallet_id
                     .eq(&self.wallet_id)
                     .and(zk_accounts::account_index.eq(account_index as i64)),
             ),
         )
-        .execute(conn)
+        .execute(&mut conn)
         .map_err(|e| format!("Failed to remove zk_account: {}", e))?;
-
+        debug!("The deleted row: {:?}", n);
         Ok(())
     }
 
-    pub fn load_all_zk_accounts(
-        &self,
-        conn: &mut DbConnection,
-    ) -> Result<HashMap<u64, ZkAccount>, String> {
+    pub fn load_all_zk_accounts(&self) -> Result<HashMap<u64, ZkAccount>, String> {
+        let mut conn = get_conn(self.pool())?;
         let db_accounts: Vec<DbZkAccount> = zk_accounts::table
             .filter(zk_accounts::wallet_id.eq(&self.wallet_id))
-            .load(conn)
+            .load(&mut conn)
             .map_err(|e| format!("Failed to load zk_accounts: {}", e))?;
 
         let mut accounts = HashMap::new();
@@ -131,24 +139,43 @@ impl DatabaseManager {
 
         Ok(accounts)
     }
-    pub fn get_max_account_index(&self, conn: &mut DbConnection) -> Result<u64, String> {
+    pub fn get_max_account_index(&self) -> Result<u64, String> {
+        let mut conn = get_conn(self.pool())?;
         let max_index: Option<i64> = zk_accounts::table
             .filter(zk_accounts::wallet_id.eq(&self.wallet_id))
             .select(zk_accounts::account_index)
             .order(zk_accounts::account_index.desc())
-            .first(conn)
+            .first(&mut conn)
             .optional()
             .map_err(|e| format!("Failed to get max account index: {}", e))?;
         Ok(max_index.unwrap_or(0) as u64)
     }
 
+    /// List all wallet IDs that have an encrypted wallet stored, with created_at
+    pub fn get_wallet_list(pool: &DbPool) -> Result<Vec<WalletList>, String> {
+        let mut conn = get_conn(pool)?;
+        let rows: Vec<(String, NaiveDateTime)> = encrypted_wallets::table
+            .select((encrypted_wallets::wallet_id, encrypted_wallets::created_at))
+            .order(encrypted_wallets::created_at.desc())
+            .load::<(String, NaiveDateTime)>(&mut conn)
+            .map_err(|e| format!("Failed to load wallet list: {}", e))?;
+        let list = rows
+            .into_iter()
+            .map(|(wallet_id, created_at)| WalletList {
+                wallet_id,
+                created_at,
+            })
+            .collect();
+        Ok(list)
+    }
+
     // Wallet encryption operations
     pub fn save_encrypted_wallet(
         &self,
-        conn: &mut DbConnection,
         wallet: &Wallet,
         password: &SecretString,
     ) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
         let (encrypted_data, salt, nonce) = encrypt_wallet(wallet, password)?;
         let now = chrono::Utc::now().naive_utc();
 
@@ -161,7 +188,7 @@ impl DatabaseManager {
             updated_at: now,
         };
 
-        diesel::insert_into(encrypted_wallets::table)
+        let n = diesel::insert_into(encrypted_wallets::table)
             .values(&new_wallet)
             .on_conflict(encrypted_wallets::wallet_id)
             .do_update()
@@ -171,20 +198,17 @@ impl DatabaseManager {
                 encrypted_wallets::nonce.eq(&new_wallet.nonce),
                 encrypted_wallets::updated_at.eq(new_wallet.updated_at),
             ))
-            .execute(conn)
+            .execute(&mut conn)
             .map_err(|e| format!("Failed to save encrypted wallet: {}", e))?;
-
+        debug!("The upserted row: {}", n);
         Ok(())
     }
 
-    pub fn load_encrypted_wallet(
-        &self,
-        conn: &mut DbConnection,
-        password: &SecretString,
-    ) -> Result<Option<Wallet>, String> {
+    pub fn load_encrypted_wallet(&self, password: &SecretString) -> Result<Wallet, String> {
+        let mut conn = get_conn(self.pool())?;
         let encrypted_wallet: Option<EncryptedWallet> = encrypted_wallets::table
             .filter(encrypted_wallets::wallet_id.eq(&self.wallet_id))
-            .first(conn)
+            .first(&mut conn)
             .optional()
             .map_err(|e| format!("Failed to load encrypted wallet: {}", e))?;
 
@@ -196,16 +220,18 @@ impl DatabaseManager {
                     &enc_wallet.nonce,
                     password,
                 )?;
-                Ok(Some(wallet))
+                Ok(wallet)
             }
-            None => Ok(None),
+            None => Err(format!(
+                "No encrypted wallet found for wallet_id: {}",
+                self.wallet_id
+            )),
         }
     }
 
     // OrderWallet operations
     pub fn save_order_wallet(
         &self,
-        conn: &mut DbConnection,
         chain_id: &str,
         seed: &str,
         relayer_config: &crate::config::RelayerEndPointConfig,
@@ -218,8 +244,8 @@ impl DatabaseManager {
             relayer_config,
             password,
         )?;
-
-        diesel::insert_into(order_wallets::table)
+        let mut conn = get_conn(self.pool())?;
+        let n = diesel::insert_into(order_wallets::table)
             .values(&new_order_wallet)
             .on_conflict(order_wallets::wallet_id)
             .do_update()
@@ -234,21 +260,21 @@ impl DatabaseManager {
                     .eq(&new_order_wallet.relayer_program_json_path),
                 order_wallets::updated_at.eq(new_order_wallet.updated_at),
             ))
-            .execute(conn)
+            .execute(&mut conn)
             .map_err(|e| format!("Failed to save order wallet: {}", e))?;
-
+        debug!("The upserted row: {}", n);
         Ok(())
     }
 
     pub fn load_order_wallet(
         &self,
-        conn: &mut DbConnection,
         password: &str,
     ) -> Result<Option<(String, String, crate::config::RelayerEndPointConfig)>, String> {
+        let mut conn = get_conn(self.pool())?;
         let db_order_wallet: Option<DbOrderWallet> = order_wallets::table
             .filter(order_wallets::wallet_id.eq(&self.wallet_id))
             .filter(order_wallets::is_active.eq(true))
-            .first(conn)
+            .first(&mut conn)
             .optional()
             .map_err(|e| format!("Failed to load order wallet: {}", e))?;
 
@@ -262,13 +288,14 @@ impl DatabaseManager {
         }
     }
 
-    pub fn deactivate_order_wallet(&self, conn: &mut DbConnection) -> Result<(), String> {
+    pub fn deactivate_order_wallet(&self) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
         diesel::update(order_wallets::table.filter(order_wallets::wallet_id.eq(&self.wallet_id)))
             .set((
                 order_wallets::is_active.eq(false),
                 order_wallets::updated_at.eq(chrono::Utc::now().naive_utc()),
             ))
-            .execute(conn)
+            .execute(&mut conn)
             .map_err(|e| format!("Failed to deactivate order wallet: {}", e))?;
 
         Ok(())
@@ -277,14 +304,13 @@ impl DatabaseManager {
     // UTXO Details operations
     pub fn save_utxo_detail(
         &self,
-        conn: &mut DbConnection,
         account_index: u64,
         utxo_detail: &twilight_client_sdk::relayer_rpcclient::method::UtxoDetailResponse,
     ) -> Result<(), String> {
         let new_utxo_detail =
             DbUtxoDetail::from_utxo_detail(self.wallet_id.clone(), account_index, utxo_detail)?;
-
-        diesel::insert_into(utxo_details::table)
+        let mut conn = get_conn(self.pool())?;
+        let n = diesel::insert_into(utxo_details::table)
             .values(&new_utxo_detail)
             .on_conflict((utxo_details::wallet_id, utxo_details::account_index))
             .do_update()
@@ -292,22 +318,22 @@ impl DatabaseManager {
                 utxo_details::utxo_data.eq(&new_utxo_detail.utxo_data),
                 utxo_details::updated_at.eq(new_utxo_detail.updated_at),
             ))
-            .execute(conn)
+            .execute(&mut conn)
             .map_err(|e| format!("Failed to save UTXO detail: {}", e))?;
-
+        debug!("The upserted row: {}", n);
         Ok(())
     }
 
     pub fn load_utxo_detail(
         &self,
-        conn: &mut DbConnection,
         account_index: u64,
     ) -> Result<Option<twilight_client_sdk::relayer_rpcclient::method::UtxoDetailResponse>, String>
     {
+        let mut conn = get_conn(self.pool())?;
         let db_utxo_detail: Option<DbUtxoDetail> = utxo_details::table
             .filter(utxo_details::wallet_id.eq(&self.wallet_id))
             .filter(utxo_details::account_index.eq(account_index as i64))
-            .first(conn)
+            .first(&mut conn)
             .optional()
             .map_err(|e| format!("Failed to load UTXO detail: {}", e))?;
 
@@ -319,14 +345,14 @@ impl DatabaseManager {
 
     pub fn load_all_utxo_details(
         &self,
-        conn: &mut DbConnection,
     ) -> Result<
         HashMap<u64, twilight_client_sdk::relayer_rpcclient::method::UtxoDetailResponse>,
         String,
     > {
+        let mut conn = get_conn(self.pool())?;
         let db_utxo_details: Vec<DbUtxoDetail> = utxo_details::table
             .filter(utxo_details::wallet_id.eq(&self.wallet_id))
-            .load(conn)
+            .load(&mut conn)
             .map_err(|e| format!("Failed to load UTXO details: {}", e))?;
 
         let mut utxo_details_map = HashMap::new();
@@ -338,38 +364,30 @@ impl DatabaseManager {
         Ok(utxo_details_map)
     }
 
-    pub fn remove_utxo_detail(
-        &self,
-        conn: &mut DbConnection,
-        account_index: u64,
-    ) -> Result<(), String> {
-        diesel::delete(
+    pub fn remove_utxo_detail(&self, account_index: u64) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        let n = diesel::delete(
             utxo_details::table.filter(
                 utxo_details::wallet_id
                     .eq(&self.wallet_id)
                     .and(utxo_details::account_index.eq(account_index as i64)),
             ),
         )
-        .execute(conn)
+        .execute(&mut conn)
         .map_err(|e| format!("Failed to remove UTXO detail: {}", e))?;
-
+        debug!("The deleted row: {:?}", n);
         Ok(())
     }
 
     // Request ID operations
-    pub fn save_request_id(
-        &self,
-        conn: &mut DbConnection,
-        account_index: u64,
-        request_id: &str,
-    ) -> Result<(), String> {
+    pub fn save_request_id(&self, account_index: u64, request_id: &str) -> Result<(), String> {
         let new_request_id = DbRequestId::new(
             self.wallet_id.clone(),
             account_index,
             request_id.to_string(),
         );
-
-        diesel::insert_into(request_ids::table)
+        let mut conn = get_conn(self.pool())?;
+        let n = diesel::insert_into(request_ids::table)
             .values(&new_request_id)
             .on_conflict((request_ids::wallet_id, request_ids::account_index))
             .do_update()
@@ -377,34 +395,29 @@ impl DatabaseManager {
                 request_ids::request_id.eq(&new_request_id.request_id),
                 request_ids::updated_at.eq(new_request_id.updated_at),
             ))
-            .execute(conn)
+            .execute(&mut conn)
             .map_err(|e| format!("Failed to save request ID: {}", e))?;
-
+        debug!("The upserted row : {}", n);
         Ok(())
     }
 
-    pub fn load_request_id(
-        &self,
-        conn: &mut DbConnection,
-        account_index: u64,
-    ) -> Result<Option<String>, String> {
+    pub fn load_request_id(&self, account_index: u64) -> Result<Option<String>, String> {
+        let mut conn = get_conn(self.pool())?;
         let db_request_id: Option<DbRequestId> = request_ids::table
             .filter(request_ids::wallet_id.eq(&self.wallet_id))
             .filter(request_ids::account_index.eq(account_index as i64))
-            .first(conn)
+            .first(&mut conn)
             .optional()
             .map_err(|e| format!("Failed to load request ID: {}", e))?;
 
         Ok(db_request_id.map(|r| r.request_id))
     }
 
-    pub fn load_all_request_ids(
-        &self,
-        conn: &mut DbConnection,
-    ) -> Result<HashMap<u64, String>, String> {
+    pub fn load_all_request_ids(&self) -> Result<HashMap<u64, String>, String> {
+        let mut conn = get_conn(self.pool())?;
         let db_request_ids: Vec<DbRequestId> = request_ids::table
             .filter(request_ids::wallet_id.eq(&self.wallet_id))
-            .load(conn)
+            .load(&mut conn)
             .map_err(|e| format!("Failed to load request IDs: {}", e))?;
 
         let mut request_ids_map = HashMap::new();
@@ -415,21 +428,18 @@ impl DatabaseManager {
         Ok(request_ids_map)
     }
 
-    pub fn remove_request_id(
-        &self,
-        conn: &mut DbConnection,
-        account_index: u64,
-    ) -> Result<(), String> {
-        diesel::delete(
+    pub fn remove_request_id(&self, account_index: u64) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        let n = diesel::delete(
             request_ids::table.filter(
                 request_ids::wallet_id
                     .eq(&self.wallet_id)
                     .and(request_ids::account_index.eq(account_index as i64)),
             ),
         )
-        .execute(conn)
+        .execute(&mut conn)
         .map_err(|e| format!("Failed to remove request ID: {}", e))?;
-
+        debug!("The deleted row: {:?}", n);
         Ok(())
     }
 }

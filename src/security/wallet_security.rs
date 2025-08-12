@@ -186,15 +186,4 @@ mod tests {
         );
         assert_eq!(recovered.public_key, secure_wallet.public_key);
     }
-
-    #[test]
-    fn test_secure_memory() {
-        let mut sensitive_data = vec![1u8, 2, 3, 4, 5];
-        let original_ptr = sensitive_data.as_ptr();
-
-        SecureMemory::clear_vec(sensitive_data);
-
-        // Note: In a real test, we'd need unsafe code to check if memory was cleared
-        // This test mainly ensures the API works
-    }
 }

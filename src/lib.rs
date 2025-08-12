@@ -2,6 +2,7 @@ pub mod nyks_rpc;
 pub mod wallet;
 pub use wallet::*;
 pub mod config;
+pub mod error;
 pub mod test;
 pub mod zkos_accounts;
 #[macro_use]
@@ -42,3 +43,13 @@ pub mod database;
 
 // Security module for secure password and wallet management
 pub mod security;
+
+#[cfg(all(feature = "sqlite", feature = "postgresql"))]
+#[deprecated(note = "Both 'sqlite' and 'postgresql' enabled; defaulting to Postgres.")]
+const _PG_WINS_WHEN_BOTH: () = ();
+
+#[cfg(all(feature = "sqlite", feature = "postgresql"))]
+#[allow(deprecated)]
+const _: () = {
+    let _ = _PG_WINS_WHEN_BOTH;
+};

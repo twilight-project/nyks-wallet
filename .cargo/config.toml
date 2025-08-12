@@ -1,0 +1,5 @@
+[alias]
+check-sqlite = "check --no-default-features --features sqlite"
+check-pg = "check --no-default-features --features postgresql"
+test-sqlite = "test --no-default-features --features sqlite"
+test-pg = "test --no-default-features --features postgresql"
