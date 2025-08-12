@@ -81,6 +81,12 @@ See [Environment Configuration](#10--environment-configuration) for full list. M
 
 ## 4 • Getting Started
 
+> Important: Mnemonic display and security
+>
+> - Calling `OrderWallet::new` or `Wallet::new` generates a NEW mnemonic.
+> - The mnemonic is printed ONCE directly to the terminal (TTY) using `print_secret_to_tty` and is not logged to stdout/stderr or persisted.
+> - You must securely save the mnemonic when it is displayed; it cannot be retrieved later from the wallet or database.
+
 ### 4.1 Create a new OrderWallet with defaults
 
 ```rust
