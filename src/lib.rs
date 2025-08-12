@@ -45,11 +45,11 @@ pub mod database;
 pub mod security;
 
 #[cfg(all(feature = "sqlite", feature = "postgresql"))]
-#[deprecated(note = "Both 'sqlite' and 'postgresql' enabled; defaulting to Postgres.")]
-const _PG_WINS_WHEN_BOTH: () = ();
+#[deprecated(note = "Both 'sqlite' and 'postgresql' enabled; defaulting to Sqlite.")]
+const _SQLITE_WINS_WHEN_BOTH: () = ();
 
 #[cfg(all(feature = "sqlite", feature = "postgresql"))]
 #[allow(deprecated)]
 const _: () = {
-    let _ = _PG_WINS_WHEN_BOTH;
+    let _ = _SQLITE_WINS_WHEN_BOTH;
 };

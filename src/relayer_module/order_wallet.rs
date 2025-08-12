@@ -1,3 +1,11 @@
+//! OrderWallet: trading and lending interface for the relayer using ZkOS accounts.
+//!
+//! Provides high-level operations to:
+//! - Fund ZkOS trading accounts from the on-chain wallet
+//! - Move balances across ZkOS accounts (single and multiple receivers)
+//! - Open/close/cancel trader and lend orders via the relayer
+//! - Query order states with retry helpers
+//! - Optionally persist wallet, ZK accounts, UTXOs, and request IDs in a database
 use std::collections::HashMap;
 
 use crate::{
@@ -43,11 +51,14 @@ use twilight_client_sdk::{
     zkvm::IOType,
 };
 
+/// One-based index of a ZkOS account tracked by `ZkAccountDB`.
 pub type AccountIndex = u64;
 pub type Balance = u64;
+/// Relayer request ID string returned after submitting an order.
 pub type RequestId = String;
 pub type AccountBalance = (AccountIndex, Balance);
 #[derive(Debug, Clone, Serialize)]
+/// High-level wallet orchestrator for relayer trading/lending using ZkOS accounts.
 pub struct OrderWallet {
     pub wallet: Wallet,
     pub zk_accounts: ZkAccountDB,
@@ -68,6 +79,8 @@ pub struct OrderWallet {
 }
 
 impl OrderWallet {
+    /// Internal constructor helper that wires endpoint configs and the relayer client,
+    /// derives the ZkOS seed from the wallet, and initializes runtime caches.
     fn init(
         wallet: Wallet,
         zk_accounts: ZkAccountDB,
@@ -97,6 +110,9 @@ impl OrderWallet {
         })
     }
 
+    /// Create a new `OrderWallet` with a freshly generated base `Wallet`.
+    /// If `endpoint_config` is `None`, defaults are used.
+    /// The base wallet generates a new mnemonic and prints it once to the TTY.
     pub fn new(endpoint_config: Option<EndpointConfig>) -> WalletResult<Self> {
         let endpoint_config = endpoint_config.unwrap_or(EndpointConfig::default());
         let wallet_endpoint_config = endpoint_config.to_wallet_endpoint_config();
@@ -106,6 +122,7 @@ impl OrderWallet {
         Self::init(wallet, zk_accounts, endpoint_config)
     }
 
+    /// Import an `OrderWallet` from an existing mnemonic, preserving keys and addresses.
     pub fn import_from_mnemonic(
         mnemonic: &str,
         endpoint_config: Option<EndpointConfig>,
@@ -138,6 +155,9 @@ impl OrderWallet {
 
     // deafault feature is sqlite, if postgresql is enabled, then use postgresql
     // mnemonic will be securely printed for the first time and then deleted from memory and will not be stored in the database or any other storage
+    /// Enable database persistence. Returns a cloned instance with DB enabled.
+    /// Password resolution: explicit Some → env NYKS_WALLET_PASSPHRASE → interactive prompt.
+    /// If `wallet_id` is None, defaults to the wallet's Twilight address.
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn with_db(
         &mut self,
@@ -159,6 +179,8 @@ impl OrderWallet {
         Ok(self.clone())
     }
 
+    /// Load OrderWallet from DB by `wallet_id`. If `password` is None, it will
+    /// resolve via env/prompt. Also loads Zk accounts, UTXO details, and request IDs.
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn load_from_db(
         wallet_id: String,
@@ -211,10 +233,12 @@ impl OrderWallet {
         Ok(wallet_list)
     }
 
+    /// Derive a child secret key for the given account index from the ZkOS seed.
     pub fn get_secret_key(&self, index: AccountIndex) -> RistrettoSecretKey {
         let key_manager = KeyManager::from_cosmos_signature(self.seed.expose_secret().as_bytes());
         key_manager.derive_child_key(index)
     }
+    /// Get last stored request ID for the account; errors if none exists.
     pub fn request_id(&self, index: AccountIndex) -> Result<&str, String> {
         self.request_ids
             .get(&index)
@@ -222,6 +246,7 @@ impl OrderWallet {
             .ok_or(format!("Request ID not found for account index: {}", index))
     }
 
+    /// Ensure the account exists on-chain, has IOType::Coin, and a non-zero balance.
     pub fn ensure_coin_onchain(&self, index: AccountIndex) -> Result<(), String> {
         let a = self
             .zk_accounts
@@ -379,6 +404,12 @@ impl OrderWallet {
         Ok(new_account_index)
     }
 
+    /// Split a single Coin account into multiple new Coin accounts as specified by `balances`.
+    /// Returns a vector of `(new_account_index, balance)` for each created account.
+    /// Requirements:
+    /// - Sender must be on-chain in Coin state and have at least sum(balances)
+    /// - `balances` must be non-empty
+    /// - Recommended to create at most 8 accounts per call due to tx size limits
     pub async fn trading_to_trading_multiple_accounts(
         &mut self,
         sender_account_index: AccountIndex,
