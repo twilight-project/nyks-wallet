@@ -136,12 +136,18 @@ impl OrderWallet {
     // deafault feature is sqlite, if postgresql is enabled, then use postgresql
     // mnemonic will be securely printed for the first time and then deleted from memory and will not be stored in the database or any other storage
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    pub fn with_db(&mut self) -> Result<Self, String> {
+    pub fn with_db(&mut self, wallet_password: Option<SecretString>) -> Result<Self, String> {
         // look for env var NYKS_WALLET_PASSPHRASE for password, if not found then prompt for password
-        let password = SecurePassword::get_passphrase_with_prompt(
-            "Could not find passphrase from environment, \nplease enter wallet encryption password: ",
-        )
-        .map_err(|e| e.to_string())?;
+
+        let password = match wallet_password {
+            Some(pwd) => pwd,
+            None => {
+                SecurePassword::get_passphrase_with_prompt(
+                    "Could not find passphrase from environment, \nplease enter wallet encryption password: ",
+                )
+                .map_err(|e| e.to_string())?
+            }
+        };
         self.enable_database_persistence(Some(password))?;
         Ok(self.clone())
     }
@@ -948,7 +954,7 @@ mod tests {
 
         let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
             .map_err(|e| e.to_string())?;
-        order_wallet.with_db()?;
+        order_wallet.with_db(None)?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
