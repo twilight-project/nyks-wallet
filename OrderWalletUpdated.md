@@ -96,6 +96,8 @@ fn main() -> Result<(), String> {
     env_logger::init();
     // Uses EndpointConfig::default() under the hood
     let mut order_wallet = OrderWallet::new(None)?;
+
+
     println!("Chain: {}", order_wallet.chain_id);
     Ok(())
 }
@@ -119,6 +121,12 @@ fn main() -> Result<(), String> {
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let mut order_wallet = OrderWallet::new(None)?;
+    info!("Getting test tokens from faucet");
+    // get_test_tokens only availble for testnet
+    match get_test_tokens(&mut wallet).await {
+        Ok(_) => info!("Tokens received successfully"),
+        Err(e) => return Err(e.to_string()),
+    }
     // Mint 10_000 sats into a new ZK trading account
     let (tx_result, account_index) = order_wallet.funding_to_trading(10_000).await?;
     assert_eq!(tx_result.code, 0);
@@ -150,9 +158,9 @@ pub struct OrderWallet {
 
 - `OrderWallet::new(endpoint_config: Option<EndpointConfig>) -> Result<Self, WalletError>`
 - `OrderWallet::import_from_mnemonic(mnemonic: &str, endpoint_config: Option<EndpointConfig>) -> Result<Self, String>`
-- With DB features: `OrderWallet::with_db(&mut self, wallet_password: Option<secrecy::SecretString>) -> Result<Self, String>`
+- With DB features: `OrderWallet::with_db(&mut self, wallet_password: Option<secrecy::SecretString>, wallet_id: Option<String>) -> Result<Self, String>`
 - With DB features: `OrderWallet::load_from_db(wallet_id, password, db_url) -> Result<Self, String>`
-- With DB features: `OrderWallet::get_wallet_list_from_db() -> Result<Vec<WalletList>, String>`
+- With DB features: `OrderWallet::get_wallet_list_from_db(db_url: Option<String>) -> Result<Vec<WalletList>, String>`
 
 ### 5.3 Utility methods
 
@@ -307,11 +315,12 @@ use secrecy::SecretString;
 // Requires feature flag. If password is None, resolution is env → prompt
 let mut order_wallet = OrderWallet::new(None)?;
 
-// Option A: Provide password explicitly
-let order_wallet = order_wallet.with_db(Some(SecretString::new("strong passphrase".into())))?; // clones a DB-enabled instance
+// Option A: Provide password and a custom wallet_id explicitly
+let order_wallet = order_wallet
+    .with_db(Some(SecretString::new("strong passphrase".into())), Some("my_trading_wallet".into()))?;
 
-// Option B: Let it resolve via env or prompt
-// let order_wallet = order_wallet.with_db(None)?;
+// Option B: Resolve password via env/prompt and derive wallet_id from Twilight address
+// let order_wallet = order_wallet.with_db(None, None)?;
 
 // Persist OrderWallet config, encrypted wallet, zk accounts, utxo details, and request_ids
 order_wallet.save_order_wallet_to_db()?;
@@ -319,13 +328,19 @@ order_wallet.save_order_wallet_to_db()?;
 
 #### 9.1.1 Password resolution order
 
-When enabling DB persistence via `with_db(password)` (or when loading via `load_from_db`), the password is resolved in this order:
+When enabling DB persistence via `with_db(password, wallet_id)` (or when loading via `load_from_db`), the password is resolved in this order:
 
 - Provided explicitly as function argument: `Some(SecretString)`
 - Environment variable `NYKS_WALLET_PASSPHRASE`
 - Interactive prompt (terminal input)
 
-This means calling `with_db(None)` or `load_from_db(wallet_id, None, ..)` will first look for `NYKS_WALLET_PASSPHRASE`. If it is not set, a prompt will appear to enter the passphrase.
+This means calling `with_db(None, ..)` or `load_from_db(wallet_id, None, ..)` will first look for `NYKS_WALLET_PASSPHRASE`. If it is not set, a prompt will appear to enter the passphrase.
+
+#### 9.1.2 Wallet ID selection
+
+- If you pass `Some(wallet_id)`, that value is used as the database key.
+- If you pass `None`, the wallet ID defaults to the wallet's Twilight address (public identifier).
+- The wallet ID must be unique; attempting to enable persistence with an existing wallet ID will return an error.
 
 Behavior:
 
@@ -354,8 +369,26 @@ let mut order_wallet = OrderWallet::load_from_db(wallet_id, None, None)?;
 ### 9.3 List stored wallets
 
 ```rust
-let list = OrderWallet::get_wallet_list_from_db()?;
+let list = OrderWallet::get_wallet_list_from_db(None)?;
 for w in list { println!("{} {}", w.wallet_id, w.created_at); }
+```
+
+Use this when you need to discover which wallet IDs are available in the database before calling `load_from_db`. The function returns a `Vec<WalletList>`, where each item contains:
+
+- wallet_id: the unique identifier (Twilight address) used to load a wallet
+- created_at: the timestamp when the encrypted wallet was first stored
+
+Example: Select a wallet and load it
+
+```rust
+use secrecy::SecretString;
+
+let wallets = OrderWallet::get_wallet_list_from_db(None)?;
+if let Some(first) = wallets.first() {
+    println!("Loading wallet {} (created {})", first.wallet_id, first.created_at);
+    // Provide a password or use None to resolve via env → prompt
+    let mut order_wallet = OrderWallet::load_from_db(first.wallet_id.clone(), None, None)?;
+}
 ```
 
 ---

@@ -62,9 +62,6 @@ pub struct OrderWallet {
 }
 
 impl OrderWallet {
-    // -------------------------
-    // Constructors
-    // -------------------------
     fn init(
         wallet: Wallet,
         zk_accounts: ZkAccountDB,
@@ -136,7 +133,11 @@ impl OrderWallet {
     // deafault feature is sqlite, if postgresql is enabled, then use postgresql
     // mnemonic will be securely printed for the first time and then deleted from memory and will not be stored in the database or any other storage
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    pub fn with_db(&mut self, wallet_password: Option<SecretString>) -> Result<Self, String> {
+    pub fn with_db(
+        &mut self,
+        wallet_password: Option<SecretString>,
+        wallet_id: Option<String>,
+    ) -> Result<Self, String> {
         // look for env var NYKS_WALLET_PASSPHRASE for password, if not found then prompt for password
 
         let password = match wallet_password {
@@ -148,7 +149,7 @@ impl OrderWallet {
                 .map_err(|e| e.to_string())?
             }
         };
-        self.enable_database_persistence(Some(password))?;
+        self.enable_database_persistence(Some(password), wallet_id)?;
         Ok(self.clone())
     }
 
@@ -197,12 +198,13 @@ impl OrderWallet {
     }
 
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    pub fn get_wallet_list_from_db() -> Result<Vec<WalletList>, String> {
-        let pool = crate::database::connection::init_pool(None)?;
+    pub fn get_wallet_list_from_db(db_url: Option<String>) -> Result<Vec<WalletList>, String> {
+        let pool = crate::database::connection::init_pool(db_url)?;
         run_migrations_once(&pool)?;
         let wallet_list = DatabaseManager::get_wallet_list(&pool)?;
         Ok(wallet_list)
     }
+
     pub fn get_secret_key(&self, index: AccountIndex) -> RistrettoSecretKey {
         let key_manager = KeyManager::from_cosmos_signature(self.seed.expose_secret().as_bytes());
         key_manager.derive_child_key(index)
@@ -225,6 +227,9 @@ impl OrderWallet {
         Ok(())
     }
 
+    // -------------------------
+    // Funding Operations
+    // -------------------------
     // Create a new zk_account and transfer sats from wallet to zk_account
     // Return the tx result (tx_hash, code) and the account index
     pub async fn funding_to_trading(&mut self, amount: u64) -> Result<(TxResult, u64), String> {
@@ -367,6 +372,11 @@ impl OrderWallet {
 
         Ok(new_account_index)
     }
+
+    pub async fn trading_to_trading_multiple_accounts() {}
+    // -------------------------
+    // Trader Order Operations
+    // -------------------------
 
     pub async fn open_trader_order(
         &mut self,
@@ -541,6 +551,47 @@ impl OrderWallet {
         Ok(response)
     }
 
+    pub async fn cancel_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let request_id = self.request_id(index)?;
+        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
+        if tx_hash.order_status != OrderStatus::PENDING {
+            return Err(format!(
+                "Order is not pending, status: {}",
+                tx_hash.order_status.to_str()
+            ));
+        }
+        let request_id = cancel_trader_order(
+            account_address.clone(),
+            &secret_key,
+            account_address.clone(),
+            tx_hash.order_id,
+            &self.relayer_api_client,
+        )
+        .await?;
+        let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
+        if tx_hash.order_status != OrderStatus::CANCELLED {
+            return Err(format!(
+                "Order is not cancelled, status: {}",
+                tx_hash.order_status.to_str()
+            ));
+        }
+
+        self.zk_accounts.update_io_type(&index, IOType::Coin)?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(&index) {
+            let _ = self.update_zk_account_in_db(&account);
+        }
+
+        Ok(request_id)
+    }
+
+    // -------------------------
+    // Lend Order Operations
+    // -------------------------
+
     pub async fn open_lend_order(&mut self, index: AccountIndex) -> Result<String, String> {
         self.ensure_coin_onchain(index)?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
@@ -639,45 +690,11 @@ impl OrderWallet {
         Ok(request_id)
     }
 
-    pub async fn cancel_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_secret_key(index);
-        let request_id = self.request_id(index)?;
-        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
-        if tx_hash.order_status != OrderStatus::PENDING {
-            return Err(format!(
-                "Order is not pending, status: {}",
-                tx_hash.order_status.to_str()
-            ));
-        }
-        let request_id = cancel_trader_order(
-            account_address.clone(),
-            &secret_key,
-            account_address.clone(),
-            tx_hash.order_id,
-            &self.relayer_api_client,
-        )
-        .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
-        if tx_hash.order_status != OrderStatus::CANCELLED {
-            return Err(format!(
-                "Order is not cancelled, status: {}",
-                tx_hash.order_status.to_str()
-            ));
-        }
-
-        self.zk_accounts.update_io_type(&index, IOType::Coin)?;
-
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Ok(account) = self.zk_accounts.get_account(&index) {
-            let _ = self.update_zk_account_in_db(&account);
-        }
-
-        Ok(request_id)
-    }
-
+    // -------------------------
+    // Database Operations
+    // -------------------------
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    fn sync_zk_account_to_db(
+    pub fn sync_zk_account_to_db(
         &self,
         account: &crate::zkos_accounts::zkaccount::ZkAccount,
     ) -> Result<(), String> {
@@ -688,7 +705,7 @@ impl OrderWallet {
     }
 
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-    fn update_zk_account_in_db(
+    pub fn update_zk_account_in_db(
         &self,
         account: &crate::zkos_accounts::zkaccount::ZkAccount,
     ) -> Result<(), String> {
@@ -722,6 +739,7 @@ impl OrderWallet {
     pub fn enable_database_persistence(
         &mut self,
         wallet_password: Option<SecretString>,
+        wallet_id: Option<String>,
     ) -> Result<(), String> {
         let wallet_password = match wallet_password {
             Some(password) => password,
@@ -732,15 +750,24 @@ impl OrderWallet {
         };
 
         // Generate wallet ID from wallet address
-        let wallet_id = self.wallet.twilightaddress.clone();
+        let wallet_id = match wallet_id {
+            Some(id) => id,
+            None => self.wallet.twilightaddress.clone(),
+        };
 
         // Initialize database connection and run migrations
         let pool = crate::database::connection::init_pool(None)?;
         run_migrations_once(&pool)?;
 
         // Create database manager
+        // let wallet_list = DatabaseManager::get_wallet_list(&pool)?;
+        // if wallet_list.iter().any(|w| w.wallet_id == wallet_id) {
+        //     return Err(format!("Wallet ID already exists: {}", wallet_id));
+        // }
+        if DatabaseManager::check_wallet_id_exists(&pool, &wallet_id)? {
+            return Err(format!("Wallet ID already exists: {}", wallet_id));
+        }
         let db_manager = DatabaseManager::new(wallet_id, pool);
-
         // Save encrypted wallet if password is provided
 
         db_manager.save_encrypted_wallet(&self.wallet, &wallet_password)?;
@@ -830,7 +857,6 @@ impl OrderWallet {
         }
         Ok(())
     }
-
     /// Remove request ID from database
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     pub fn remove_request_id_from_db(&self, account_index: u64) -> Result<(), String> {
@@ -841,6 +867,9 @@ impl OrderWallet {
     }
 }
 
+// -------------------------
+// Drop
+// -------------------------
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 impl Drop for OrderWallet {
     fn drop(&mut self) {
@@ -954,7 +983,7 @@ mod tests {
 
         let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
             .map_err(|e| e.to_string())?;
-        order_wallet.with_db(None)?;
+        order_wallet.with_db(None, None)?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
@@ -1136,6 +1165,40 @@ mod tests {
         assert_eq!(zk_account.io_type, IOType::Coin);
         assert_eq!(zk_account.balance, response.available_margin as u64);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_wallet_list_from_db() -> Result<(), String> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let wallet_list = OrderWallet::get_wallet_list_from_db(None).map_err(|e| e.to_string())?;
+        println!("wallet_list: {:?}", wallet_list);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_wallet_list_from_db_with_db_url() -> Result<(), String> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let wallet_list = OrderWallet::get_wallet_list_from_db(Some("./test.db".to_string()))
+            .map_err(|e| e.to_string())?;
+        println!("wallet_list: {:?}", wallet_list);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_with_db() -> Result<(), String> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let mut order_wallet = OrderWallet::new(None).map_err(|e| e.to_string())?;
+        order_wallet.with_db(None, Some("test_wallet2".to_string()))?;
+        let wallet_list = OrderWallet::get_wallet_list_from_db(None).map_err(|e| e.to_string())?;
+        println!("wallet_list: {:?}", wallet_list);
         Ok(())
     }
 }

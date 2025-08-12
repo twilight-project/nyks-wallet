@@ -169,6 +169,16 @@ impl DatabaseManager {
         Ok(list)
     }
 
+    pub fn check_wallet_id_exists(pool: &DbPool, wallet_id: &str) -> Result<bool, String> {
+        let mut conn = get_conn(pool)?;
+        let exists: Option<EncryptedWallet> = encrypted_wallets::table
+            .filter(encrypted_wallets::wallet_id.eq(wallet_id))
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| format!("Failed to check wallet ID existence: {}", e))?;
+        Ok(exists.is_some())
+    }
+
     // Wallet encryption operations
     pub fn save_encrypted_wallet(
         &self,
