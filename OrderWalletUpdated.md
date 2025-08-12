@@ -174,6 +174,37 @@ pub struct OrderWallet {
   - Mints trading BTC to a new ZK account. On success, account transitions to on-chain Coin state and is tracked in `utxo_details`.
 - `trading_to_trading(index) -> Result<u64, String>`
   - Spends full balance of a Coin account into a newly created Coin account (strategy isolation or key rotation). Updates both accounts’ on-chain flags and UTXO tracking.
+- `trading_to_trading_multiple_accounts(sender_index, balances: Vec<u64>) -> Result<Vec<(u64, u64)>, String>`
+  - Splits one Coin account into multiple new Coin accounts. For each value in `balances`, a new ZK account is created and funded with that amount. Returns a vector of `(new_account_index, balance)`.
+
+#### 5.4.1 Multi-account transfer usage
+
+```rust
+#[tokio::main]
+async fn main() -> Result<(), String> {
+    let mut order_wallet = OrderWallet::new(None)?;
+    // Prepare a sender account with enough Coin balance
+    let (tx, sender_idx) = order_wallet.funding_to_trading(40_000).await?;
+    assert_eq!(tx.code, 0);
+
+    // Create multiple new accounts with specified balances
+    let balances = vec![5_000, 1_000, 8_000, 600];
+    let new_accounts = order_wallet
+        .trading_to_trading_multiple_accounts(sender_idx, balances)
+        .await?;
+
+    println!("created accounts: {:?}", new_accounts); // Vec<(account_index, balance)>
+    Ok(())
+}
+```
+
+Requirements and effects:
+
+- Sender must be on-chain in Coin state and have sufficient balance for the sum of `balances`
+- `balances` must be non-empty
+- At most 8 new accounts can be created per call (i.e., `balances.len() <= 8`) due to transaction size limits
+- Each created account is set on-chain, balance recorded, and UTXO tracked
+- Sender’s balance and on-chain flag are updated accordingly (may become off-chain if fully spent)
 
 ---
 

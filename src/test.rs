@@ -304,7 +304,10 @@ mod tests {
             .generate_new_account(balance, &SecretString::new(seed_str))
             .unwrap();
         println!("{}", index);
-        println!("{}", db.get_all_accounts_as_json());
+        println!(
+            "{:?}",
+            db.get_all_accounts_as_json().map_err(|e| e.to_string())
+        );
         match db.export_to_json("ZkAccounts.json") {
             Ok(_) => println!("Exported to ZkAccounts.json"),
             Err(e) => println!("Failed to export to json: {}", e),

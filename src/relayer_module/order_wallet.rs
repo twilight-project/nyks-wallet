@@ -35,12 +35,18 @@ use twilight_client_sdk::{
         LendOrder, OrderStatus, OrderType, PositionType, QueryLendOrderZkos, QueryTraderOrderZkos,
         TraderOrder,
     },
-    transfer::create_private_transfer_tx_single,
+    transaction::{Receiver, Sender},
+    transfer::{
+        create_private_transfer_transaction_single_source_multiple_recievers,
+        create_private_transfer_tx_single,
+    },
     zkvm::IOType,
 };
 
 pub type AccountIndex = u64;
+pub type Balance = u64;
 pub type RequestId = String;
+pub type AccountBalance = (AccountIndex, Balance);
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderWallet {
     pub wallet: Wallet,
@@ -373,7 +379,138 @@ impl OrderWallet {
         Ok(new_account_index)
     }
 
-    pub async fn trading_to_trading_multiple_accounts() {}
+    pub async fn trading_to_trading_multiple_accounts(
+        &mut self,
+        sender_account_index: AccountIndex,
+        balances: Vec<Balance>,
+    ) -> Result<Vec<AccountBalance>, String> {
+        self.ensure_coin_onchain(sender_account_index)?;
+        let sk = self.get_secret_key(sender_account_index);
+        let input_sender = self
+            .utxo_details
+            .get(&sender_account_index)
+            .ok_or("UTXO detail not found")?
+            .get_input()?;
+        let mut new_account_balances = Vec::new();
+        let mut commitment_scalar_vec = Vec::new();
+        let mut receiver_vec = Vec::new();
+        let mut updated_reciever_balance_vec = Vec::new();
+        let num_of_new_accounts = balances.len();
+        let sender_transfering_amt = balances.iter().sum::<Balance>();
+        let sender_account = self.zk_accounts.get_account(&sender_account_index)?;
+        if sender_account.balance < sender_transfering_amt {
+            return Err(format!("Insufficient balance"));
+        }
+        if num_of_new_accounts == 0 || sender_transfering_amt > 9 {
+            return Err(format!("No new accounts to create"));
+        }
+        let updated_sender_balance = sender_account.balance - sender_transfering_amt;
+        for balance in balances {
+            let new_account_index = self.zk_accounts.generate_new_account(0, &self.seed)?;
+            new_account_balances.push((new_account_index, balance));
+            commitment_scalar_vec.push(
+                self.zk_accounts
+                    .get_account(&new_account_index)?
+                    .get_scalar()?,
+            );
+            receiver_vec.push(Receiver::set_receiver(
+                balance as i64,
+                self.zk_accounts
+                    .get_account(&new_account_index)?
+                    .get_qq_account()?,
+            ));
+            updated_reciever_balance_vec.push(balance);
+        }
+        let sender_array = vec![Sender::set_sender(
+            (sender_transfering_amt as i64) * -1,
+            sender_account.get_qq_account()?,
+            receiver_vec,
+        )];
+        debug!("sender_array: {:?}", sender_array);
+        debug!("input_sender: {:?}", input_sender);
+        debug!("updated_sender_balance: {:?}", updated_sender_balance);
+        debug!(
+            "updated_reciever_balance_vec: {:?}",
+            updated_reciever_balance_vec
+        );
+        debug!("commitment_scalar_vec: {:?}", commitment_scalar_vec);
+        debug!("sender_transfering_amt: {:?}", sender_transfering_amt);
+        let tx_wallet = create_private_transfer_transaction_single_source_multiple_recievers(
+            sender_array,
+            input_sender,
+            sk,
+            vec![updated_sender_balance],
+            updated_reciever_balance_vec,
+            Some(&commitment_scalar_vec),
+            1u64,
+        )?;
+        let response = tokio::task::spawn_blocking(move || {
+            twilight_client_sdk::chain::tx_commit_broadcast_transaction(
+                tx_wallet.get_tx().ok_or("Failed to get tx")?,
+            )
+        })
+        .await
+        .map_err(|e| format!("Failed to send RPC request: {}", e))?;
+        debug!("response: {:?}", response);
+        for (new_account_index, balance) in new_account_balances.iter() {
+            let utxo_detail = fetch_utxo_details_with_retry(
+                self.zk_accounts.get_account_address(new_account_index)?,
+                IOType::Coin,
+            )
+            .await?;
+            self.utxo_details
+                .insert(*new_account_index, utxo_detail.clone());
+            self.zk_accounts.update_on_chain(new_account_index, true)?;
+            self.zk_accounts
+                .update_balance(new_account_index, *balance)?;
+            let account = utxo_detail.output.to_quisquis_account()?;
+            self.zk_accounts
+                .update_qq_account(new_account_index, account)?;
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            if let Ok(account) = self.zk_accounts.get_account(new_account_index) {
+                let _ = self.update_zk_account_in_db(&account);
+            }
+        }
+
+        if updated_sender_balance > 0 {
+            self.zk_accounts
+                .update_balance(&sender_account_index, updated_sender_balance)?;
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            if let Ok(account) = self.zk_accounts.get_account(&sender_account_index) {
+                let _ = self.update_zk_account_in_db(&account);
+            }
+            let utxo_detail = fetch_utxo_details_with_retry(
+                self.zk_accounts
+                    .get_account_address(&sender_account_index)?,
+                IOType::Coin,
+            )
+            .await?;
+            self.utxo_details
+                .insert(sender_account_index, utxo_detail.clone());
+            let account = utxo_detail.output.to_quisquis_account()?;
+            self.zk_accounts
+                .update_qq_account(&sender_account_index, account)?;
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            if let Err(e) = self.sync_utxo_detail_to_db(sender_account_index, &utxo_detail) {
+                error!("Failed to sync UTXO detail to database: {}", e);
+            }
+        } else {
+            self.zk_accounts.update_balance(&sender_account_index, 0)?;
+            self.zk_accounts
+                .update_on_chain(&sender_account_index, false)?;
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            if let Ok(account) = self.zk_accounts.get_account(&sender_account_index) {
+                let _ = self.update_zk_account_in_db(&account);
+            }
+            self.utxo_details.remove(&sender_account_index);
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            if let Err(e) = self.remove_utxo_detail_from_db(sender_account_index) {
+                error!("Failed to remove UTXO detail from database: {}", e);
+            }
+        }
+
+        Ok(new_account_balances)
+    }
     // -------------------------
     // Trader Order Operations
     // -------------------------
@@ -505,7 +642,8 @@ impl OrderWallet {
             trader_order.available_margin as u64
         );
         self.zk_accounts.update_io_type(&index, IOType::Coin)?;
-
+        let account = utxo_detail.output.to_quisquis_account()?;
+        self.zk_accounts.update_qq_account(&index, account)?;
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         if let Ok(account) = self.zk_accounts.get_account(&index) {
             let _ = self.update_zk_account_in_db(&account);
@@ -1031,7 +1169,15 @@ mod tests {
         let zk_account = order_wallet.zk_accounts.get_account(&account_index)?;
         assert_eq!(zk_account.io_type, IOType::Coin);
         assert_eq!(zk_account.balance, response.available_margin as u64);
-
+        let receiver_account_index = order_wallet.trading_to_trading(account_index).await?;
+        assert_ne!(account_index, receiver_account_index);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&account_index)?
+                .on_chain,
+            false
+        );
         Ok(())
     }
 
@@ -1184,8 +1330,10 @@ mod tests {
     async fn test_get_wallet_list_from_db_with_db_url() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
-        let wallet_list = OrderWallet::get_wallet_list_from_db(Some("./test.db".to_string()))
-            .map_err(|e| e.to_string())?;
+        let mut order_wallet = OrderWallet::new(None).map_err(|e| e.to_string())?;
+        order_wallet.with_db(None, None)?;
+        drop(order_wallet);
+        let wallet_list = OrderWallet::get_wallet_list_from_db(None).map_err(|e| e.to_string())?;
         println!("wallet_list: {:?}", wallet_list);
         Ok(())
     }
@@ -1196,9 +1344,32 @@ mod tests {
         dotenv::dotenv().ok();
         init_logger();
         let mut order_wallet = OrderWallet::new(None).map_err(|e| e.to_string())?;
-        order_wallet.with_db(None, Some("test_wallet2".to_string()))?;
+        order_wallet.with_db(None, None)?;
         let wallet_list = OrderWallet::get_wallet_list_from_db(None).map_err(|e| e.to_string())?;
         println!("wallet_list: {:?}", wallet_list);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_trading_to_trading_multiple_accounts() -> Result<(), String> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let wallet = setup_wallet().await.map_err(|e| e.to_string())?;
+        let zk_accounts = ZkAccountDB::new();
+        let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
+            .map_err(|e| e.to_string())?;
+        order_wallet.with_db(None, Some("test_wallet_multiple_accounts".to_string()))?;
+        let (tx_result, sender_account_index) = order_wallet.funding_to_trading(40000).await?;
+        if tx_result.code != 0 {
+            return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
+        }
+        let balances = vec![5000, 1000, 8000, 600];
+        let new_account_balances = order_wallet
+            .trading_to_trading_multiple_accounts(sender_account_index, balances)
+            .await?;
+        println!("new_account_balances: {:?}", new_account_balances);
+        println!("zk_accounts: {:?}", order_wallet.zk_accounts);
         Ok(())
     }
 }
