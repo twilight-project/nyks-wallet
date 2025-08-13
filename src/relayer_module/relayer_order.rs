@@ -55,14 +55,12 @@ pub async fn create_trader_order(
         0u32,
     )
     .map_err(|e| e.to_string())?;
+    let order_data = CreateTraderOrderClientZkos::decode_from_hex_string(order_tx_message.clone())?;
 
     let response = relayer_api_client
-        .submit_trade_order(CreateTraderOrderClientZkos::decode_from_hex_string(
-            order_tx_message.clone(),
-        )?)
+        .submit_trade_order(order_data)
         .await
         .map_err(|e| e.to_string())?;
-
     Ok(response.id_key.to_string())
 }
 

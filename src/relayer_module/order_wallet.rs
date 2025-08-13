@@ -233,6 +233,13 @@ impl OrderWallet {
         Ok(wallet_list)
     }
 
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn get_wallet_id_from_db(wallet_id: &str, db_url: Option<String>) -> Result<bool, String> {
+        let pool = crate::database::connection::init_pool(db_url)?;
+        run_migrations_once(&pool)?;
+        DatabaseManager::check_wallet_id_exists(&pool, wallet_id)
+    }
+
     /// Derive a child secret key for the given account index from the ZkOS seed.
     pub fn get_secret_key(&self, index: AccountIndex) -> RistrettoSecretKey {
         let key_manager = KeyManager::from_cosmos_signature(self.seed.expose_secret().as_bytes());
@@ -343,11 +350,8 @@ impl OrderWallet {
         if let Ok(account) = self.zk_accounts.get_account(&new_account_index) {
             let _ = self.sync_zk_account_to_db(&account);
         }
-        let receiver_input_string = self
-            .zk_accounts
-            .get_account(&new_account_index)?
-            .get_input_string()?;
 
+        let receiver_input_string = self.zk_accounts.get_account(&new_account_index)?.account;
         let utxo_detail =
             fetch_utxo_details_with_retry(sender_account_address, IOType::Coin).await?;
         let input = utxo_detail.get_input()?;
@@ -356,10 +360,13 @@ impl OrderWallet {
             input,
             receiver_input_string,
             amount,
-            true,
+            false,
             0,
             1u64,
         );
+
+        let encrypt_scalar = tx_wallet.get_encrypt_scalar_hex();
+
         let response = tokio::task::spawn_blocking(move || {
             twilight_client_sdk::chain::tx_commit_broadcast_transaction(
                 tx_wallet.get_tx().ok_or("Failed to get tx")?,
@@ -390,6 +397,12 @@ impl OrderWallet {
         }
         self.zk_accounts.update_on_chain(&new_account_index, true)?;
         self.zk_accounts.update_on_chain(&index, false)?;
+        let account = utxo_detail.output.to_quisquis_account()?;
+
+        self.zk_accounts
+            .update_qq_account(&new_account_index, account)?;
+        self.zk_accounts
+            .update_scalar(&new_account_index, &encrypt_scalar)?;
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         {
@@ -432,7 +445,7 @@ impl OrderWallet {
         if sender_account.balance < sender_transfering_amt {
             return Err(format!("Insufficient balance"));
         }
-        if num_of_new_accounts == 0 || sender_transfering_amt > 9 {
+        if num_of_new_accounts == 0 || num_of_new_accounts > 9 {
             return Err(format!("No new accounts to create"));
         }
         let updated_sender_balance = sender_account.balance - sender_transfering_amt;
@@ -457,15 +470,15 @@ impl OrderWallet {
             sender_account.get_qq_account()?,
             receiver_vec,
         )];
-        debug!("sender_array: {:?}", sender_array);
-        debug!("input_sender: {:?}", input_sender);
-        debug!("updated_sender_balance: {:?}", updated_sender_balance);
-        debug!(
-            "updated_reciever_balance_vec: {:?}",
-            updated_reciever_balance_vec
-        );
-        debug!("commitment_scalar_vec: {:?}", commitment_scalar_vec);
-        debug!("sender_transfering_amt: {:?}", sender_transfering_amt);
+        // debug!("sender_array: {:?}", sender_array);
+        // debug!("input_sender: {:?}", input_sender);
+        // debug!("updated_sender_balance: {:?}", updated_sender_balance);
+        // debug!(
+        //     "updated_reciever_balance_vec: {:?}",
+        //     updated_reciever_balance_vec
+        // );
+        // debug!("commitment_scalar_vec: {:?}", commitment_scalar_vec);
+        // debug!("sender_transfering_amt: {:?}", sender_transfering_amt);
         let tx_wallet = create_private_transfer_transaction_single_source_multiple_recievers(
             sender_array,
             input_sender,
@@ -475,6 +488,10 @@ impl OrderWallet {
             Some(&commitment_scalar_vec),
             1u64,
         )?;
+        let tx = tx_wallet.get_tx().ok_or("Failed to get tx")?;
+        let outputs = tx.get_tx_outputs();
+        let encrypt_scalar = tx_wallet.get_encrypt_scalar();
+
         let response = tokio::task::spawn_blocking(move || {
             twilight_client_sdk::chain::tx_commit_broadcast_transaction(
                 tx_wallet.get_tx().ok_or("Failed to get tx")?,
@@ -482,7 +499,9 @@ impl OrderWallet {
         })
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
+
         debug!("response: {:?}", response);
+        let mut i = 0;
         for (new_account_index, balance) in new_account_balances.iter() {
             let utxo_detail = fetch_utxo_details_with_retry(
                 self.zk_accounts.get_account_address(new_account_index)?,
@@ -497,6 +516,16 @@ impl OrderWallet {
             let account = utxo_detail.output.to_quisquis_account()?;
             self.zk_accounts
                 .update_qq_account(new_account_index, account)?;
+            self.zk_accounts
+                .update_scalar(new_account_index, &encrypt_scalar[i])?;
+            self.zk_accounts.update_account_key(
+                new_account_index,
+                &outputs[i + 1]
+                    .as_output_data()
+                    .get_owner_address()
+                    .ok_or("Failed to get owner address")?,
+            )?;
+            i += 1;
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             if let Ok(account) = self.zk_accounts.get_account(new_account_index) {
                 let _ = self.update_zk_account_in_db(&account);
@@ -567,7 +596,6 @@ impl OrderWallet {
 
         let secret_key = self.get_secret_key(index);
         let r_scalar = self.zk_accounts.get_account(&index)?.get_scalar()?;
-
         let initial_margin = self.zk_accounts.get_account(&index)?.balance;
         let position_value = initial_margin
             .checked_mul(leverage)
@@ -590,7 +618,10 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-
+        debug!(
+            "inserting request_id: {:?} for account index: {:?}",
+            request_id, index
+        );
         self.request_ids.insert(index, request_id.clone());
 
         // Sync to database
@@ -685,6 +716,10 @@ impl OrderWallet {
     pub async fn query_trader_order(&mut self, index: AccountIndex) -> Result<TraderOrder, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
+        debug!(
+            "query_trader_order: account_address: {:?} for account index: {:?}",
+            account_address, index
+        );
         let query_order = query_trader_order_zkos(
             account_address.clone(),
             &secret_key,
@@ -1055,9 +1090,9 @@ impl Drop for OrderWallet {
 
             // Save encrypted wallet if password is available
             if let Some(ref password) = self.wallet_password {
-                if let Err(e) = db_manager.save_encrypted_wallet(&self.wallet, password) {
-                    error!("Failed to persist wallet during drop: {}", e);
-                }
+                // if let Err(e) = db_manager.save_encrypted_wallet(&self.wallet, password) {
+                //     error!("Failed to persist wallet during drop: {}", e);
+                // }
 
                 // Save OrderWallet configuration
                 if let Err(e) = db_manager.save_order_wallet(
@@ -1140,7 +1175,7 @@ mod tests {
     // #[cfg(feature = "sqlite")]
     #[tokio::test]
     #[serial]
-    async fn test_create_order() -> Result<(), String> {
+    async fn test_create_order_complete_cycle() -> Result<(), String> {
         dotenv::dotenv().ok();
         unsafe {
             // std::env::set_var("DATABASE_URL", "./test.db");
@@ -1209,6 +1244,86 @@ mod tests {
                 .on_chain,
             false
         );
+        info!("receiver_account_index: {:?}", receiver_account_index);
+        let result1 = order_wallet
+            .open_trader_order(
+                receiver_account_index,
+                OrderType::MARKET,
+                PositionType::LONG,
+                entry_price,
+                10,
+            )
+            .await?;
+        info!("result1: {:?}", result1);
+        let tx_hash1 = fetch_tx_hash_with_retry(&result1, &order_wallet.relayer_api_client).await?;
+        info!("tx_hash1: {:?}", tx_hash1);
+        assert_eq!(tx_hash1.order_status, OrderStatus::FILLED);
+        let response = order_wallet
+            .query_trader_order(receiver_account_index)
+            .await?;
+        info!("response: {:?}", response);
+        assert_eq!(response.order_status, OrderStatus::FILLED);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&receiver_account_index)?
+                .io_type,
+            IOType::Memo
+        );
+        let result2 = order_wallet
+            .close_trader_order(receiver_account_index, OrderType::MARKET, 0.0)
+            .await?;
+        let tx_hash2 = fetch_tx_hash_with_retry(&result2, &order_wallet.relayer_api_client).await?;
+        assert_eq!(tx_hash2.order_status, OrderStatus::SETTLED);
+        let response2 = order_wallet
+            .query_trader_order(receiver_account_index)
+            .await?;
+        assert_eq!(response2.order_status, OrderStatus::SETTLED);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&receiver_account_index)?
+                .io_type,
+            IOType::Coin
+        );
+        let new_recever_index = order_wallet
+            .trading_to_trading(receiver_account_index)
+            .await?;
+        assert_ne!(receiver_account_index, new_recever_index);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&new_recever_index)?
+                .io_type,
+            IOType::Coin
+        );
+        let result3 = order_wallet
+            .open_trader_order(
+                new_recever_index,
+                OrderType::MARKET,
+                PositionType::LONG,
+                entry_price,
+                10,
+            )
+            .await?;
+        let tx_hash3 = fetch_tx_hash_with_retry(&result3, &order_wallet.relayer_api_client).await?;
+        info!("tx_hash3: {:?}", tx_hash3);
+        assert_eq!(tx_hash3.order_status, OrderStatus::FILLED);
+        let response3 = order_wallet.query_trader_order(new_recever_index).await?;
+        info!("response3: {:?}", response3);
+        assert_eq!(response3.order_status, OrderStatus::FILLED);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&new_recever_index)?
+                .io_type,
+            IOType::Memo
+        );
+        let result4 = order_wallet
+            .close_trader_order(new_recever_index, OrderType::MARKET, 0.0)
+            .await?;
+        debug!("result4: {:?}", result4);
+
         Ok(())
     }
 
@@ -1249,6 +1364,38 @@ mod tests {
                 .get_account(&receiver_account_index)?
                 .on_chain,
             true
+        );
+        let btc_price = order_wallet
+            .relayer_api_client
+            .btc_usd_price()
+            .await
+            .map_err(|e| e.to_string())?;
+        info!("btc_price: {:?}", btc_price);
+        let entry_price = btc_price.price as u64;
+        let result = order_wallet
+            .open_trader_order(
+                receiver_account_index,
+                OrderType::MARKET,
+                PositionType::LONG,
+                entry_price,
+                10,
+            )
+            .await?;
+        info!("result: {:?}", result);
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
+        info!("tx_hash: {:?}", tx_hash);
+        assert_eq!(tx_hash.order_status, OrderStatus::FILLED);
+        let response = order_wallet
+            .query_trader_order(receiver_account_index)
+            .await?;
+        info!("response: {:?}", response);
+        assert_eq!(response.order_status, OrderStatus::FILLED);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&receiver_account_index)?
+                .io_type,
+            IOType::Memo
         );
         Ok(())
     }
@@ -1390,7 +1537,7 @@ mod tests {
         let zk_accounts = ZkAccountDB::new();
         let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
             .map_err(|e| e.to_string())?;
-        order_wallet.with_db(None, Some("test_wallet_multiple_accounts".to_string()))?;
+        // order_wallet.with_db(None, Some("test_wallet_multiple_accounts10".to_string()))?;
         let (tx_result, sender_account_index) = order_wallet.funding_to_trading(40000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
@@ -1401,6 +1548,69 @@ mod tests {
             .await?;
         println!("new_account_balances: {:?}", new_account_balances);
         println!("zk_accounts: {:?}", order_wallet.zk_accounts);
+
+        let btc_price = order_wallet
+            .relayer_api_client
+            .btc_usd_price()
+            .await
+            .map_err(|e| e.to_string())?;
+        info!("btc_price: {:?}", btc_price);
+        let entry_price = btc_price.price as u64;
+        info!(
+            "zk_accounts: {:?}",
+            order_wallet
+                .zk_accounts
+                .get_account(&new_account_balances[0].0)
+        );
+        info!("waiting 10 seconds");
+        sleep(Duration::from_secs(10)).await;
+        let result = order_wallet
+            .open_trader_order(
+                new_account_balances[0].0,
+                OrderType::MARKET,
+                PositionType::LONG,
+                entry_price,
+                10,
+            )
+            .await?;
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
+        assert_eq!(tx_hash.order_status, OrderStatus::FILLED);
+        let response = order_wallet
+            .query_trader_order(new_account_balances[0].0)
+            .await?;
+        assert_eq!(response.order_status, OrderStatus::FILLED);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&new_account_balances[0].0)?
+                .io_type,
+            IOType::Memo
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_load_encrypted_wallet() -> Result<(), String> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let wallet_id = "load_encrypted_wallet_test".to_string();
+        let mut order_wallet;
+        let wallet_exists = OrderWallet::get_wallet_id_from_db(&wallet_id, None)?;
+        if wallet_exists {
+            order_wallet =
+                OrderWallet::load_from_db(wallet_id, None, None).map_err(|e| e.to_string())?;
+        } else {
+            order_wallet = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            order_wallet
+                .with_db(None, Some(wallet_id))
+                .map_err(|e| e.to_string())?;
+        }
+        get_test_tokens(&mut order_wallet.wallet)
+            .await
+            .map_err(|e| e.to_string())?;
+        drop(order_wallet);
         Ok(())
     }
 }

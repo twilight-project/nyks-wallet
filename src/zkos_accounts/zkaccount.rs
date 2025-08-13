@@ -231,6 +231,20 @@ impl ZkAccountDB {
             .io_type = io_type;
         Ok(())
     }
+    pub fn update_scalar(&mut self, index: &u64, scalar: &str) -> Result<(), String> {
+        self.accounts
+            .get_mut(index)
+            .ok_or(format!("Account with index {} does not exist", index))?
+            .scalar = scalar.to_string();
+        Ok(())
+    }
+    pub fn update_account_key(&mut self, index: &u64, account_key: &str) -> Result<(), String> {
+        self.accounts
+            .get_mut(index)
+            .ok_or(format!("Account with index {} does not exist", index))?
+            .account = account_key.to_string();
+        Ok(())
+    }
     pub fn update_on_chain(&mut self, index: &u64, on_chain: bool) -> Result<(), String> {
         // if !self.accounts.contains_key(&index) {
         //     return Err(format!("Account with index {} does not exist", index));

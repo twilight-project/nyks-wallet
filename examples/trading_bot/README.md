@@ -264,22 +264,33 @@ cargo run --bin lending_bot -- \
 
 ### Market Making Strategy
 
-**Approach**: Provides liquidity by placing simultaneous buy/sell orders with real-time price data
+**Approach**: Provides liquidity by placing simultaneous buy/sell orders with real-time price data using ZkOS account management
 
 **Key Components**:
 
 - **Real-time Price Data**: Fetches current BTC/USD prices from relayer API
 - **Enhanced Market Analysis**: Optional order book and recent trades analysis
+- **ZkOS Account Management**: Proper account rotation and lifecycle management
+- **Dynamic Account Pool**: Creates multiple accounts for continuous trading
+- **Full-Amount Orders**: Uses complete account balance per ZkOS rules
 - **Spread Management**: Dynamic spreads based on volatility
 - **Inventory Control**: Balances long/short exposure
-- **Order Refreshing**: Updates orders based on market movement
+- **Account Rotation**: Automatically rotates accounts after settlement
 - **Risk Management**: Hedges excessive inventory
+
+**ZkOS Implementation**:
+
+- Creates 6 trading accounts using `trading_to_trading_multiple_accounts`
+- Each order uses the full account balance (ZkOS requirement)
+- Accounts are rotated after settlement using `trading_to_trading()`
+- Cancelled orders can reuse the same account (no rotation needed)
+- Proper state transitions: Coin → Memo → Coin
 
 **Order Placement**:
 
 - Buy orders: Market price - (spread/2)
 - Sell orders: Market price + (spread/2)
-- Size: Fixed order size with inventory limits
+- Orders use full account balance, not fixed sizes
 - Duration: Orders refreshed every 60 seconds
 
 **Inventory Management**:

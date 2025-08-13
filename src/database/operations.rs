@@ -83,7 +83,10 @@ impl DatabaseManager {
             ))
             .execute(&mut conn)
             .map_err(|e| format!("Failed to save zk_account: {}", e))?;
-        debug!("The upserted row: {}", n);
+        debug!(
+            "The upserted row: {} for account_index: {}",
+            n, zk_account.index
+        );
         Ok(())
     }
 
@@ -105,7 +108,10 @@ impl DatabaseManager {
         ))
         .execute(&mut conn)
         .map_err(|e| format!("Failed to update zk_account: {}", e))?;
-        debug!("The updated row: {}", n);
+        debug!(
+            "The updated row: {} for account_index: {}",
+            n, zk_account.index
+        );
         Ok(())
     }
 
@@ -120,7 +126,10 @@ impl DatabaseManager {
         )
         .execute(&mut conn)
         .map_err(|e| format!("Failed to remove zk_account: {}", e))?;
-        debug!("The deleted row: {:?}", n);
+        debug!(
+            "The deleted row: {:?} for account_index: {}",
+            n, account_index
+        );
         Ok(())
     }
 
@@ -210,7 +219,7 @@ impl DatabaseManager {
             ))
             .execute(&mut conn)
             .map_err(|e| format!("Failed to save encrypted wallet: {}", e))?;
-        debug!("The upserted row: {}", n);
+        debug!("The upserted row: {} for wallet_id: {}", n, self.wallet_id);
         Ok(())
     }
 
@@ -272,7 +281,7 @@ impl DatabaseManager {
             ))
             .execute(&mut conn)
             .map_err(|e| format!("Failed to save order wallet: {}", e))?;
-        debug!("The upserted row: {}", n);
+        debug!("The upserted row: {} for wallet_id: {}", n, self.wallet_id);
         Ok(())
     }
 
@@ -330,7 +339,10 @@ impl DatabaseManager {
             ))
             .execute(&mut conn)
             .map_err(|e| format!("Failed to save UTXO detail: {}", e))?;
-        debug!("The upserted row: {}", n);
+        debug!(
+            "The upserted row: {} for account_index: {}",
+            n, account_index
+        );
         Ok(())
     }
 
@@ -385,7 +397,10 @@ impl DatabaseManager {
         )
         .execute(&mut conn)
         .map_err(|e| format!("Failed to remove UTXO detail: {}", e))?;
-        debug!("The deleted row: {:?}", n);
+        debug!(
+            "The deleted row: {:?} for account_index: {}",
+            n, account_index
+        );
         Ok(())
     }
 
@@ -407,7 +422,10 @@ impl DatabaseManager {
             ))
             .execute(&mut conn)
             .map_err(|e| format!("Failed to save request ID: {}", e))?;
-        debug!("The upserted row : {}", n);
+        debug!(
+            "The upserted row : {} for account_index: {}",
+            n, account_index
+        );
         Ok(())
     }
 
@@ -449,7 +467,10 @@ impl DatabaseManager {
         )
         .execute(&mut conn)
         .map_err(|e| format!("Failed to remove request ID: {}", e))?;
-        debug!("The deleted row: {:?}", n);
+        debug!(
+            "The deleted row: {:?} for account_index: {}",
+            n, account_index
+        );
         Ok(())
     }
 }
@@ -510,7 +531,10 @@ fn derive_key(password: &SecretString, salt: &[u8]) -> [u8; 32] {
     // Use secure password derivation
     SecurePassword::derive_key_from_passphrase(password, salt).unwrap_or_else(|_| {
         // Fallback to simple derivation if secure method fails
-        let mut hasher = Sha256::new();
+
+        use log::info;
+        info!("Fallback to simple derivation");
+        let mut hasher = Sha256::default();
         hasher.update(password.expose_secret().as_bytes());
         hasher.update(salt);
         let key_bytes = hasher.finalize();

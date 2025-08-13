@@ -15,9 +15,9 @@ use twilight_client_sdk::{
     relayer_rpcclient::method::UtxoDetailResponse, relayer_types::TxHash, zkvm::IOType,
 };
 // Retry configuration constants
-const DEFAULT_UTXO_ATTEMPTS: u32 = 20;
+const DEFAULT_UTXO_ATTEMPTS: u32 = 30;
 // const LONG_UTXO_ATTEMPTS: u32 = 60;
-const TXHASH_ATTEMPTS: u32 = 20;
+const TXHASH_ATTEMPTS: u32 = 50;
 const RETRY_DELAY_MS: u64 = 1000;
 /// Constructs a `MsgMintBurnTradingBtc` for the given wallet/zk account, then signs it and
 /// returns the base64-encoded transaction ready for broadcast.
@@ -104,6 +104,7 @@ pub async fn fetch_utxo_details_with_retry(
     io_type: IOType,
 ) -> Result<UtxoDetailResponse, String> {
     let mut attempts = 0;
+    info!("fetch_utxo_details_with_retry: account_id: {}", account_id);
     loop {
         let account_id_clone = account_id.clone();
         match tokio::task::spawn_blocking(move || {
@@ -120,8 +121,8 @@ pub async fn fetch_utxo_details_with_retry(
                     attempts += 1;
                     if attempts >= DEFAULT_UTXO_ATTEMPTS {
                         error!(
-                            "Failed to get utxo details after {} attempts: {}",
-                            DEFAULT_UTXO_ATTEMPTS, err
+                            "Failed to get utxo details after {} attempts: {} for account_id: {}",
+                            DEFAULT_UTXO_ATTEMPTS, err, account_id
                         );
                         return Err(format!(
                             "Failed to get utxo details after {} attempts: {}",
@@ -169,7 +170,20 @@ pub async fn fetch_tx_hash_with_retry(
             }
             sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
         } else {
-            return Ok(response[0].clone());
+            // Find TxHash with latest datetime
+            // let latest_tx = response
+            //     .iter()
+            //     .max_by_key(|tx| tx.datetime.clone())
+            //     .unwrap_or(&response[0]);
+            // // return Ok(response[0].clone());
+            // return Ok(latest_tx.clone());
+
+            let latest_tx = response
+                .iter()
+                .max_by_key(|tx| (tx.datetime.trim().parse::<i64>().unwrap_or(i64::MIN), tx.id))
+                .unwrap_or(&response[0]);
+
+            return Ok(latest_tx.clone());
         }
     }
 }

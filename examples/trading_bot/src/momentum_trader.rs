@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, time::Duration};
 use tokio::time::{interval, sleep};
 use twilight_client_sdk::relayer_types::{OrderStatus, OrderType, PositionType};
+use twilight_client_sdk::zkvm::IOType;
 
 /// Momentum trader command line arguments
 #[derive(Parser, Debug)]
@@ -40,7 +41,7 @@ struct Args {
     rsi_period: usize,
 
     /// Position size in satoshis
-    #[arg(short, long, default_value = "5000")]
+    #[arg(long, default_value = "5000")]
     position_size: u64,
 
     /// Maximum leverage to use
@@ -76,8 +77,8 @@ struct Args {
 struct MomentumTrader {
     /// Configuration
     config: MomentumConfig,
-    /// Trading account
-    trading_account: Option<AccountIndex>,
+    /// Available trading accounts (fresh, ready to use)
+    available_accounts: Vec<(AccountIndex, u64)>, // (account_index, balance)
     /// Price history for analysis
     price_history: VecDeque<PricePoint>,
     /// Current position
@@ -110,7 +111,7 @@ struct PricePoint {
     volume: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Position {
     account_index: AccountIndex,
     position_type: PositionType,
@@ -173,7 +174,7 @@ impl MomentumTrader {
                 paper_trading: args.paper_trading,
                 min_signal_strength: args.min_signal_strength,
             },
-            trading_account: None,
+            available_accounts: Vec::new(),
             price_history: VecDeque::with_capacity(max_history),
             current_position: None,
             indicators: TechnicalIndicators::default(),
@@ -181,21 +182,62 @@ impl MomentumTrader {
         }
     }
 
-    /// Initialize trading account
-    async fn initialize_account(&mut self, order_wallet: &mut OrderWallet) -> Result<()> {
-        info!("Initializing momentum trading account...");
+    /// Initialize trading accounts using ZkOS pattern
+    async fn initialize_accounts(&mut self, order_wallet: &mut OrderWallet) -> Result<()> {
+        info!("Initializing momentum trading accounts using ZkOS pattern...");
 
-        let (tx_result, account_index) = order_wallet
+        // Step 1: Create a master trading account with the full capital
+        let (tx_result, master_account) = order_wallet
             .funding_to_trading(self.config.initial_capital)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to fund trading account: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create master trading account: {}", e))?;
+
+        if tx_result.code != 0 {
+            return Err(anyhow::anyhow!(
+                "Master account creation failed with code: {}",
+                tx_result.code
+            ));
+        }
 
         info!(
-            "Created trading account {} with {} sats (tx: {})",
-            account_index, self.config.initial_capital, tx_result.tx_hash
+            "Created master trading account {} with {} sats (tx: {})",
+            master_account, self.config.initial_capital, tx_result.tx_hash
         );
 
-        self.trading_account = Some(account_index);
+        // Step 2: Split the master account into multiple accounts for position rotation
+        // Create 3 accounts to allow for position rotation
+        let account_count = 3;
+        let capital_per_account = self.config.initial_capital / account_count;
+        let splits = vec![capital_per_account; account_count as usize];
+
+        info!(
+            "Splitting master account into {} accounts with {} sats each",
+            account_count, capital_per_account
+        );
+
+        let accounts = order_wallet
+            .trading_to_trading_multiple_accounts(master_account, splits)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to split accounts: {}", e))?;
+
+        // Store all accounts as available for trading
+        self.available_accounts = accounts;
+
+        info!(
+            "Successfully created {} trading accounts, ready for momentum trading",
+            self.available_accounts.len()
+        );
+
+        // Log account details
+        for (i, (account_index, balance)) in self.available_accounts.iter().enumerate() {
+            info!(
+                "Account {}: index={}, balance={} sats",
+                i + 1,
+                account_index,
+                balance
+            );
+        }
+
         Ok(())
     }
 
@@ -436,19 +478,89 @@ impl MomentumTrader {
         };
     }
 
-    /// Check current position and manage exits
+    /// Check current position and manage exits with proper account rotation
     async fn check_position(&mut self, order_wallet: &mut OrderWallet) -> Result<()> {
-        if let Some(position) = &self.current_position {
+        if let Some(position) = &self.current_position.clone() {
             // Query order status
             match order_wallet
                 .query_trader_order(position.account_index)
                 .await
             {
                 Ok(trader_order) => {
-                    if trader_order.order_status == OrderStatus::FILLED {
-                        // Check exit conditions
-                        if self.should_exit_position(position) {
-                            self.close_position(order_wallet).await?;
+                    match trader_order.order_status {
+                        OrderStatus::FILLED => {
+                            // Check exit conditions
+                            if self.should_exit_position(position) {
+                                self.close_position(order_wallet).await?;
+                            }
+                        }
+                        OrderStatus::SETTLED => {
+                            info!(
+                                "Position settled on account {}, rotating account",
+                                position.account_index
+                            );
+
+                            // Rotate the account to get a fresh one
+                            match order_wallet
+                                .trading_to_trading(position.account_index)
+                                .await
+                            {
+                                Ok(new_account_index) => {
+                                    // Query the new account balance
+                                    if let Ok(new_balance) = self
+                                        .get_account_balance(order_wallet, new_account_index)
+                                        .await
+                                    {
+                                        info!(
+                                            "Account rotated: {} -> {} (balance: {} sats)",
+                                            position.account_index, new_account_index, new_balance
+                                        );
+
+                                        // Add the new account back to available pool
+                                        self.available_accounts
+                                            .push((new_account_index, new_balance));
+
+                                        // Clear current position since it's settled and rotated
+                                        self.current_position = None;
+                                    } else {
+                                        error!(
+                                            "Failed to query balance for rotated account {}",
+                                            new_account_index
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to rotate account {}: {}",
+                                        position.account_index, e
+                                    );
+                                }
+                            }
+                        }
+                        OrderStatus::CANCELLED => {
+                            info!(
+                                "Position cancelled on account {}, can reuse account",
+                                position.account_index
+                            );
+
+                            // For cancelled orders, we can reuse the same account (no rotation needed)
+                            if let Ok(balance) = self
+                                .get_account_balance(order_wallet, position.account_index)
+                                .await
+                            {
+                                self.available_accounts
+                                    .push((position.account_index, balance));
+                            }
+                            self.current_position = None;
+                        }
+                        OrderStatus::PENDING => {
+                            // Position is still pending, nothing to do
+                        }
+                        _ => {
+                            warn!(
+                                "Position on account {} has status: {:?}",
+                                position.account_index, trader_order.order_status
+                            );
                         }
                     }
                 }
@@ -459,6 +571,23 @@ impl MomentumTrader {
         }
 
         Ok(())
+    }
+
+    /// Helper to get account balance
+    async fn get_account_balance(
+        &self,
+        order_wallet: &OrderWallet,
+        account_index: AccountIndex,
+    ) -> Result<u64> {
+        // Try to get balance from ZkAccountDB
+        if let Some(balance) = order_wallet.zk_accounts.get_balance(&account_index) {
+            Ok(balance)
+        } else {
+            Err(anyhow::anyhow!(
+                "Account {} not found in ZkAccountDB",
+                account_index
+            ))
+        }
     }
 
     /// Determine if current position should be closed
@@ -578,15 +707,46 @@ impl MomentumTrader {
         Ok(())
     }
 
+    /// Get an available account that's ready for trading (Coin state, non-zero balance)
+    fn get_available_account(&mut self, order_wallet: &OrderWallet) -> Option<(AccountIndex, u64)> {
+        // Find the first account that's in the correct state
+        for i in 0..self.available_accounts.len() {
+            let (account_index, _balance) = self.available_accounts[i];
+
+            // Check account state
+            if let Ok(account) = order_wallet.zk_accounts.get_account(&account_index) {
+                if account.io_type == IOType::Coin && account.balance > 0 {
+                    // Remove and return this account
+                    return Some(self.available_accounts.remove(i));
+                } else {
+                    info!(
+                        "Skipping account {}: io_type={:?}, balance={}",
+                        account_index, account.io_type, account.balance
+                    );
+                }
+            } else {
+                warn!("Cannot access account {}", account_index);
+            }
+        }
+
+        // No valid accounts found
+        info!(
+            "No accounts in valid state (Coin, balance > 0) found in pool of {}",
+            self.available_accounts.len()
+        );
+        None
+    }
+
     /// Open a new position
     async fn open_position(
         &mut self,
         order_wallet: &mut OrderWallet,
         position_type: PositionType,
     ) -> Result<()> {
-        let account_index = self
-            .trading_account
-            .context("Trading account not initialized")?;
+        // Get an available account for the position
+        let (account_index, account_balance) = self
+            .get_available_account(order_wallet)
+            .context("No available accounts for opening position")?;
 
         let current_price = self
             .price_history
@@ -594,22 +754,62 @@ impl MomentumTrader {
             .map(|p| p.price)
             .context("No price data available")?;
 
+        // Validate account state before placing order
+        let account = order_wallet
+            .zk_accounts
+            .get_account(&account_index)
+            .map_err(|e| anyhow::anyhow!("Account {} not found: {}", account_index, e))?;
+
+        info!(
+            "Account {} state: balance={}, io_type={:?}",
+            account_index, account.balance, account.io_type
+        );
+
+        // Check if account is in correct state for placing orders
+        if account.io_type != IOType::Coin {
+            return Err(anyhow::anyhow!(
+                "Account {} is not in Coin state (current: {:?}). Cannot place order.",
+                account_index,
+                account.io_type
+            ));
+        }
+
+        // Validate order parameters
+        if current_price <= 0.0 {
+            return Err(anyhow::anyhow!("Invalid price: {}", current_price));
+        }
+
         // Calculate dynamic leverage based on signal strength
         let leverage =
             (self.indicators.signal_strength * self.config.max_leverage as f64).ceil() as u64;
         let leverage = leverage.max(1).min(self.config.max_leverage);
 
+        if leverage == 0 || leverage > 50 {
+            return Err(anyhow::anyhow!("Invalid leverage: {}", leverage));
+        }
+
         if self.config.paper_trading {
             info!(
-                "Paper trading: Would open {:?} position at {:.2} with {}x leverage (signal: {:.3})",
-                position_type, current_price, leverage, self.indicators.signal_strength
+                "Paper trading: Would open {:?} position at {:.2} with {}x leverage using {} sats (signal: {:.3})",
+                position_type,
+                current_price,
+                leverage,
+                account_balance,
+                self.indicators.signal_strength
             );
+            // Return account to available pool since we didn't actually use it
+            self.available_accounts
+                .push((account_index, account_balance));
             return Ok(());
         }
 
         info!(
-            "Opening {:?} position at {:.2} with {}x leverage (signal: {:.3})",
-            position_type, current_price, leverage, self.indicators.signal_strength
+            "Opening {:?} position at {:.2} with {}x leverage using {} sats (signal: {:.3})",
+            position_type,
+            current_price,
+            leverage,
+            account_balance,
+            self.indicators.signal_strength
         );
 
         let request_id = order_wallet
@@ -621,7 +821,16 @@ impl MomentumTrader {
                 leverage,
             )
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to open position: {}", e))?;
+            .map_err(|e| {
+                // Return account to available pool if order failed
+                self.available_accounts
+                    .push((account_index, account_balance));
+                anyhow::anyhow!(
+                    "Failed to open position on account {}: {}",
+                    account_index,
+                    e
+                )
+            })?;
 
         // Calculate stop loss and take profit
         let stop_loss = match position_type {
@@ -638,7 +847,7 @@ impl MomentumTrader {
             account_index,
             position_type,
             entry_price: current_price,
-            size: self.config.position_size,
+            size: account_balance, // Use full account balance per ZkOS rules
             leverage,
             stop_loss,
             take_profit,
@@ -662,6 +871,8 @@ impl MomentumTrader {
                     "Paper trading: Would close position on account {}",
                     position.account_index
                 );
+                // Return the position since we're just simulating
+                self.current_position = Some(position);
                 return Ok(());
             }
 
@@ -670,7 +881,13 @@ impl MomentumTrader {
             let close_request_id = order_wallet
                 .close_trader_order(position.account_index, OrderType::MARKET, 0.0)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to close position: {}", e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to close position on account {}: {}",
+                        position.account_index,
+                        e
+                    )
+                })?;
 
             // Calculate P&L (simplified)
             if let Some(current_price) = self.price_history.back().map(|p| p.price) {
@@ -694,6 +911,10 @@ impl MomentumTrader {
                     pnl, close_request_id
                 );
             }
+
+            // Note: The position will transition to SETTLED state and be handled in check_position()
+            // where the account will be rotated and returned to the available pool
+            info!("Position closing initiated, will be rotated when settled");
         }
 
         Ok(())
@@ -702,14 +923,27 @@ impl MomentumTrader {
     /// Log current trader status
     fn log_status(&mut self) {
         info!("=== Momentum Trader Status ===");
+
+        // Account information
+        info!("Available accounts: {}", self.available_accounts.len());
+        let total_available_balance: u64 = self
+            .available_accounts
+            .iter()
+            .map(|(_, balance)| balance)
+            .sum();
+        info!("Total available balance: {} sats", total_available_balance);
+
+        // Position information
         if let Some(position) = &self.current_position {
             info!(
-                "Current position: {:?} at {:.2}",
-                position.position_type, position.entry_price
+                "Current position: {:?} at {:.2} using {} sats on account {}",
+                position.position_type, position.entry_price, position.size, position.account_index
             );
         } else {
             info!("No current position");
         }
+
+        // Technical analysis
         info!("Signal strength: {:.3}", self.indicators.signal_strength);
         info!("Trend: {:?}", self.indicators.trend_direction);
         if let (Some(fast_ma), Some(slow_ma), Some(rsi)) = (
@@ -722,12 +956,18 @@ impl MomentumTrader {
                 fast_ma, slow_ma, rsi
             );
         }
+
+        // Trading statistics
         info!("Total trades: {}", self.stats.total_trades);
         if self.stats.total_trades > 0 {
             self.stats.win_rate = self.stats.winning_trades as f64 / self.stats.total_trades as f64;
             info!("Win rate: {:.2}%", self.stats.win_rate * 100.0);
         }
         info!("Total P&L: {:.2}", self.stats.total_pnl);
+        info!(
+            "Max profit: {:.2}, Max drawdown: {:.2}",
+            self.stats.max_profit, self.stats.max_drawdown
+        );
         info!("===============================");
     }
 }
@@ -759,7 +999,8 @@ async fn main() -> Result<()> {
 
     // Initialize OrderWallet
     let mut order_wallet = OrderWallet::new(None).context("Failed to create OrderWallet")?;
-
+    // Initialize OrderWallet
+    let _ = nyks_wallet::wallet::get_test_tokens(&mut order_wallet.wallet).await?;
     // Check initial balance
     let initial_balance = order_wallet
         .wallet
@@ -780,11 +1021,11 @@ async fn main() -> Result<()> {
         ));
     }
 
-    // Initialize trading account
+    // Initialize trading accounts
     trader
-        .initialize_account(&mut order_wallet)
+        .initialize_accounts(&mut order_wallet)
         .await
-        .context("Failed to initialize trading account")?;
+        .context("Failed to initialize trading accounts")?;
 
     // Set up shutdown handler
     let shutdown_result = tokio::select! {
