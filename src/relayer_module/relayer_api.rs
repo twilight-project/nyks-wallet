@@ -1,3 +1,15 @@
+//! Relayer JSON-RPC API client for interacting with the Twilight relayer service.
+//!
+//! This module provides a comprehensive HTTP client for all relayer endpoints including:
+//! - Market data (prices, candles, order books)
+//! - Trading operations (submit, settle, cancel orders)
+//! - Historical data (prices, funding rates, fees)
+//! - Order management and querying
+//! - Pool and liquidity information
+//!
+//! The client handles automatic serialization/deserialization of ZkOS transaction types
+//! and provides a clean async interface for all relayer operations.
+
 use super::relayer_types::{
     BtcUsdPrice, Candle, Candles, FeeHistory, FundingRate, HistoricalFeeArgs,
     HistoricalFundingArgs, HistoricalPriceArgs, LendOrder, LendPoolInfo, OrderBook, PositionSize,
@@ -17,16 +29,47 @@ use twilight_client_sdk::relayer_types::{
     ExecuteTraderOrderZkos, QueryLendOrderZkos, QueryTraderOrderZkos,
 };
 
+/// Wrapper for hex-encoded binary data sent to relayer endpoints.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HexEncodedData {
     pub data: String,
 }
+
+/// JSON-RPC HTTP client for the Twilight relayer API.
+///
+/// Provides async methods for all relayer endpoints including market data,
+/// trading operations, historical queries, and pool information.
+///
+/// # Example
+///
+/// ```no_run
+/// use nyks_wallet::relayer_module::relayer_api::RelayerJsonRpcClient;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let client = RelayerJsonRpcClient::new("http://0.0.0.0:8088/api")?;
+///     
+///     // Get current BTC price
+///     let price = client.btc_usd_price().await?;
+///     println!("BTC/USD: ${}", price.price);
+///     
+///     // Get order book
+///     let order_book = client.open_limit_orders().await?;
+///     println!("Order book: {:?}", order_book);
+///     
+///     Ok(())
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct RelayerJsonRpcClient {
     client: HttpClient,
 }
 
 impl RelayerJsonRpcClient {
+    /// Create a new relayer client with the specified endpoint URL.
+    ///
+    /// # Arguments
+    /// * `url` - The base URL of the relayer API (e.g., "http://0.0.0.0:8088/api")
     pub fn new(url: &str) -> Result<Self, RpcError> {
         let client = HttpClientBuilder::default()
             .request_timeout(std::time::Duration::from_secs(30))
@@ -34,10 +77,16 @@ impl RelayerJsonRpcClient {
         Ok(Self { client })
     }
 
+    // -------------------------
+    // Market Data APIs
+    // -------------------------
+
+    /// Get the current BTC/USD price from the relayer.
     pub async fn btc_usd_price(&self) -> Result<BtcUsdPrice, RpcError> {
         self.client.request("btc_usd_price", rpc_params![]).await
     }
 
+    /// Get historical BTC/USD price data for a given time range.
     pub async fn historical_price(
         &self,
         params: HistoricalPriceArgs,
@@ -47,6 +96,7 @@ impl RelayerJsonRpcClient {
             .await
     }
 
+    /// Get candlestick/OHLCV data for price charting.
     pub async fn candle_data(&self, params: Candles) -> Result<Vec<Candle>, RpcError> {
         self.client
             .request("candle_data", AsRpcParams(params))
@@ -104,10 +154,16 @@ impl RelayerJsonRpcClient {
             .await
     }
 
+    /// Get the current server time in UTC.
     pub async fn server_time(&self) -> Result<DateTime<Utc>, RpcError> {
         self.client.request("server_time", rpc_params![]).await
     }
 
+    // -------------------------
+    // Order Query APIs
+    // -------------------------
+
+    /// Query trader order information using ZkOS parameters.
     pub async fn trader_order_info(
         &self,
         tx: QueryTraderOrderZkos,
@@ -156,6 +212,11 @@ impl RelayerJsonRpcClient {
             .await
     }
 
+    // -------------------------
+    // Order Submission APIs
+    // -------------------------
+
+    /// Submit a trader order to the relayer for execution.
     pub async fn submit_trade_order(
         &self,
         tx: CreateTraderOrderClientZkos,
