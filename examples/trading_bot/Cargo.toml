@@ -1,0 +1,40 @@
+[package]
+name = "trading_bot_example"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[[bin]]
+name = "simple_market_maker"
+path = "src/simple_market_maker.rs"
+
+[[bin]]
+name = "momentum_trader"
+path = "src/momentum_trader.rs"
+
+[[bin]]
+name = "lending_bot"
+path = "src/lending_bot.rs"
+
+[[bin]]
+name = "test_market_data"
+path = "src/test_market_data.rs"
+
+[dependencies]
+nyks-wallet = { path = "../../" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+env_logger = "0.11"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+dotenv = "0.15"
+clap = { version = "4.0", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+
+# External dependencies for twilight-client-sdk types
+twilight-client-sdk = { path = "../../../twilight-client-sdk" }

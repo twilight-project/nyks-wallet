@@ -701,25 +701,6 @@ impl OrderWallet {
         Ok(response)
     }
 
-    pub async fn query_lend_order(&mut self, index: AccountIndex) -> Result<LendOrder, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_secret_key(index);
-        let query_order = query_lend_order_zkos(
-            account_address.clone(),
-            &secret_key,
-            account_address.clone(),
-            OrderStatus::LENDED.to_str(),
-        );
-        let query_order_zkos = QueryLendOrderZkos::decode_from_hex_string(query_order)?;
-        let response = self
-            .relayer_api_client
-            .lend_order_info(query_order_zkos)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        Ok(response)
-    }
-
     pub async fn cancel_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
@@ -806,6 +787,25 @@ impl OrderWallet {
         }
 
         Ok(request_id)
+    }
+
+    pub async fn query_lend_order(&mut self, index: AccountIndex) -> Result<LendOrder, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let query_order = query_lend_order_zkos(
+            account_address.clone(),
+            &secret_key,
+            account_address.clone(),
+            OrderStatus::LENDED.to_str(),
+        );
+        let query_order_zkos = QueryLendOrderZkos::decode_from_hex_string(query_order)?;
+        let response = self
+            .relayer_api_client
+            .lend_order_info(query_order_zkos)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(response)
     }
 
     pub async fn close_lend_order(&mut self, index: AccountIndex) -> Result<String, String> {
