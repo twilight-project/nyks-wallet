@@ -60,13 +60,10 @@ jsonrpsee = { version = "0.25.1", features = [
     "http-client",
     "client",
 ] }
-# relayer-core = { version = "0.1.0", path = "../relayer-core" }
+
 [dependencies.twilight-client-sdk]
 git = "https://github.com/twilight-project/twilight-client-sdk.git"
-# branch = "develop"
-# tag = "v0.0.1"
-branch = "develop-merge-agent"
-# path = "../twilight-client-sdk"
+tag = "v0.0.1-validator-wallet"
 
 [dependencies.utxo-in-memory]
 git = "https://github.com/twilight-project/zkos-rust.git"
