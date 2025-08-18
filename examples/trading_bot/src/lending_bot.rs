@@ -18,10 +18,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use log::{error, info, warn};
 use nyks_wallet::relayer_module::order_wallet::{AccountIndex, OrderWallet};
+use nyks_wallet::relayer_module::relayer_types::{LendOrder, OrderStatus};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use tokio::time::{interval, sleep};
-use twilight_client_sdk::relayer_types::{LendOrder, OrderStatus};
 
 /// Lending bot command line arguments
 #[derive(Parser, Debug)]
@@ -296,7 +296,7 @@ impl LendingBot {
 
     /// Get an available account that's ready for lending (Coin state, non-zero balance)
     fn get_available_account(&mut self, order_wallet: &OrderWallet) -> Option<(AccountIndex, u64)> {
-        use twilight_client_sdk::zkvm::IOType;
+        use nyks_wallet::relayer_module::relayer_types::IOType;
 
         // Find the first account that's in the correct state
         for i in 0..self.available_accounts.len() {
@@ -337,7 +337,7 @@ impl LendingBot {
             if let Some(position) = self.active_positions.get_mut(&account_index) {
                 match order_wallet.query_lend_order(account_index).await {
                     Ok(lend_order) => {
-                        use twilight_client_sdk::relayer_types::OrderStatus;
+                        use nyks_wallet::relayer_module::relayer_types::OrderStatus;
 
                         // Update position data
                         position.current_value = lend_order.balance as u64;
@@ -358,7 +358,10 @@ impl LendingBot {
                                     &lend_order,
                                     &self.market_data,
                                 ) {
-                                    info!("Strategy criteria met, closing lending position on account {}", account_index);
+                                    info!(
+                                        "Strategy criteria met, closing lending position on account {}",
+                                        account_index
+                                    );
 
                                     // Close the position to initiate settlement
                                     match order_wallet.close_lend_order(account_index).await {
@@ -601,7 +604,7 @@ impl LendingBot {
         account_index: AccountIndex,
         account_balance: u64, // Full account balance - must be used entirely
     ) -> Result<()> {
-        use twilight_client_sdk::zkvm::IOType;
+        use nyks_wallet::relayer_module::relayer_types::IOType;
 
         if self.config.paper_trading {
             info!(

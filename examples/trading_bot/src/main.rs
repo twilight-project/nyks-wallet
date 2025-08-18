@@ -20,10 +20,12 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use log::{error, info, warn};
 use nyks_wallet::relayer_module::order_wallet::{AccountIndex, OrderWallet, RequestId};
+use nyks_wallet::relayer_module::relayer_types::{
+    IOType, OrderStatus, OrderType, PositionType, TraderOrder,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use tokio::time::{interval, sleep};
-use twilight_client_sdk::relayer_types::{OrderStatus, OrderType, PositionType, TraderOrder};
 
 /// Trading bot command line arguments
 #[derive(Parser, Debug)]

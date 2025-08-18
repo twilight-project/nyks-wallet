@@ -18,11 +18,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use log::{error, info, warn};
 use nyks_wallet::relayer_module::order_wallet::{AccountIndex, OrderWallet};
+use nyks_wallet::relayer_module::relayer_types::{IOType, OrderStatus, OrderType, PositionType};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use tokio::time::{interval, sleep};
-use twilight_client_sdk::relayer_types::{OrderStatus, OrderType, PositionType};
-use twilight_client_sdk::zkvm::IOType;
 /// Market maker bot command line arguments
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
