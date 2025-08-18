@@ -5,15 +5,16 @@ This package contains comprehensive examples of trading bots built with the Nyks
 ## 📑 Table of Contents
 
 1. [Overview](#overview)
-2. [Prerequisites](#prerequisites)
-3. [Installation](#installation)
-4. [Available Bots](#available-bots)
-5. [Configuration](#configuration)
-6. [Usage Examples](#usage-examples)
-7. [Strategy Details](#strategy-details)
-8. [Risk Management](#risk-management)
-9. [Best Practices](#best-practices)
-10. [Troubleshooting](#troubleshooting)
+2. [Documentation](#documentation)
+3. [Prerequisites](#prerequisites)
+4. [Installation](#installation)
+5. [Available Bots](#available-bots)
+6. [Configuration](#configuration)
+7. [Usage Examples](#usage-examples)
+8. [Strategy Details](#strategy-details)
+9. [Risk Management](#risk-management)
+10. [Best Practices](#best-practices)
+11. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -26,6 +27,12 @@ The trading bot examples showcase how to:
 - **Monitor performance** with comprehensive statistics and logging
 
 All bots support both **live trading** and **paper trading** modes, making them perfect for testing strategies before risking real capital.
+
+## 📚 Documentation
+
+Detailed documentation for each bot can be found in the [`docs`](./docs) directory. This includes in-depth explanations of strategies, configuration options, and ZkOS compliance details.
+
+See the [Documentation Hub](./docs/README.md) for a complete list of documents.
 
 ## Prerequisites
 
@@ -79,6 +86,8 @@ Before running the trading bots, ensure you have:
 - **Features**: Advanced risk management, multi-account setup, performance tracking
 - **Best for**: Sophisticated traders, strategy research, portfolio diversification
 
+For more details, see the [**Full Documentation**](./docs/main.md).
+
 ```bash
 cargo run --bin main -- --strategy momentum --initial-capital 100000 --max-leverage 10
 ```
@@ -90,6 +99,8 @@ cargo run --bin main -- --strategy momentum --initial-capital 100000 --max-lever
 - **Strategy**: Places buy/sell orders around market price
 - **Features**: Inventory management, dynamic spreads, risk controls
 - **Best for**: Liquidity provision, consistent returns, low-risk trading
+
+For more details, see the [**Full Documentation**](./docs/simple_market_maker.md).
 
 ```bash
 # Basic market maker with real price data from relayer API
@@ -107,6 +118,8 @@ cargo run --bin simple_market_maker -- --spread 0.002 --order-size 1000 --enhanc
 - **Features**: Multiple timeframes, signal strength analysis, adaptive position sizing
 - **Best for**: Trend following, technical analysis, medium-term positions
 
+For more details, see the [**Full Documentation**](./docs/momentum_trader.md).
+
 ```bash
 cargo run --bin momentum_trader -- --fast-ma 10 --slow-ma 30 --rsi-period 14 --position-size 5000
 ```
@@ -119,6 +132,8 @@ cargo run --bin momentum_trader -- --fast-ma 10 --slow-ma 30 --rsi-period 14 --p
 - **Features**: Rate optimization, auto-reinvestment, exposure management
 - **Best for**: Passive income, low-risk yield generation, capital efficiency
 
+For more details, see the [**Full Documentation**](./docs/lending_bot.md).
+
 ```bash
 cargo run --bin lending_bot -- --min-rate 0.05 --max-exposure 0.8 --lending-amount 10000
 ```
@@ -130,6 +145,8 @@ cargo run --bin lending_bot -- --min-rate 0.05 --max-exposure 0.8 --lending-amou
 - **Purpose**: Tests relayer API market data endpoints
 - **Features**: Price fetching, order book analysis, recent trades, funding rates
 - **Best for**: API testing, debugging connectivity, understanding data formats
+
+For more details, see the [**Full Documentation**](./docs/test_market_data.md).
 
 ```bash
 cargo run --bin test_market_data
