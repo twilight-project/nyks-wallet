@@ -1,11 +1,11 @@
 use super::encrypted_account::{EncryptedAccount, KeyManager};
-use address::Network;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use twilight_client_sdk::{
+    address::Network,
     quisquislib::{
         Account, ElGamalCommitment, RistrettoSecretKey, keys::PublicKey,
         ristretto::RistrettoPublicKey,

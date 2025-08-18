@@ -40,11 +40,11 @@ struct Args {
     lending_amount: u64,
 
     /// Initial capital in satoshis
-    #[arg(short, long, default_value = "100000")]
+    #[arg(short, long, default_value = "50000")]
     initial_capital: u64,
 
     /// Rate monitoring interval in seconds
-    #[arg(short, long, default_value = "120")]
+    #[arg(short, long, default_value = "5")]
     monitoring_interval: u64,
 
     /// Enable paper trading mode
@@ -64,12 +64,10 @@ struct Args {
 struct LendingBot {
     /// Configuration
     config: LendingConfig,
-    /// Lending accounts
-    lending_accounts: Vec<AccountIndex>,
+    /// Available lending accounts (fresh, ready to use)
+    available_accounts: Vec<(AccountIndex, u64)>, // (account_index, balance)
     /// Active lending positions
     active_positions: HashMap<AccountIndex, LendingPosition>,
-    /// Available capital for lending
-    available_capital: u64,
     /// Statistics
     stats: LendingStats,
     /// Market data
@@ -134,32 +132,66 @@ impl LendingBot {
                 max_positions: args.max_positions,
                 auto_reinvest: args.auto_reinvest,
             },
-            lending_accounts: Vec::new(),
+            available_accounts: Vec::new(),
             active_positions: HashMap::new(),
-            available_capital: args.initial_capital,
             stats: LendingStats::default(),
             market_data: LendingMarketData::default(),
         }
     }
 
-    /// Initialize lending accounts
+    /// Initialize lending accounts using ZkOS pattern
     async fn initialize_accounts(&mut self, order_wallet: &mut OrderWallet) -> Result<()> {
-        info!("Initializing lending accounts...");
+        info!("Initializing lending accounts using ZkOS pattern...");
 
-        let account_capital = self.config.initial_capital / self.config.max_positions as u64;
+        // Step 1: Create a master trading account with the full capital
+        let (tx_result, master_account) = order_wallet
+            .funding_to_trading(self.config.initial_capital)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create master lending account: {}", e))?;
 
-        for i in 0..self.config.max_positions {
-            let (tx_result, account_index) = order_wallet
-                .funding_to_trading(account_capital)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to fund lending account {}: {}", i, e))?;
+        if tx_result.code != 0 {
+            return Err(anyhow::anyhow!(
+                "Master account creation failed with code: {}",
+                tx_result.code
+            ));
+        }
 
+        info!(
+            "Created master lending account {} with {} sats (tx: {})",
+            master_account, self.config.initial_capital, tx_result.tx_hash
+        );
+
+        // Step 2: Split the master account into multiple smaller accounts for lending
+        let account_count = self.config.max_positions;
+        let capital_per_account = self.config.initial_capital / account_count as u64;
+        let splits = vec![capital_per_account; account_count as usize];
+
+        info!(
+            "Splitting master account into {} accounts with {} sats each",
+            account_count, capital_per_account
+        );
+
+        let accounts = order_wallet
+            .trading_to_trading_multiple_accounts(master_account, splits)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to split accounts: {}", e))?;
+
+        // Store all accounts as available for lending
+        self.available_accounts = accounts;
+
+        info!(
+            "Successfully created {} lending accounts, ready for lending",
+            self.available_accounts.len()
+        );
+
+        // Log account details
+        for (i, (account_index, balance)) in self.available_accounts.iter().enumerate() {
             info!(
-                "Created lending account {} with {} sats (tx: {})",
-                account_index, account_capital, tx_result.tx_hash
+                "Account {}: index={}, balance={} sats",
+                i + 1,
+                account_index,
+                balance
             );
-
-            self.lending_accounts.push(account_index);
         }
 
         Ok(())
@@ -245,9 +277,58 @@ impl LendingBot {
         Ok(())
     }
 
-    /// Check status of active lending positions
+    /// Helper to get account balance
+    async fn get_account_balance(
+        &self,
+        order_wallet: &OrderWallet,
+        account_index: AccountIndex,
+    ) -> Result<u64> {
+        // Try to get balance from ZkAccountDB
+        if let Some(balance) = order_wallet.zk_accounts.get_balance(&account_index) {
+            Ok(balance)
+        } else {
+            Err(anyhow::anyhow!(
+                "Account {} not found in ZkAccountDB",
+                account_index
+            ))
+        }
+    }
+
+    /// Get an available account that's ready for lending (Coin state, non-zero balance)
+    fn get_available_account(&mut self, order_wallet: &OrderWallet) -> Option<(AccountIndex, u64)> {
+        use twilight_client_sdk::zkvm::IOType;
+
+        // Find the first account that's in the correct state
+        for i in 0..self.available_accounts.len() {
+            let (account_index, _balance) = self.available_accounts[i];
+
+            // Check account state
+            if let Ok(account) = order_wallet.zk_accounts.get_account(&account_index) {
+                if account.io_type == IOType::Coin && account.balance > 0 {
+                    // Remove and return this account
+                    return Some(self.available_accounts.remove(i));
+                } else {
+                    info!(
+                        "Skipping account {}: io_type={:?}, balance={}",
+                        account_index, account.io_type, account.balance
+                    );
+                }
+            } else {
+                warn!("Cannot access account {}", account_index);
+            }
+        }
+
+        // No valid accounts found
+        info!(
+            "No accounts in valid state (Coin, balance > 0) found in pool of {}",
+            self.available_accounts.len()
+        );
+        None
+    }
+
+    /// Check status of active lending positions and handle account rotation
     async fn check_active_positions(&mut self, order_wallet: &mut OrderWallet) -> Result<()> {
-        let mut positions_to_close = Vec::new();
+        let mut completed_positions = Vec::new();
 
         // Collect account indices first to avoid borrowing issues
         let account_indices: Vec<AccountIndex> = self.active_positions.keys().copied().collect();
@@ -256,19 +337,90 @@ impl LendingBot {
             if let Some(position) = self.active_positions.get_mut(&account_index) {
                 match order_wallet.query_lend_order(account_index).await {
                     Ok(lend_order) => {
-                        // Update position data - using balance instead of amount
+                        use twilight_client_sdk::relayer_types::OrderStatus;
+
+                        // Update position data
                         position.current_value = lend_order.balance as u64;
                         position.accrued_interest = position
                             .current_value
                             .saturating_sub(position.principal_amount);
 
-                        // Check if we should close this position
-                        if Self::should_close_position_static(
-                            position,
-                            &lend_order,
-                            &self.market_data,
-                        ) {
-                            positions_to_close.push(account_index);
+                        match lend_order.order_status {
+                            OrderStatus::FILLED => {
+                                info!(
+                                    "Lend order filled on account {}: {} sats",
+                                    account_index, position.current_value
+                                );
+
+                                // Check if we should close this position based on strategy criteria
+                                if Self::should_close_position_static(
+                                    position,
+                                    &lend_order,
+                                    &self.market_data,
+                                ) {
+                                    info!("Strategy criteria met, closing lending position on account {}", account_index);
+
+                                    // Close the position to initiate settlement
+                                    match order_wallet.close_lend_order(account_index).await {
+                                        Ok(close_request_id) => {
+                                            info!(
+                                                "Lending position close initiated with request ID: {}",
+                                                close_request_id
+                                            );
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to close lending position: {}", e);
+                                        }
+                                    }
+                                }
+                                // Note: Position will remain active until it becomes SETTLED
+                            }
+                            OrderStatus::SETTLED => {
+                                info!(
+                                    "Lending position settled on account {}, rotating account",
+                                    account_index
+                                );
+
+                                // Update statistics
+                                self.stats.total_positions_closed += 1;
+                                self.stats.total_interest_earned += position.accrued_interest;
+
+                                // Rotate the account to get a fresh one
+                                match order_wallet.trading_to_trading(account_index).await {
+                                    Ok(new_account_index) => {
+                                        // Query the new account balance
+                                        if let Ok(new_balance) = self
+                                            .get_account_balance(order_wallet, new_account_index)
+                                            .await
+                                        {
+                                            info!(
+                                                "Account rotated: {} -> {} (balance: {} sats)",
+                                                account_index, new_account_index, new_balance
+                                            );
+
+                                            // Add the new account back to available pool
+                                            self.available_accounts
+                                                .push((new_account_index, new_balance));
+                                            completed_positions.push(account_index);
+                                        } else {
+                                            error!(
+                                                "Failed to query balance for rotated account {}",
+                                                new_account_index
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to rotate account {}: {}", account_index, e);
+                                    }
+                                }
+                            }
+                            _ => {
+                                // For lending operations, only FILLED and SETTLED are valid statuses
+                                warn!(
+                                    "Unexpected lending order status on account {}: {:?}",
+                                    account_index, lend_order.order_status
+                                );
+                            }
                         }
                     }
                     Err(e) => {
@@ -281,17 +433,9 @@ impl LendingBot {
             }
         }
 
-        // Close positions that meet exit criteria
-        for account_index in positions_to_close {
-            if let Err(e) = self
-                .close_lending_position(order_wallet, account_index)
-                .await
-            {
-                error!(
-                    "Failed to close lending position for account {}: {}",
-                    account_index, e
-                );
-            }
+        // Remove completed positions from active tracking
+        for account_index in completed_positions {
+            self.active_positions.remove(&account_index);
         }
 
         Ok(())
@@ -402,20 +546,14 @@ impl LendingBot {
         }
 
         // Find available account for new lending position
-        let available_account = self
-            .lending_accounts
-            .iter()
-            .find(|&&account| !self.active_positions.contains_key(&account))
-            .copied();
+        if let Some((account_index, account_balance)) = self.get_available_account(order_wallet) {
+            info!(
+                "Using account {} with {} sats for new lending position",
+                account_index, account_balance
+            );
 
-        if let Some(account_index) = available_account {
-            // Calculate optimal lending amount
-            let lending_amount = self.calculate_optimal_lending_amount();
-
-            if lending_amount > 0 {
-                self.open_lending_position(order_wallet, account_index, lending_amount)
-                    .await?;
-            }
+            self.open_lending_position(order_wallet, account_index, account_balance)
+                .await?;
         } else {
             info!("No available accounts for new lending positions");
         }
@@ -451,30 +589,64 @@ impl LendingBot {
 
         let optimal_amount = (base_amount as f64 * rate_multiplier * utilization_multiplier) as u64;
 
-        // Ensure we don't exceed available capital
-        optimal_amount.min(self.available_capital)
+        // With ZkOS, we use the full account balance rather than calculating optimal amounts
+        // This method is kept for compatibility but the actual amount used will be the full account balance
+        optimal_amount
     }
 
-    /// Open a new lending position
+    /// Open a new lending position using full account balance (ZkOS compliant)
     async fn open_lending_position(
         &mut self,
         order_wallet: &mut OrderWallet,
         account_index: AccountIndex,
-        amount: u64,
+        account_balance: u64, // Full account balance - must be used entirely
     ) -> Result<()> {
+        use twilight_client_sdk::zkvm::IOType;
+
         if self.config.paper_trading {
             info!(
-                "Paper trading: Would open lending position of {} sats at {:.3}% rate on account {}",
-                amount,
+                "Paper trading: Would open lending position using {} sats at {:.3}% rate on account {}",
+                account_balance,
                 self.market_data.average_rate * 100.0,
                 account_index
             );
+            // Return account to available pool since we didn't actually use it
+            self.available_accounts
+                .push((account_index, account_balance));
             return Ok(());
         }
 
+        // Validate account state before placing order
+        let account = order_wallet
+            .zk_accounts
+            .get_account(&account_index)
+            .map_err(|e| anyhow::anyhow!("Account {} not found: {}", account_index, e))?;
+
         info!(
-            "Opening lending position of {} sats at {:.3}% rate on account {}",
-            amount,
+            "Account {} state: balance={}, io_type={:?}",
+            account_index, account.balance, account.io_type
+        );
+
+        // Check if account is in correct state for placing orders
+        if account.io_type != IOType::Coin {
+            return Err(anyhow::anyhow!(
+                "Account {} is not in Coin state (current: {:?}). Cannot place lending order.",
+                account_index,
+                account.io_type
+            ));
+        }
+
+        // Check if account has sufficient balance
+        if account.balance == 0 {
+            return Err(anyhow::anyhow!(
+                "Account {} has zero balance. Cannot place lending order.",
+                account_index
+            ));
+        }
+
+        info!(
+            "Opening lending position using {} sats at {:.3}% rate on account {}",
+            account_balance,
             self.market_data.average_rate * 100.0,
             account_index
         );
@@ -482,35 +654,43 @@ impl LendingBot {
         let request_id = order_wallet
             .open_lend_order(account_index)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to open lend order: {}", e))?;
+            .map_err(|e| {
+                // Return account to available pool if order failed
+                self.available_accounts
+                    .push((account_index, account_balance));
+                anyhow::anyhow!(
+                    "Failed to open lend order on account {}: {}",
+                    account_index,
+                    e
+                )
+            })?;
 
         let position = LendingPosition {
             account_index,
-            principal_amount: amount,
+            principal_amount: account_balance, // Use full account balance
             lending_rate: self.market_data.average_rate,
             started_at: chrono::Utc::now(),
             request_id: request_id.clone(),
-            current_value: amount,
+            current_value: account_balance,
             accrued_interest: 0,
         };
 
         self.active_positions.insert(account_index, position);
-        self.available_capital = self.available_capital.saturating_sub(amount);
         self.stats.total_positions_opened += 1;
-        self.stats.total_principal_lent += amount;
+        self.stats.total_principal_lent += account_balance;
 
         info!("Lending position opened with request ID: {}", request_id);
 
         Ok(())
     }
 
-    /// Close a lending position
+    /// Close a lending position (simplified - rotation handled in check_active_positions)
     async fn close_lending_position(
         &mut self,
         order_wallet: &mut OrderWallet,
         account_index: AccountIndex,
     ) -> Result<()> {
-        if let Some(position) = self.active_positions.remove(&account_index) {
+        if let Some(position) = self.active_positions.get(&account_index) {
             if self.config.paper_trading {
                 info!(
                     "Paper trading: Would close lending position on account {}",
@@ -519,26 +699,24 @@ impl LendingBot {
                 return Ok(());
             }
 
-            info!("Closing lending position on account {}", account_index);
+            info!(
+                "Initiating close of lending position on account {}",
+                account_index
+            );
 
-            let close_request_id = order_wallet
-                .close_lend_order(account_index)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to close lend order: {}", e))?;
-
-            // Update statistics
-            self.stats.total_positions_closed += 1;
-            self.stats.total_interest_earned += position.accrued_interest;
-            self.available_capital += position.current_value;
-
-            // Auto-reinvest if enabled
-            if self.config.auto_reinvest && position.accrued_interest > 0 {
-                info!(
-                    "Auto-reinvesting {} sats of earned interest",
-                    position.accrued_interest
-                );
-                // The additional capital is already added to available_capital
-            }
+            // Simply initiate the close - the actual rotation will be handled in check_active_positions
+            // when the order status becomes SETTLED
+            let _close_request_id =
+                order_wallet
+                    .close_lend_order(account_index)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to close lend order on account {}: {}",
+                            account_index,
+                            e
+                        )
+                    })?;
 
             let duration_hours = chrono::Utc::now()
                 .signed_duration_since(position.started_at)
@@ -546,11 +724,8 @@ impl LendingBot {
                 / 60.0;
 
             info!(
-                "Lending position closed: {} sats principal, {} sats interest, {:.1}h duration (request: {})",
-                position.principal_amount,
-                position.accrued_interest,
-                duration_hours,
-                close_request_id
+                "Lending position close initiated: {} sats principal, {:.1}h duration",
+                position.principal_amount, duration_hours,
             );
         }
 
@@ -587,8 +762,17 @@ impl LendingBot {
     /// Log current lending bot status
     fn log_status(&self) {
         info!("=== Lending Bot Status ===");
+
+        // Account information
+        info!("Available accounts: {}", self.available_accounts.len());
+        let total_available_balance: u64 = self
+            .available_accounts
+            .iter()
+            .map(|(_, balance)| balance)
+            .sum();
+        info!("Total available balance: {} sats", total_available_balance);
+
         info!("Active positions: {}", self.active_positions.len());
-        info!("Available capital: {} sats", self.available_capital);
         info!("Total lent: {} sats", self.stats.total_principal_lent);
         info!(
             "Total interest earned: {} sats",
@@ -658,9 +842,24 @@ async fn main() -> Result<()> {
 
     // Create lending bot
     let mut lending_bot = LendingBot::new(args);
-
+    let wallet_id = "lending_bot".to_string();
+    let mut order_wallet;
     // Initialize OrderWallet
-    let mut order_wallet = OrderWallet::new(None).context("Failed to create OrderWallet")?;
+    let wallet_exists = OrderWallet::get_wallet_id_from_db(&wallet_id, None)
+        .map_err(|e| anyhow::anyhow!("Failed to check wallet ID existence: {}", e))?;
+    if wallet_exists {
+        order_wallet = OrderWallet::load_from_db(wallet_id, None, None)
+            .map_err(|e| anyhow::anyhow!("Failed to load wallet from database: {}", e))?;
+    } else {
+        order_wallet = OrderWallet::new(None)
+            .map_err(|e| anyhow::anyhow!("Failed to create OrderWallet: {}", e))?;
+        order_wallet
+            .with_db(None, Some(wallet_id))
+            .map_err(|e| anyhow::anyhow!("Failed to load wallet from with_db: {}", e))?;
+    }
+
+    // Get test tokens
+    let _ = nyks_wallet::wallet::get_test_tokens(&mut order_wallet.wallet).await?;
 
     // Check initial balance
     let initial_balance = order_wallet

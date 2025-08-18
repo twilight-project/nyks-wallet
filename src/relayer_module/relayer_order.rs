@@ -137,7 +137,8 @@ pub async fn create_lend_order(
     .map_err(|e| e.to_string())?;
     let input_coin = input_coin.map_err(|e| e.to_string())?;
     let programs = ContractManager::import_program(&contract_path);
-    let script_address = programs.create_contract_address(address::Network::default())?;
+    let script_address =
+        programs.create_contract_address(twilight_client_sdk::address::Network::default())?;
     let output_memo_scalar = twilight_client_sdk::util::hex_to_scalar(scalar_hex.clone())
         .ok_or("Failed to convert scalar hex to scalar")?;
     let output_memo = create_output_memo_for_lender(

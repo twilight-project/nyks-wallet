@@ -170,7 +170,6 @@ pub use wallet::*;
 pub mod config;
 pub mod error;
 pub mod test;
-pub mod zkos_accounts;
 #[macro_use]
 extern crate lazy_static;
 // ----------------------------------------------------------------------------
@@ -201,13 +200,20 @@ pub mod validator_wallet;
 #[cfg(feature = "validator-wallet")]
 pub use validator_wallet::*;
 
+// -------------------------------------------------------------
+// Optional order-wallet feature
+// -------------------------------------------------------------
+#[cfg(feature = "order-wallet")]
 pub mod relayer_module;
+#[cfg(feature = "order-wallet")]
+pub mod zkos_accounts;
 
 // Database module (optional, based on features)
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 pub mod database;
 
 // Security module for secure password and wallet management
+// #[cfg(feature = "order-wallet")]
 pub mod security;
 
 #[cfg(all(feature = "sqlite", feature = "postgresql"))]

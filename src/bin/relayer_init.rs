@@ -344,7 +344,7 @@ pub fn deploy_relayer_initial_state(
     };
     let program_json_path: &str = &std::env::var("RELAYER_PROGRAM_JSON_PATH")
         .unwrap_or_else(|_| "./relayerprogram.json".to_string());
-    let chain_net = address::Network::default();
+    let chain_net = twilight_client_sdk::address::Network::default();
     let state_variables: Vec<u64> = vec![balance.clone() / 100];
     let program_tag: String = "RelayerInitializer".to_string();
     let pool_share = balance.clone() / 100;

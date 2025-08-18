@@ -1,10 +1,10 @@
-use address::{AddressType, Network};
 use core::convert::TryInto;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha512};
+use twilight_client_sdk::address::{AddressType, Network};
 use twilight_client_sdk::{
     quisquislib::{
         self, Account, ElGamalCommitment, RistrettoPublicKey, RistrettoSecretKey, keys::SecretKey,
