@@ -12,7 +12,8 @@ use crate::{
     config::{EndpointConfig, RelayerEndPointConfig},
     error::{Result as WalletResult, WalletError},
     relayer_module::{
-        self, fetch_tx_hash_with_retry, fetch_utxo_details_with_retry,
+        self, fetch_removed_utxo_details_with_retry, fetch_tx_hash_with_retry,
+        fetch_utxo_details_with_retry,
         relayer_api::RelayerJsonRpcClient,
         relayer_order::{
             cancel_trader_order, close_lend_order, close_trader_order, create_lend_order,
@@ -45,6 +46,7 @@ use twilight_client_sdk::{
     },
     transaction::{Receiver, Sender},
     transfer::{
+        create_burn_message_transaction,
         create_private_transfer_transaction_single_source_multiple_recievers,
         create_private_transfer_tx_single,
     },
@@ -304,6 +306,7 @@ impl OrderWallet {
                 sequence,
                 account_number,
                 amount,
+                true,
             )?;
             let result =
                 send_tx_to_chain(signed_tx, &self.wallet.chain_config.rpc_endpoint).await?;
@@ -417,6 +420,76 @@ impl OrderWallet {
         Ok(new_account_index)
     }
 
+    pub async fn trading_to_funding(&mut self, old_index: AccountIndex) -> Result<(), String> {
+        self.ensure_coin_onchain(old_index)?;
+        let index = self.trading_to_trading(old_index).await?;
+        let sender_account = self.zk_accounts.get_account(&index)?;
+        let amount = sender_account.balance;
+
+        let sk = self.get_secret_key(index);
+        let input = self
+            .utxo_details
+            .get(&index)
+            .ok_or("UTXO detail not found")?
+            .get_input()?;
+        let encrypt_scalar = sender_account.scalar.clone();
+        let tx_hex = create_burn_message_transaction(
+            input,
+            amount,
+            encrypt_scalar,
+            sk,
+            sender_account.account.clone(),
+        );
+        let transaction = bincode::deserialize(&hex::decode(tx_hex).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let tx_hash = tokio::task::spawn_blocking(move || {
+            twilight_client_sdk::chain::tx_commit_broadcast_transaction(transaction)
+        })
+        .await
+        .map_err(|e| format!("Failed to send RPC request: {}", e))?
+        .map_err(|e| format!("Failed to get tx hash: {}", e))?;
+        //waiting for the utxo to be removed
+        let _ = fetch_removed_utxo_details_with_retry(
+            self.zk_accounts.get_account_address(&index)?,
+            IOType::Coin,
+        )
+        .await?;
+
+        self.wallet
+            .update_account_info()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let wallet_on_chain_info = match self.wallet.account_info().await {
+            Ok(account_info) => account_info,
+            Err(e) => {
+                error!("Failed to get wallet account details on chain: {}", e);
+                return Err(e.to_string());
+            }
+        };
+        let sequence = wallet_on_chain_info.account.sequence;
+        let account_number = wallet_on_chain_info.account.account_number;
+        let signed_tx = build_and_sign_msg_mint_burn_trading_btc(
+            &self.wallet,
+            &self.zk_accounts,
+            index,
+            sequence,
+            account_number,
+            amount,
+            false,
+        )?;
+        let result = send_tx_to_chain(signed_tx, &self.wallet.chain_config.rpc_endpoint).await?;
+        if result.code != 0 {
+            return Err(format!("Failed to send tx to chain: {}", result.tx_hash));
+        }
+        self.zk_accounts.update_on_chain(&index, false)?;
+        self.zk_accounts.update_balance(&index, 0)?;
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(&index) {
+            let _ = self.update_zk_account_in_db(&account);
+        }
+        Ok(())
+    }
     /// Split a single Coin account into multiple new Coin accounts as specified by `balances`.
     /// Returns a vector of `(new_account_index, balance)` for each created account.
     /// Requirements:
@@ -1611,6 +1684,38 @@ mod tests {
             .await
             .map_err(|e| e.to_string())?;
         drop(order_wallet);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_trading_to_funding() -> Result<(), String> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let wallet = setup_wallet().await.map_err(|e| e.to_string())?;
+        let zk_accounts = ZkAccountDB::new();
+        let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
+            .map_err(|e| e.to_string())?;
+        let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
+        if tx_result.code != 0 {
+            return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
+        }
+        sleep(Duration::from_secs(10)).await;
+        order_wallet
+            .wallet
+            .update_balance()
+            .await
+            .map_err(|e| e.to_string())?;
+        println!("wallet balance: {:?}", order_wallet.wallet.balance_sats);
+        let result = order_wallet.trading_to_funding(account_index).await?;
+        println!("result: {:?}", result);
+        sleep(Duration::from_secs(10)).await;
+        order_wallet
+            .wallet
+            .update_balance()
+            .await
+            .map_err(|e| e.to_string())?;
+        println!("wallet balance: {:?}", order_wallet.wallet.balance_sats);
         Ok(())
     }
 }

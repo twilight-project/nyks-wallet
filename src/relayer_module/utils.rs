@@ -28,6 +28,7 @@ pub fn build_and_sign_msg_mint_burn_trading_btc(
     sequence: u64,
     account_number: u64,
     amount: u64,
+    mint_or_burn: bool,
 ) -> Result<String, String> {
     // Retrieve zk account (index is 1-based from setup)
     let account_idx = index;
@@ -37,7 +38,7 @@ pub fn build_and_sign_msg_mint_burn_trading_btc(
 
     // Build message
     let msg = MsgMintBurnTradingBtc {
-        mint_or_burn: true,
+        mint_or_burn,
         btc_value: amount,
         qq_account: zk_account.qq_address.clone(),
         encrypt_scalar: zk_account.scalar.clone(),
@@ -192,4 +193,52 @@ pub async fn fetch_tx_hash_with_retry(
 pub struct TxResult {
     pub tx_hash: String,
     pub code: u32,
+}
+
+/// Repeatedly queries the chain for UTXO details until success or `max_attempts` reached.
+pub async fn fetch_removed_utxo_details_with_retry(
+    account_id: String,
+
+    io_type: IOType,
+) -> Result<(), String> {
+    let mut attempts = 0;
+    info!("fetch_utxo_details_with_retry: account_id: {}", account_id);
+    loop {
+        let account_id_clone = account_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            twilight_client_sdk::chain::get_utxo_details_by_address(account_id_clone, io_type)
+        })
+        .await
+        {
+            Ok(response) => match response {
+                Err(err) => {
+                    if err.contains("UTXO not found") {
+                        return Ok(());
+                    } else {
+                        return Err(format!("Failed to remove utxo details: {}", err));
+                    }
+                }
+                Ok(_) => {
+                    attempts += 1;
+                    if attempts >= DEFAULT_UTXO_ATTEMPTS {
+                        return Err(format!(
+                            "Failed to remove utxo details after {} attempts: {}",
+                            DEFAULT_UTXO_ATTEMPTS, account_id
+                        ));
+                    }
+                }
+            },
+            Err(e) => {
+                attempts += 1;
+                if attempts >= DEFAULT_UTXO_ATTEMPTS {
+                    error!(
+                        "Failed to spawn blocking task after {} attempts: {}",
+                        DEFAULT_UTXO_ATTEMPTS, e
+                    );
+                    return Err(format!("Failed to spawn blocking task: {}", e));
+                }
+            }
+        }
+        sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+    }
 }
