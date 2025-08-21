@@ -189,7 +189,8 @@ async fn main() -> anyhow::Result<()> {
 - [OrderWallet guide](OrderWallet.md) – comprehensive reference for trading & lending APIs.
 - [Order flow walk-through](OrderFlow.md) – step-by-step lifecycle of a leveraged position.
 - [Validator wallet guide](Validator-Wallet.md) – validator node key management utilities.
-- [Database features overview](Databse.md) – optional SQLite/PostgreSQL persistence design.
+- [Database features overview](Database.md) – optional SQLite/PostgreSQL persistence design.
+- [Trading Bot docs](examples/trading_bot/docs) – reference end-to-end automated bot implementation.
 - [Deployment guide](DEPLOYMENT.md) – build & run `relayer_init` (plus Docker containers).
 - [`twilight-client-sdk`](https://github.com/twilight-project/twilight-client-sdk) – Rust primitives for QuisQuis & ZkOS.
 - [`relayer-core`](https://github.com/twilight-project/relayer-core) – ultra-low-latency matching engine used by Twilight.
