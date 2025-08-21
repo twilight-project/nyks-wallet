@@ -75,7 +75,7 @@ All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**
 
 ### 4.1 Wallet lifecycle
 
-- `Wallet::create_new_with_random_btc_address()` – generate a random Cosmos key-pair _and_ deterministic testnet BTC address.
+- `Wallet::new(None)` – generate a random Cosmos key-pair _and_ deterministic testnet BTC address.
 - `Wallet::from_mnemonic(..)` / `Wallet::from_private_key(..)` – import existing credentials.
 - `Wallet::import_from_json(..)` / `export_to_json(..)` – round-trip safe serialization for long-term storage.
 
@@ -110,6 +110,15 @@ All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**
 - `nyks_rpc::rpcclient::Method` – exhaustive enum of Tendermint RPC calls.
 - `MethodTypeURL::sign_msg(..)` – payload builder that handles protobuf packing, fee setup and secp256k1 signing.
 
+### 4.8 OrderWallet trading & lending
+
+- `OrderWallet::new(endpoint_cfg)` – instantiate high-level trading orchestrator (wraps `Wallet` + `ZkAccountDB`).
+- `funding_to_trading(amount)` – create a fresh ZkOS account and fund it from the on-chain wallet.
+- `open_trader_order(..)` / `close_trader_order(..)` / `cancel_trader_order(..)` – manage leveraged LONG/SHORT positions.
+- `open_lend_order(..)` / `close_lend_order(..)` – lend liquidity and settle back to Coin state.
+- `trading_to_trading(..)` & `trading_to_trading_multiple_accounts(..)` – move / split balances between ZkOS accounts.
+- `with_db(passphrase, wallet_id)` – enable optional SQLite/PostgreSQL persistence for seeds, accounts, UTXOs & request IDs.
+
 ---
 
 ## 5 • Typical use-cases
@@ -126,31 +135,43 @@ All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**
 
 ## 6 • Most important functions & structs
 
-| Module            | Item                                       | Purpose                                      |
-| ----------------- | ------------------------------------------ | -------------------------------------------- |
-| `wallet`          | `Wallet` struct                            | Holds keys, balances, sequence & BTC address |
-|                   | `create_and_export_randmon_wallet_account` | Generates a fresh wallet & persists as JSON  |
-|                   | `update_balance`                           | Fetch latest on-chain balances               |
-| `wallet::faucet`  | `get_nyks` / `mint_sats`                   | Test-net token faucets                       |
-|                   | `sign_and_send_reg_deposit_tx`             | Register BTC deposit address                 |
-| `wallet::nyks_fn` | `create_funiding_to_trading_tx_msg`        | Build mint/burn message                      |
-|                   | `send_tx`                                  | Sign & broadcast raw transaction             |
-| `zkos_accounts`   | `ZkAccountDB`                              | HD database for shielded accounts            |
-|                   | `EncryptedAccount`                         | Compact on-chain representation              |
-| `nyks_rpc`        | `Method`, `MethodTypeURL`                  | JSON-RPC method enum & protobuf encoder      |
-| `seed_signer`     | `generate_seed`                            | Deterministic Ristretto seed derivation      |
+| Module           | Item                                   | Purpose                                      |
+| ---------------- | -------------------------------------- | -------------------------------------------- |
+| `wallet`         | `Wallet` struct                        | Holds keys, balances, sequence & BTC address |
+|                  | `Wallet::new` / `new(None)`            | Create fresh wallet (prints mnemonic once)   |
+|                  | `update_balance`                       | Refresh on-chain nyks & sats balances        |
+| `wallet::faucet` | `get_nyks` / `mint_sats`               | Test-net token faucets                       |
+|                  | `sign_and_send_reg_deposit_tx`         | Register BTC deposit address                 |
+| `relayer_module` | `OrderWallet` struct                   | High-level trading & lending orchestrator    |
+|                  | `funding_to_trading`                   | Fund a new ZkOS account from wallet          |
+|                  | `open_trader_order` / `close_*`        | Manage leveraged LONG/SHORT positions        |
+|                  | `open_lend_order` / `close_lend_order` | Lend liquidity & settle back                 |
+| `zkos_accounts`  | `ZkAccountDB`                          | In-memory DB for shielded accounts           |
+| `nyks_rpc`       | `Method`, `MethodTypeURL`              | Tendermint RPC wrappers & protobuf encoder   |
+| `seed_signer`    | `generate_seed`                        | Deterministic Ristretto seed derivation      |
 
 ---
 
 ## 7 • Environment variables
 
-| Variable            | Default                                                              | Description                                   |
-| ------------------- | -------------------------------------------------------------------- | --------------------------------------------- |
-| `NYKS_LCD_BASE_URL` | `http://0.0.0.0:1317` (public: https://lcd.twilight.rest)            | Cosmos SDK LCD REST endpoint `port:1317`      |
-| `NYKS_RPC_BASE_URL` | `http://0.0.0.0:26657` (public: https://rpc.twilight.rest)           | Cosmos SDK RPC REST endpoint `port:26657`     |
-| `FAUCET_BASE_URL`   | `http://0.0.0.0:6969` (public: https://faucet-rpc.twilight.rest)     | Faucet & mint endpoints `port:6969`           |
-| `ZKOS_SERVER_URL`   | `http://0.0.0.0:3030` (public: https://nykschain.twilight.rest/zkos) | zkaccount json-rpc endpoint `port:3030`       |
-| `RUST_LOG`          | `info`                                                               | `info`, `debug` and `warn` are available tags |
+| Variable                     | Default                   | Description                                           |
+| ---------------------------- | ------------------------- | ----------------------------------------------------- |
+| `NYKS_LCD_BASE_URL`          | `http://0.0.0.0:1317`     | Cosmos SDK LCD REST endpoint                          |
+| `NYKS_RPC_BASE_URL`          | `http://0.0.0.0:26657`    | Tendermint RPC endpoint                               |
+| `FAUCET_BASE_URL`            | `http://0.0.0.0:6969`     | Faucet & mint endpoints                               |
+| `ZKOS_SERVER_URL`            | `http://0.0.0.0:3030`     | ZkOS / QuisQuis JSON-RPC server                       |
+| `RELAYER_API_RPC_SERVER_URL` | `http://0.0.0.0:8088/api` | Relayer public JSON-RPC API (OrderWallet)             |
+| `PUBLIC_API_RPC_SERVER_URL`  | `http://0.0.0.0:8088/api` | Public price-feed / order-book API                    |
+| `RELAYER_RPC_SERVER_URL`     | `http://0.0.0.0:3032`     | Internal relayer client RPC                           |
+| `RELAYER_PROGRAM_JSON_PATH`  | `./relayerprogram.json`   | Path to relayer program ABI/bytecode                  |
+| `CHAIN_ID`                   | `nyks`                    | Chain identifier used in signed msgs                  |
+| `RUST_LOG`                   | `info`                    | Log level (`info`, `debug`, `trace`, …)               |
+| `RUST_BACKTRACE`             | `full`                    | Enable Rust backtraces for debugging                  |
+| `NYKS_WALLET_PASSPHRASE`     | –                         | Passphrase used to encrypt wallet seed                |
+| `WALLET_ID`                  | –                         | Override default wallet ID when using DB              |
+| `VALIDATOR_WALLET_PATH`      | `validator-self.mnemonic` | Path to validator mnemonic (validator-wallet)         |
+| `DATABASE_URL_SQLITE`        | `./wallet_data.db`        | SQLite file used when feature = `sqlite`              |
+| `DATABASE_URL_POSTGRESQL`    | –                         | PostgreSQL connection string (feature = `postgresql`) |
 
 Set them before running to point the SDK at a local full-node.
 
