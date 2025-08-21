@@ -2,7 +2,7 @@ use log::{debug, error, info};
 use nyks_wallet::{
     nyks_rpc::rpcclient::{
         method::{Method, MethodTypeURL},
-        txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams},
+        txrequest::{RpcBody, RpcRequest, TxParams},
         txresult::parse_tx_response,
     },
     zkos_accounts::{
@@ -12,6 +12,7 @@ use nyks_wallet::{
     *,
 };
 
+use secrecy::ExposeSecret;
 use tokio::time::{Duration, sleep};
 use twilight_client_sdk::{
     script,
@@ -48,14 +49,7 @@ fn setup_zk_accounts(
     chain_id: &str,
 ) -> Result<(ZkAccountDB, u64, String), String> {
     // Generate seed signature
-    let seed_signature = generate_seed(
-        &wallet.private_key,
-        &wallet.twilightaddress,
-        DERIVATION_MESSAGE,
-        chain_id,
-    )
-    .map_err(|e| format!("Failed to generate seed: {}", e))?
-    .get_signature();
+    let seed_signature = wallet.get_zk_account_seed(chain_id, DERIVATION_MESSAGE)?;
 
     // Load or create db
     info!("Loading ZkAccountDB ...");
@@ -66,7 +60,7 @@ fn setup_zk_accounts(
 
     // Create new zk account
     let index = zk_accounts
-        .generate_new_account(wallet.balance_sats, seed_signature.clone())
+        .generate_new_account(wallet.balance_sats, &seed_signature)
         .map_err(|e| format!("Failed to generate new zk account: {}", e))?;
     info!("    New zk account generated with index: {}", index);
     // Persist DB
@@ -75,7 +69,7 @@ fn setup_zk_accounts(
         .export_to_json("ZkAccounts.json")
         .map_err(|e| format!("Failed to export to json: {}", e))?;
 
-    Ok((zk_accounts, index, seed_signature))
+    Ok((zk_accounts, index, seed_signature.expose_secret().clone()))
 }
 
 /// Constructs a `MsgMintBurnTradingBtc` for the given wallet/zk account, then signs it and
@@ -91,7 +85,7 @@ fn build_and_sign_msg(
     let account_idx = index;
     let zk_account = zk_accounts
         .get_account(&account_idx)
-        .ok_or_else(|| format!("Failed to get zk account: {}", account_idx))?;
+        .map_err(|e| e.to_string())?;
 
     // Build message
     let msg = MsgMintBurnTradingBtc {
@@ -121,17 +115,17 @@ fn build_and_sign_msg(
 }
 
 /// Broadcasts the signed transaction to the NYKS RPC endpoint and logs the response.
-async fn send_rpc_request(signed_tx: String) -> Result<(), String> {
+async fn send_rpc_request(signed_tx: String, rpc_endpoint: &str) -> Result<(), String> {
     // Prepare the RPC request body
     let method = Method::broadcast_tx_sync;
     let (tx_send, _): (RpcBody<TxParams>, String) =
         RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
 
     // RPC endpoint URL (consider moving to an env var later)
-    let url = NYKS_RPC_BASE_URL.to_string();
+    let rpc_endpoint = rpc_endpoint.to_string();
 
     // Execute the blocking HTTP request on a separate thread
-    let response = tokio::task::spawn_blocking(move || tx_send.send(url))
+    let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
 
@@ -245,37 +239,19 @@ async fn main() -> Result<(), String> {
             return Err(format!("Failed to get account info: {}", e));
         }
     };
-    let sequence = match account_details.account.sequence.parse::<u64>() {
-        Ok(seq) => seq,
-        Err(e) => {
-            error!("Failed to parse sequence: {}", e);
-            return Err(format!("Failed to parse sequence: {}", e));
-        }
-    };
-    let account_number = match account_details.account.account_number.parse::<u64>() {
-        Ok(num) => num,
-        Err(e) => {
-            error!("Failed to parse account number: {}", e);
-            return Err(format!("Failed to parse account number: {}", e));
-        }
-    };
+    let sequence = account_details.account.sequence;
+    let account_number = account_details.account.account_number;
     // Build and sign message
     info!("Building and signing message for Funding to zk account transfer");
     let signed_tx = build_and_sign_msg(&wallet, &zk_accounts, index, sequence, account_number)?;
     info!("    Message signed successfully");
     // Broadcast the transaction
     info!("Broadcasting transaction...");
-    send_rpc_request(signed_tx.clone()).await?;
+    send_rpc_request(signed_tx.clone(), &wallet.chain_config.rpc_endpoint).await?;
     info!("    Transaction broadcasted successfully");
 
     // Retrieve the zk account and ensure it exists
-    let zk_account = match zk_accounts.get_account(&(index)) {
-        Some(account) => account.clone(),
-        None => {
-            error!("Failed to get zk account: {}", index);
-            return Err(format!("Failed to get zk account: {}", index));
-        }
-    };
+    let zk_account = zk_accounts.get_account(&(index))?;
 
     // Wait for UTXO details to appear on-chain
     info!("    Waiting for UTXO details to appear on-chain...");
@@ -334,15 +310,10 @@ async fn main() -> Result<(), String> {
         "    Updating ZkAccountDB on index : {} with io_type: State",
         index
     );
-    match zk_accounts.get_mut_account(&index) {
-        Some(account) => {
-            account.io_type = IOType::State;
-            zk_accounts.export_to_json("ZkAccounts.json")?;
-        }
-        None => {
-            return Err(format!("Failed to get zk account: {}", index));
-        }
-    }
+    zk_accounts.update_io_type(&index, IOType::State)?;
+    zk_accounts.update_on_chain(&index, true)?;
+    zk_accounts.export_to_json("ZkAccounts.json")?;
+
     let updated_zk_account = zk_accounts.get_account(&index).unwrap();
     info!("    Exporting relayer data to file...");
     export_relayer_data(
@@ -371,8 +342,9 @@ pub fn deploy_relayer_initial_state(
             return Err("Failed to convert scalar_str to scalar".to_string());
         }
     };
-    let program_json_path: &str = "./relayerprogram.json";
-    let chain_net = address::Network::default();
+    let program_json_path: &str = &std::env::var("RELAYER_PROGRAM_JSON_PATH")
+        .unwrap_or_else(|_| "./relayerprogram.json".to_string());
+    let chain_net = twilight_client_sdk::address::Network::default();
     let state_variables: Vec<u64> = vec![balance.clone() / 100];
     let program_tag: String = "RelayerInitializer".to_string();
     let pool_share = balance.clone() / 100;

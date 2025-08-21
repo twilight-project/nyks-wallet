@@ -1,4 +1,4 @@
-use crate::nyks_rpc::rpcclient::txrequest::{FAUCET_BASE_URL, NYKS_LCD_BASE_URL};
+// use crate::nyks_rpc::rpcclient::txrequest::{FAUCET_BASE_URL, NYKS_LCD_BASE_URL};
 
 use super::super::MsgRegisterBtcDepositAddress;
 use anyhow::anyhow;
@@ -12,8 +12,7 @@ use cosmrs::{
 use log::debug;
 use prost::Message;
 use reqwest::Client;
-
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 use std::{error::Error, str::FromStr};
@@ -56,21 +55,42 @@ pub struct Account {
     // strict type expectations that lead to parsing errors when it is an
     // object.
     pub pub_key: Option<Value>,
-    pub account_number: String,
-    pub sequence: String,
+    #[serde(deserialize_with = "from_str_to_u64")]
+    pub account_number: u64,
+    #[serde(deserialize_with = "from_str_to_u64")]
+    pub sequence: u64,
+}
+impl Default for Account {
+    fn default() -> Self {
+        Self {
+            account_type: "".to_string(),
+            address: "".to_string(),
+            pub_key: None,
+            account_number: 0,
+            sequence: 0,
+        }
+    }
 }
 
-pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountResponse> {
-    let url = format!(
-        "{}/cosmos/auth/v1beta1/accounts/{}",
-        NYKS_LCD_BASE_URL.as_str(),
-        address
-    );
+fn from_str_to_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: &str = Deserialize::deserialize(deserializer)?;
+    s.parse::<u64>().map_err(serde::de::Error::custom)
+}
+
+pub async fn fetch_account_details(
+    address: &str,
+    lcd_endpoint: &str,
+) -> anyhow::Result<AccountResponse> {
+    let url = format!("{}/cosmos/auth/v1beta1/accounts/{}", lcd_endpoint, address);
     let client = Client::new();
     let response = client.get(&url).send().await?;
 
     if response.status().is_success() {
-        let account_response: AccountResponse = response.json().await?;
+        let text = response.text().await?;
+        let account_response: AccountResponse = serde_json::from_str(&text)?;
         Ok(account_response)
     } else {
         let status = response.status();
@@ -86,8 +106,11 @@ pub async fn fetch_account_details(address: &str) -> anyhow::Result<AccountRespo
     }
 }
 
-pub async fn get_nyks(recipient_address: &str) -> Result<(), Box<dyn Error>> {
-    let url = format!("{}/faucet", FAUCET_BASE_URL.as_str());
+pub async fn get_nyks(
+    recipient_address: &str,
+    faucet_endpoint: &str,
+) -> Result<(), Box<dyn Error>> {
+    let url = format!("{}/faucet", faucet_endpoint);
     let payload = json!({ "recipientAddress": recipient_address });
     let client = Client::new();
     let response = client.post(url).json(&payload).send().await?;
@@ -109,8 +132,11 @@ pub async fn get_nyks(recipient_address: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
-pub async fn mint_sats(recipient_address: &str) -> Result<(), Box<dyn Error>> {
-    let url = format!("{}/mint", FAUCET_BASE_URL.as_str());
+pub async fn mint_sats(
+    recipient_address: &str,
+    faucet_endpoint: &str,
+) -> Result<(), Box<dyn Error>> {
+    let url = format!("{}/mint", faucet_endpoint);
 
     let payload = json!({ "recipientAddress": recipient_address });
     let client = Client::new();
@@ -132,8 +158,11 @@ pub async fn mint_sats(recipient_address: &str) -> Result<(), Box<dyn Error>> {
         .into())
     }
 }
-pub async fn mint_sats_5btc(recipient_address: &str) -> Result<(), Box<dyn Error>> {
-    let url = format!("{}/mint-relayer-wallet", FAUCET_BASE_URL.as_str());
+pub async fn mint_sats_5btc(
+    recipient_address: &str,
+    faucet_endpoint: &str,
+) -> Result<(), Box<dyn Error>> {
+    let url = format!("{}/mint-relayer-wallet", faucet_endpoint);
 
     let payload = json!({ "recipientAddress": recipient_address });
     let client = Client::new();
@@ -161,16 +190,16 @@ pub async fn sign_and_send_reg_deposit_tx(
     public_key: PublicKey,
     sender_account: String,
     btc_address: String,
+    lcd_endpoint: &str,
 ) -> anyhow::Result<()> {
     // --- Msg & body
     let msg_any =
         create_register_btc_deposit_message(btc_address, 50_000, 10_000, sender_account.clone());
     let body = Body::new(vec![msg_any], "", 0u16);
-
     // --- On‑chain numbers
-    let account_details = fetch_account_details(&sender_account).await?;
-    let sequence = account_details.account.sequence.parse::<u64>()?;
-    let account_number = account_details.account.account_number.parse::<u64>()?;
+    let account_details = fetch_account_details(&sender_account, lcd_endpoint).await?;
+    let sequence = account_details.account.sequence;
+    let account_number = account_details.account.account_number;
 
     // --- Fee & auth‑info
     let gas_limit = 200_000u64;
@@ -192,10 +221,7 @@ pub async fn sign_and_send_reg_deposit_tx(
     let tx_base64 = general_purpose::STANDARD.encode(&tx_bytes);
     let client = Client::new();
     let res = client
-        .post(format!(
-            "{}/cosmos/tx/v1beta1/txs",
-            NYKS_LCD_BASE_URL.as_str()
-        ))
+        .post(format!("{}/cosmos/tx/v1beta1/txs", lcd_endpoint))
         .json(&json!({ "tx_bytes": tx_base64, "mode": "BROADCAST_MODE_SYNC" }))
         .send()
         .await?;

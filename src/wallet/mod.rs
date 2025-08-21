@@ -6,3 +6,4 @@ pub mod faucet;
 pub use faucet::*;
 pub mod seed_signer;
 pub use seed_signer::*;
+pub mod generate_btc_key;

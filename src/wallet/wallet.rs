@@ -1,5 +1,7 @@
-use crate::faucet::*;
-use crate::nyks_rpc::rpcclient::txrequest::NYKS_LCD_BASE_URL;
+use crate::config::WalletEndPointConfig;
+use crate::security::print_secret_to_tty;
+// use crate::nyks_rpc::rpcclient::txrequest::NYKS_LCD_BASE_URL;
+use crate::{faucet::*, generate_seed};
 use anyhow::anyhow;
 use bip32::{DerivationPath, XPrv};
 use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
@@ -9,11 +11,12 @@ use log::{debug, error, info};
 use reqwest::Client;
 use ripemd::Ripemd160;
 use rpassword::prompt_password;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::time::{Duration, sleep};
-
+use zeroize::ZeroizeOnDrop;
 pub const BECH_PREFIX: &str = "twilight";
 pub type NYKS = u64;
 pub type SATS = u64;
@@ -114,7 +117,7 @@ fn account_from_private_key_hex() -> anyhow::Result<(SigningKey, PublicKey, Acco
     Ok((signing_key, public_key, account_id))
 }
 
-pub async fn check_code() -> anyhow::Result<()> {
+pub async fn check_code(lcd_endpoint: &str, faucet_endpoint: &str) -> anyhow::Result<()> {
     println!("🚀 Twilight Market Maker Client");
     println!("================================");
 
@@ -149,7 +152,7 @@ pub async fn check_code() -> anyhow::Result<()> {
 
     // Step 1: Get testnet tokens from faucet
     println!("\n💰 Requesting testnet tokens from faucet...");
-    match get_nyks(&account_id.to_string()).await {
+    match get_nyks(&account_id.to_string(), faucet_endpoint).await {
         Ok(_) => println!("✅ Successfully received testnet tokens"),
         Err(e) => {
             eprintln!("❌ Failed to get tokens from faucet: {}", e);
@@ -180,6 +183,7 @@ pub async fn check_code() -> anyhow::Result<()> {
         public_key,
         account_id.to_string(),
         btc_address.to_string(),
+        lcd_endpoint,
     )
     .await
     {
@@ -198,7 +202,7 @@ pub async fn check_code() -> anyhow::Result<()> {
 
     // Step 3: Mint test satoshis
     println!("\n🪙 Minting test satoshis...");
-    match mint_sats(&account_id.to_string()).await {
+    match mint_sats(&account_id.to_string(), faucet_endpoint).await {
         Ok(_) => println!("✅ Successfully minted test satoshis"),
         Err(e) => {
             eprintln!("❌ Failed to mint satoshis: {}", e);
@@ -213,12 +217,8 @@ pub async fn check_code() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn check_balance(address: &str) -> anyhow::Result<Balance> {
-    let url = format!(
-        "{}/cosmos/bank/v1beta1/balances/{}",
-        NYKS_LCD_BASE_URL.as_str(),
-        address
-    );
+pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<Balance> {
+    let url = format!("{}/cosmos/bank/v1beta1/balances/{}", lcd_endpoint, address);
     let client = Client::new();
     let response = client.get(url).send().await?;
     let balance: Value = response.json().await?;
@@ -304,7 +304,7 @@ pub async fn create_and_export_randmon_wallet_account(name: &str) -> anyhow::Res
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ZeroizeOnDrop)]
 pub struct Wallet {
     pub private_key: Vec<u8>,
     pub public_key: Vec<u8>,
@@ -314,9 +314,49 @@ pub struct Wallet {
     pub sequence: u64,
     pub btc_address: String,
     pub btc_address_registered: bool,
+    #[zeroize(skip)]
     pub account_info: Option<Account>,
+    #[zeroize(skip)]
+    pub chain_config: WalletEndPointConfig,
 }
 impl Wallet {
+    pub fn new(chain_config: Option<WalletEndPointConfig>) -> anyhow::Result<Self> {
+        let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
+        let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
+        let seed = mnemonic.to_seed("");
+        let path: DerivationPath = "m/44'/118'/0'/0/0"
+            .parse()
+            .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
+
+        let xprv = XPrv::derive_from_path(&seed, &path)
+            .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
+
+        let private_key_bytes = xprv.private_key().to_bytes();
+
+        let signing_key = SigningKey::from_slice(&private_key_bytes)
+            .map_err(|e| anyhow!("Invalid private key: {}", e))?;
+        let public_key = signing_key.public_key();
+        let account_id = public_key
+            .account_id(BECH_PREFIX)
+            .map_err(|e| anyhow!("Address generation failed: {}", e))?;
+        let (_wif, btc_address) =
+            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
+        // save_mnemonic(&account_id.to_string(), mnemonic.to_string())?;
+        print_secret_to_tty(&mut mnemonic.to_string())?;
+        Ok(Wallet {
+            private_key: private_key_bytes.to_vec(),
+            public_key: public_key.to_bytes().to_vec(),
+            twilightaddress: account_id.to_string(),
+            balance_nyks: 0,
+            balance_sats: 0,
+            sequence: 0,
+            btc_address,
+            btc_address_registered: false,
+            account_info: None,
+            chain_config,
+        })
+    }
+
     pub async fn create_new_with_random_btc_address() -> anyhow::Result<Wallet> {
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
         let seed = mnemonic.to_seed("");
@@ -356,6 +396,7 @@ impl Wallet {
             btc_address,
             btc_address_registered: false,
             account_info: None,
+            chain_config: WalletEndPointConfig::from_env(),
         })
     }
 
@@ -364,7 +405,9 @@ impl Wallet {
         public_key: String,
         twilightaddress: String,
         btc_address: String,
+        chain_config: Option<WalletEndPointConfig>,
     ) -> Wallet {
+        let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
         Wallet {
             private_key: hex::decode(private_key.clone()).unwrap_or_default(),
             public_key: hex::decode(public_key).unwrap_or_default(),
@@ -375,10 +418,15 @@ impl Wallet {
             btc_address,
             btc_address_registered: false,
             account_info: None,
+            chain_config,
         }
     }
 
-    pub fn from_mnemonic(mnemonic: &str) -> anyhow::Result<Wallet> {
+    pub fn from_mnemonic(
+        mnemonic: &str,
+        chain_config: Option<WalletEndPointConfig>,
+    ) -> anyhow::Result<Wallet> {
+        let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
         let mnemonic = Mnemonic::parse_in(B39Lang::English, mnemonic)?;
         let seed = mnemonic.to_seed("");
         let path: DerivationPath = "m/44'/118'/0'/0/0"
@@ -393,15 +441,8 @@ impl Wallet {
         let account_id = public_key
             .account_id(BECH_PREFIX)
             .map_err(|e| anyhow!("Address generation failed: {}", e))?;
-        let random_key = SigningKey::random();
-        let pubkey_bytes = random_key.public_key().to_bytes();
-        let btc_address = format!(
-            "bc1q{}",
-            hex::encode(&pubkey_bytes[..19])
-                .chars()
-                .take(38)
-                .collect::<String>()
-        );
+        let (_wif, btc_address) =
+            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
         Ok(Wallet {
             private_key: private_key_bytes.to_vec(),
             public_key: public_key.to_bytes().to_vec(),
@@ -412,25 +453,23 @@ impl Wallet {
             btc_address,
             btc_address_registered: false,
             account_info: None,
+            chain_config,
         })
     }
 
-    pub fn from_private_key(private_key: &str) -> anyhow::Result<Wallet> {
+    pub fn from_private_key(
+        private_key: &str,
+        btc_address: &str,
+        chain_config: Option<WalletEndPointConfig>,
+    ) -> anyhow::Result<Wallet> {
+        let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
         let private_key = hex::decode(private_key.to_string())?;
         let signing_key = SigningKey::from_slice(&private_key).map_err(|e| anyhow!("{}", e))?;
         let public_key = signing_key.public_key();
         let account_id = public_key
             .account_id(BECH_PREFIX)
             .map_err(|e| anyhow!("Address generation failed: {}", e))?;
-        let random_key = SigningKey::random();
-        let pubkey_bytes = random_key.public_key().to_bytes();
-        let btc_address = format!(
-            "bc1q{}",
-            hex::encode(&pubkey_bytes[..19])
-                .chars()
-                .take(38)
-                .collect::<String>()
-        );
+
         Ok(Wallet {
             private_key: private_key.to_vec(),
             public_key: public_key.to_bytes().to_vec(),
@@ -438,15 +477,17 @@ impl Wallet {
             balance_nyks: 0,
             balance_sats: 0,
             sequence: 0,
-            btc_address,
+            btc_address: btc_address.to_string(),
             btc_address_registered: false,
             account_info: None,
+            chain_config,
         })
     }
 
     pub fn import_from_json(path: &str) -> anyhow::Result<Wallet> {
         let json_string: String = std::fs::read_to_string(path)?;
         let account_info: Value = serde_json::from_str(&json_string)?;
+
         let wallet = Wallet {
             private_key: hex::decode(account_info["private_key"].as_str().unwrap().to_string())
                 .unwrap_or_default(),
@@ -464,6 +505,24 @@ impl Wallet {
                 .as_bool()
                 .unwrap_or_default(),
             account_info: None,
+            chain_config: WalletEndPointConfig::new(
+                account_info["lcd_endpoint"]
+                    .as_str()
+                    .unwrap_or("http://0.0.0.0:1317")
+                    .to_string(),
+                account_info["faucet_endpoint"]
+                    .as_str()
+                    .unwrap_or("http://0.0.0.0:6969")
+                    .to_string(),
+                account_info["rpc_endpoint"]
+                    .as_str()
+                    .unwrap_or("http://0.0.0.0:26657")
+                    .to_string(),
+                account_info["chain_id"]
+                    .as_str()
+                    .unwrap_or("nyks")
+                    .to_string(),
+            ),
         };
         Ok(wallet)
     }
@@ -477,11 +536,9 @@ impl Wallet {
         Ok(self.signing_key()?.public_key())
     }
     pub async fn update_balance(&mut self) -> anyhow::Result<Balance> {
-        let baseurl =
-            std::env::var("NYKS_LCD_BASE_URL").unwrap_or("http://0.0.0.0:1317".to_string());
         let url = format!(
             "{}/cosmos/bank/v1beta1/balances/{}",
-            baseurl, self.twilightaddress
+            self.chain_config.lcd_endpoint, self.twilightaddress
         );
         let client = Client::new();
         let response = client.get(url).send().await?;
@@ -511,11 +568,13 @@ impl Wallet {
         })
     }
     pub async fn account_info(&self) -> anyhow::Result<AccountResponse> {
-        let account_details = fetch_account_details(&self.twilightaddress).await?;
+        let account_details =
+            fetch_account_details(&self.twilightaddress, &self.chain_config.lcd_endpoint).await?;
         Ok(account_details)
     }
     pub async fn update_account_info(&mut self) -> anyhow::Result<()> {
-        let account_details = fetch_account_details(&self.twilightaddress).await?;
+        let account_details =
+            fetch_account_details(&self.twilightaddress, &self.chain_config.lcd_endpoint).await?;
         self.account_info = Some(account_details.account);
         Ok(())
     }
@@ -530,19 +589,51 @@ impl Wallet {
             "balance_sats": self.balance_sats,
             "sequence": self.sequence,
             "account_info": self.account_info,
+            "lcd_endpoint": self.chain_config.lcd_endpoint,
+            "faucet_endpoint": self.chain_config.faucet_endpoint,
+            "rpc_endpoint": self.chain_config.rpc_endpoint,
+            "chain_id": self.chain_config.chain_id,
         });
         std::fs::write(path, account_info.to_string())?;
         Ok(())
     }
-}
 
+    pub fn from_mnemonic_file(path: &str) -> anyhow::Result<Wallet> {
+        let mnemonic = std::fs::read_to_string(path)?;
+        let wallet = Wallet::from_mnemonic(&mnemonic, None)?;
+        Ok(wallet)
+    }
+
+    pub fn get_zk_account_seed(
+        &self,
+        chain_id: &str,
+        derivation_message: &str,
+    ) -> Result<SecretString, String> {
+        Ok(SecretString::new(
+            generate_seed(
+                &self.private_key,
+                &self.twilightaddress,
+                derivation_message,
+                chain_id,
+            )
+            .map_err(|e| format!("Failed to generate seed: {}", e))?
+            .get_signature(),
+        ))
+    }
+}
+// #[cfg(feature = "testnet")]
 pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
     let balance = wallet.update_balance().await?;
     debug!("Checking balance values if nyks is less than 50000");
     debug!("nyks: {}", balance.nyks);
     if balance.nyks < 50000 {
         debug!("Getting tokens from faucet");
-        get_nyks(&wallet.twilightaddress).await.unwrap_or_else(|e| {
+        get_nyks(
+            &wallet.twilightaddress,
+            &wallet.chain_config.faucet_endpoint,
+        )
+        .await
+        .unwrap_or_else(|e| {
             error!("Failed to get tokens from faucet: {}", e);
             info!("💡 You may need to wait or try again later");
         });
@@ -560,6 +651,7 @@ pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
             wallet.public_key()?,
             wallet.twilightaddress.to_string(),
             wallet.btc_address.to_string(),
+            &wallet.chain_config.lcd_endpoint,
         )
         .await
         {
@@ -570,28 +662,36 @@ pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
                 info!("   waiting for registered BTC deposit address to appear on-chain");
                 sleep(Duration::from_secs(10)).await;
                 info!("Minting test BTC...");
-                mint_sats(&wallet.twilightaddress)
-                    .await
-                    .unwrap_or_else(|e| {
-                        error!("Failed to mint satoshis: {}", e);
-                        info!("    You may need to restart the process again or try again later");
-                    });
+                mint_sats(
+                    &wallet.twilightaddress,
+                    &wallet.chain_config.faucet_endpoint,
+                )
+                .await
+                .unwrap_or_else(|e| {
+                    error!("Failed to mint satoshis: {}", e);
+                    info!("    You may need to restart the process again or try again later");
+                });
                 wallet.btc_address_registered = true;
             }
             Err(e) => {
                 error!("Failed to register BTC deposit address: {}", e);
+                debug!("   BTC Address: {}", &wallet.btc_address);
+
                 info!("    You may need to restart the process again or try again later");
             }
         };
     } else if balance.sats < 50000 {
         debug!("    Skipping register BTC deposit address because sats is less than 50000");
         info!("Minting test BTC...");
-        mint_sats(&wallet.twilightaddress)
-            .await
-            .unwrap_or_else(|e| {
-                error!("Failed to mint satoshis: {}", e);
-                info!("    You may need to restart the process again or try again later");
-            });
+        mint_sats(
+            &wallet.twilightaddress,
+            &wallet.chain_config.faucet_endpoint,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            error!("Failed to mint satoshis: {}", e);
+            info!("    You may need to restart the process again or try again later");
+        });
     } else {
         info!("Skipping minting test BTC because sats is greater than 50000");
     }

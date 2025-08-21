@@ -1,10 +1,10 @@
-use address::{AddressType, Network};
 use core::convert::TryInto;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha512};
+use twilight_client_sdk::address::{AddressType, Network};
 use twilight_client_sdk::{
     quisquislib::{
         self, Account, ElGamalCommitment, RistrettoPublicKey, RistrettoSecretKey, keys::SecretKey,
@@ -25,6 +25,7 @@ pub const DERIVATION_MESSAGE: &str = "This signature is for deriving the master 
 /// This struct holds the master key in memory for the duration of a session
 /// and should be created upon wallet unlock by providing a signature from a
 /// primary wallet (e.g., Cosmos).
+#[derive(Debug, Clone)]
 pub struct KeyManager {
     master_key: RistrettoSecretKey,
 }
@@ -92,15 +93,15 @@ impl EncryptedAccount {
     }
     //encode the EncryptedAccount into a hex string for storage on chain
     //convert account to bare bytes and then encode the complete sequence to hex
-    pub fn to_hex_str(&self) -> String {
+    pub fn to_hex_str(&self) -> Result<String, &'static str> {
         //reconstruct the Address from adress hex string to recreate bytes
         // to match the chain encoding
-        let address: Address = Address::from_hex(&self.address, AddressType::Standard).unwrap();
+        let address: Address = Address::from_hex(&self.address, AddressType::Standard)?;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&address.as_bytes());
         bytes.extend_from_slice(&self.encrypt.to_bytes());
         let hex = hex::encode(bytes);
-        hex
+        Ok(hex)
     }
 
     //decode the hex string into a EncryptedAccount with standard address
@@ -230,7 +231,7 @@ pub fn generate_zero_balance_encrypted_account_from_address(
 
     let chain_account = EncryptedAccount::new(address_hex, comm);
 
-    return Ok(chain_account.to_hex_str());
+    return Ok(chain_account.to_hex_str()?);
 }
 
 /// Generate zero balance Encrypted account with the provided key
@@ -248,7 +249,7 @@ pub fn generate_zero_encrypted_account_from_key(pk: String) -> Result<String, &'
         comm,
     );
 
-    return Ok(chain_account.to_hex_str());
+    return Ok(chain_account.to_hex_str()?);
 }
 
 /// Generate EncryptedAccount with balance in the hex string format
@@ -276,7 +277,7 @@ pub fn generate_encrypted_account_with_balance(
         comm,
     );
 
-    return Ok(chain_account.to_hex_str());
+    return Ok(chain_account.to_hex_str()?);
 }
 /// Decrypt EncryptedAccount
 /// Returns balance iff the public key corresponds to the provided private key and the encryption is valid.
@@ -331,7 +332,7 @@ pub fn create_output_for_coin_from_encrypted_account(
 /// Input @output : Output as Json String Object.
 /// Returns EncryptedAccount as hex string.
 ///
-pub fn extract_encrypted_account_from_output_coin(output: String) -> String {
+pub fn extract_encrypted_account_from_output_coin(output: String) -> Result<String, &'static str> {
     let out: Output = serde_json::from_str(&output).unwrap();
 
     let account: EncryptedAccount = EncryptedAccount::from(out.clone());

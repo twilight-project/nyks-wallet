@@ -2,15 +2,44 @@
 name = "nyks-wallet"
 version = "0.1.0"
 edition = "2024"
-
+resolver = "2"
 
 [[bin]]
 name = "relayer-init"
 path = "src/bin/relayer_init.rs"
+required-features = ["order-wallet"]
 
 [lib]
 name = "nyks_wallet"
 path = "src/lib.rs"
+
+
+# ---- Features ---------------------------------------------------------------
+[features]
+# Default build uses SQLite + r2d2 pool + bundled libsqlite3
+default = ["sqlite", "order-wallet"]
+
+# Exactly one of these should be enabled at a time.
+sqlite = [
+    "diesel/sqlite",
+    "diesel_migrations",
+    "libsqlite3-sys/bundled",
+    "r2d2",
+    "order-wallet",
+]
+
+postgresql = [
+    "diesel/postgres",
+    "diesel_migrations",
+    "pq-sys",
+    "r2d2",
+    "order-wallet",
+]
+
+# Only enable this if you want to build the validator wallet
+validator-wallet = []
+
+order-wallet = ["dep:twilight-client-sdk", "curve25519-dalek"]
 
 
 [dependencies]
@@ -18,51 +47,81 @@ anyhow = "1.0"
 base64 = "0.22"
 bip32 = { version = "0.5", default-features = false, features = ["bip39"] }
 cosmrs = "0.15"
-k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
-hex = "0.4"
-prost = "0.12"
-prost-types = "0.12"
-chrono = "0.4"
-
-#  json rpc dependencies #########################################################
-reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
-jsonrpc = "0.17.0"
-jsonrpc-http-server = "18.0"
-jsonrpc-core = "18.0.0"
-serde-this-or-that = "0.4.2"
-uuid = { version = "1.6.1", features = ["v4", "serde"] }
-lazy_static = "1.4.0"
-# #########################################################
+bip39 = { version = "2.2.0", features = ["rand"] }
 bitcoin = { version = "0.32.6", features = ["rand"] }
 bincode = "1.3.3"
+chrono = { version = "0.4", features = ["serde"] }
+curve25519-dalek = { version = "3", default-features = false, optional = true }
+dotenv = "0.15"
+env_logger = "0.11"
+fastrand = "2.0"
+hex = "0.4"
+jsonrpc = "0.17.0"
+jsonrpc-core = "18.0.0"
+jsonrpc-http-server = "18.0"
+jsonrpsee = { version = "0.25.1", features = [
+    "macros",
+    "http-client",
+    "client",
+] }
+keyring = "3.0"
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+lazy_static = "1.4.0"
+log = "0.4"
+prost = "0.12"
+prost-types = "0.12"
+rand = "0.7"
+rand_core = "0.6"
+reqwest = { version = "0.11", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+] }
 ripemd = "0.1"
+rpassword = "7"
+secrecy = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde-this-or-that = "0.4.2"
+# serial_test = "2"
 sha2 = "0.10"
-rpassword = "7"
+subtle = "2.5"
+thiserror = "2.0.12"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
-fastrand = "2.0"
-bip39 = { version = "2.2.0", features = ["rand"] }
-dotenv = "0.15"
-log = "0.4"
-env_logger = "0.11"
-serial_test = "2"
-curve25519-dalek = { version = "3", default-features = false }
-rand = "0.7"
 tendermint-rpc = { version = "0.34", features = ["http-client"] }
+uuid = { version = "1.6.1", features = ["v4", "serde"] }
+zeroize = "1.7"
+aes-gcm = "0.10"
+
+# ---- Database (feature-gated) ----------------------------------------------
+diesel = { version = "2.1", features = ["chrono", "r2d2"], optional = true }
+diesel_migrations = { version = "2.1", optional = true }
+r2d2 = { version = "0.8", optional = true }
+libsqlite3-sys = { version = "0.27", optional = true }
+pq-sys = { version = "0.4", optional = true }
+
+
+# ---- External Crates --------------------------------------------------
 [dependencies.twilight-client-sdk]
 git = "https://github.com/twilight-project/twilight-client-sdk.git"
-# branch = "develop"
-tag = "v0.0.1"
-# branch = "zk-account"
-# path = "../twilight-client-sdk_zkaccount"
+tag = "v0.0.2"
+optional = true
 
-[dependencies.utxo-in-memory]
-git = "https://github.com/twilight-project/zkos-rust.git"
-tag = "v0.0.1"
-[dependencies.address]
-git = "https://github.com/twilight-project/zkos-rust.git"
-tag = "v0.0.1"
+
+# ---- Build dependencies -----------------------------------------------------
 
 [build-dependencies]
 prost-build = "0.12"
+
+[dev-dependencies]
+serial_test = "2"
+# ---- (Optional) Tooling hints ----------------------------------------------
+[package.metadata.rust-analyzer]
+features = ["sqlite"]
+
+# ---- (Optional) Release tweaks ---------------------------------------------
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3

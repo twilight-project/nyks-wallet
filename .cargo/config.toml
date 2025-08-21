@@ -1,0 +1,11 @@
+[alias]
+check-sqlite = "check --no-default-features --features sqlite"
+check-pg = "check --no-default-features --features postgresql"
+test-sqlite = "test --no-default-features --features sqlite"
+test-pg = "test --no-default-features --features postgresql"
+check-ow = "check --no-default-features --features sqlite,order-wallet"
+test-ow = "test --no-default-features --features sqlite,order-wallet"
+check-vw = "check --no-default-features --features validator-wallet"
+test-vw = "test --no-default-features --features validator-wallet"
+check-vw-lib = "check --lib --no-default-features --features validator-wallet"
+test-vw-lib = "test --lib --no-default-features --features validator-wallet"

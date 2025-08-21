@@ -3,7 +3,7 @@
 mod tests {
     use crate::nyks_fn::MsgMintBurnTradingBtc;
     use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
-    use crate::nyks_rpc::rpcclient::txrequest::{NYKS_RPC_BASE_URL, RpcBody, RpcRequest, TxParams};
+    use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
     use crate::nyks_rpc::rpcclient::txresult::from_rpc_response;
     use crate::seed_signer::{build_sign_doc, sign_adr036, signature_bundle};
     use crate::wallet::*;
@@ -11,6 +11,7 @@ mod tests {
     use crate::zkos_accounts::encrypted_account::DERIVATION_MESSAGE;
     use cosmrs::crypto::secp256k1::SigningKey;
     use log::warn;
+    use secrecy::SecretString;
     use serial_test::serial;
 
     use std::sync::Once;
@@ -115,8 +116,10 @@ mod tests {
     async fn test_wallet_from_mnemonic() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
         init_logger();
-        let wallet =
-            Wallet::from_mnemonic("test test test test test test test test test test test junk")?;
+        let wallet = Wallet::from_mnemonic(
+            "test test test test test test test test test test test junk",
+            None,
+        )?;
         println!("wallet: {:?}", wallet);
         Ok(())
     }
@@ -128,8 +131,19 @@ mod tests {
     async fn test_wallet_from_private_key() -> anyhow::Result<()> {
         dotenv::dotenv().ok();
         init_logger();
+        let random_key = SigningKey::random();
+        let pubkey_bytes = random_key.public_key().to_bytes();
+        let btc_address = format!(
+            "bc1q{}",
+            hex::encode(&pubkey_bytes[..19])
+                .chars()
+                .take(38)
+                .collect::<String>()
+        );
         let wallet = Wallet::from_private_key(
             "e64e7928d4f6c06f01fefd31f760c51f59a16426e792761cd00529b76501c8a0",
+            &btc_address,
+            None,
         )?;
         println!("wallet: {:?}", wallet);
         Ok(())
@@ -144,7 +158,9 @@ mod tests {
         init_logger();
         global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
-        let account_details = fetch_account_details(&wallet.twilightaddress).await?;
+        let account_details =
+            fetch_account_details(&wallet.twilightaddress, &wallet.chain_config.lcd_endpoint)
+                .await?;
         println!("Account details: {:?}", account_details);
         Ok(())
     }
@@ -158,7 +174,8 @@ mod tests {
         init_logger();
         global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
-        let balance = check_balance(&wallet.twilightaddress).await?;
+        let balance =
+            check_balance(&wallet.twilightaddress, &wallet.chain_config.lcd_endpoint).await?;
         println!("Balance: {:?}", balance);
         Ok(())
     }
@@ -175,12 +192,8 @@ mod tests {
         let sk = wallet.signing_key()?;
         let pk = wallet.public_key()?;
         let account_details = wallet.account_info().await?;
-        let sequence = account_details.account.sequence.parse::<u64>()?;
-        let account_number = account_details
-            .account
-            .account_number
-            .parse::<u64>()
-            .unwrap();
+        let sequence = account_details.account.sequence;
+        let account_number = account_details.account.account_number;
         // Create test message
         let msg = MsgMintBurnTradingBtc {
             mint_or_burn: true,
@@ -207,8 +220,7 @@ mod tests {
         );
 
         // Send RPC request
-        let url = NYKS_RPC_BASE_URL.to_string();
-        let response = match tokio::task::spawn_blocking(move || tx_send.send(url))
+        let response = match tokio::task::spawn_blocking(move || tx_send.send(wallet.chain_config.rpc_endpoint.clone()))
             .await // wait for the blocking task to finish
             {
                 Ok(response) => response,
@@ -288,12 +300,42 @@ mod tests {
                 ZkAccountDB::new()
             }
         };
-        let index = db.generate_new_account(balance, seed_str).unwrap();
+        let index = db
+            .generate_new_account(balance, &SecretString::new(seed_str))
+            .unwrap();
         println!("{}", index);
-        println!("{}", db.get_all_accounts_as_json());
+        println!(
+            "{:?}",
+            db.get_all_accounts_as_json().map_err(|e| e.to_string())
+        );
         match db.export_to_json("ZkAccounts.json") {
             Ok(_) => println!("Exported to ZkAccounts.json"),
             Err(e) => println!("Failed to export to json: {}", e),
         }
+    }
+
+    // This test creates a wallet from a keyring file and prints the wallet details.
+    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_from_keyring_file --exact --show-output
+    #[tokio::test]
+    #[serial]
+    async fn test_wallet_from_keyring_file() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        init_logger();
+        // global_setup().await;
+        let wallet = Wallet::from_mnemonic_file("validator-self.mnemonic")?;
+        let balance =
+            check_balance(&wallet.twilightaddress, &wallet.chain_config.lcd_endpoint).await?;
+        println!("balance: {:?}", balance);
+        println!("wallet: {:?}", wallet);
+        Ok(())
+    }
+    #[tokio::test]
+    #[serial]
+    async fn test_wallet_from_mnemonic_new() -> anyhow::Result<()> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let wallet = Wallet::new(None)?;
+        println!("wallet: {:?}", wallet);
+        Ok(())
     }
 }
