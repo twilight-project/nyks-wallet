@@ -10,7 +10,7 @@ Add **nyks-wallet** as a dependency and enable the feature:
 
 ```toml
 [dependencies]
-nyks-wallet = { git = "https://github.com/twilight-project/nyks-wallet.git", features = ["validator-wallet"] }
+nyks-wallet = { git = "https://github.com/twilight-project/nyks-wallet.git", default-features = false, features = ["validator-wallet"] }
 ```
 
 If you are working inside this repository, build with:
@@ -75,17 +75,19 @@ pub async fn mint_burn_trading_btc_tx(
     btc_value: u64,
     qq_account: String,
     encrypt_scalar: String,
+    twilight_address: String,
 ) -> Result<(String, u32), String>
 ```
 
 Broadcasts a `MsgMintBurnTradingBtc` transaction.
 
-| Parameter        | Description                               |
-| ---------------- | ----------------------------------------- |
-| `mint_or_burn`   | `true` = mint, `false` = burn.            |
-| `btc_value`      | Amount in satoshis.                       |
-| `qq_account`     | QuisQuis‐encoded account string.          |
-| `encrypt_scalar` | Scalar used in the encryption commitment. |
+| Parameter          | Description                               |
+| ------------------ | ----------------------------------------- |
+| `mint_or_burn`     | `true` = mint, `false` = burn.            |
+| `btc_value`        | Amount in satoshis.                       |
+| `qq_account`       | QuisQuis‐encoded account string.          |
+| `encrypt_scalar`   | Scalar used in the encryption commitment. |
+| `twilight_address` | Twilight address to attribute the event.  |
 
 Like `transfer_tx`, it returns a tuple `(tx_hash, tx_code)`.
 
@@ -94,7 +96,7 @@ Like `transfer_tx`, it returns a tuple `(tx_hash, tx_code)`.
 ## 4. Quick Example
 
 ```rust
-use nyks_wallet::validator_wallet::transfer_tx;
+use nyks_wallet::validator_wallet::{transfer_tx, mint_burn_trading_btc_tx};
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
@@ -104,8 +106,17 @@ async fn main() -> Result<(), String> {
         "<byte-code-base64>".into(),
         1_000u64,
     ).await?;
+    println!("Broadcasted transfer: {} (code {})", hash, code);
 
-    println!("Broadcasted: {} (code {})", hash, code);
+    let (hash2, code2) = mint_burn_trading_btc_tx(
+        true,
+        5_000u64,
+        "<qq-account>".into(),
+        "<encrypt-scalar>".into(),
+        "<twilight-address>".into(),
+    ).await?;
+    println!("Broadcasted mint/burn: {} (code {})", hash2, code2);
+
     Ok(())
 }
 ```

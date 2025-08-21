@@ -50,3 +50,4 @@ wallet_data.db-wal
 wallet_data.db-journal
 wallet_data.db-lock
 examples/trading_bot/mnomenics_key
+env.example

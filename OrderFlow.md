@@ -15,15 +15,7 @@ This guide shows the minimal, end‑to‑end flow to place and manage trading an
 
 ### Environment (Testnet)
 
-Set these; they’re required for wallet, faucet, and ZkOS services:
-
-```env
-NYKS_LCD_BASE_URL=https://lcd.twilight.rest
-NYKS_RPC_BASE_URL=https://rpc.twilight.rest
-FAUCET_BASE_URL=https://faucet-rpc.twilight.rest
-ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
-RUST_LOG=info
-```
+follow the .env.example file
 
 ---
 

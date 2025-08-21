@@ -44,19 +44,28 @@ The crate started as a market-maker client and grew into the de-facto wallet lay
 nyks-wallet
 │
 └── src/
-    ├── wallet/          # Account handling & on-chain helpers
-    │   ├── wallet.rs    # Wallet struct & lifecycle helpers
-    │   ├── faucet.rs    # Faucet + BTC-deposit tx builders
-    │   ├── nyks_fn.rs   # Mint/Burn trading messages
-    │   ├── btc_key.rs   # Deterministic BTC key helpers
-    │   └── seed_signer.rs
-    │
-    ├── zkos_accounts/   # Shielded account (QuisQuis) utilities
-    ├── nyks_rpc/        # Minimal JSON-RPC client & message encoder
-    ├── bin/             # CLI utilities (e.g. relayer_init.rs)
-    ├── proto/           # Upstream `.proto` definitions (compiled by build.rs)
-    └── lib.rs           # Re-exports + generated protobuf modules
+    ├── wallet/           # Account handling & on-chain helpers
+    ├── relayer_module/   # OrderWallet trading & lending interface
+    ├── zkos_accounts/    # Shielded account (QuisQuis) utilities
+    ├── database/         # Optional Diesel persistence (feature gated)
+    ├── security/         # Password, encryption & keyring helpers
+    ├── nyks_rpc/         # Minimal JSON-RPC client & message encoder
+    ├── config.rs         # Endpoint configuration helpers
+    ├── bin/              # CLI utilities (e.g. relayer_init.rs)
+    ├── proto/            # Upstream `.proto` definitions (compiled by build.rs)
+    └── lib.rs            # Crate root & public re-exports
 ```
+
+**Deep-links to key modules & docs**
+
+- **wallet/** – [`src/wallet`](src/wallet) • see [Core functionality](#4--core-functionality)
+- **relayer_module/** – [`src/relayer_module`](src/relayer_module) • see [OrderWallet guide](OrderWallet.md)
+- **zkos_accounts/** – [`src/zkos_accounts`](src/zkos_accounts)
+- **database/** – [`src/database`](src/database) • see [Database features overview](Database.md)
+- **security/** – [`src/security`](src/security)
+- **nyks_rpc/** – [`src/nyks_rpc`](src/nyks_rpc)
+- **config.rs** – [`src/config.rs`](src/config.rs)
+- **bin/** – [`src/bin`](src/bin) sample CLI utilities
 
 All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**, **curve25519-dalek** and **twilight-client-sdk**.
 
@@ -177,9 +186,13 @@ async fn main() -> anyhow::Result<()> {
 ## 9 • Further reading
 
 - [Quick Start guide](QuickStart.md) – fastest path to build, configure & fund a test wallet.
-- [Deployment guide](DEPLOYMENT.md) – detailed steps to build & run `relayer_init` (plus Docker).
+- [OrderWallet guide](OrderWallet.md) – comprehensive reference for trading & lending APIs.
+- [Order flow walk-through](OrderFlow.md) – step-by-step lifecycle of a leveraged position.
+- [Validator wallet guide](Validator-Wallet.md) – validator node key management utilities.
+- [Database features overview](Databse.md) – optional SQLite/PostgreSQL persistence design.
+- [Deployment guide](DEPLOYMENT.md) – build & run `relayer_init` (plus Docker containers).
 - [`twilight-client-sdk`](https://github.com/twilight-project/twilight-client-sdk) – Rust primitives for QuisQuis & ZkOS.
-- [`relayer-core`](https://github.com/twilight-project/relayer-core) - Twilight Relayer Core is an extremely high performance matching engine written in Rust.
+- [`relayer-core`](https://github.com/twilight-project/relayer-core) – ultra-low-latency matching engine used by Twilight.
 
 ---
 
