@@ -138,7 +138,21 @@ For more details, see the [**Full Documentation**](./docs/lending_bot.md).
 cargo run --bin lending_bot -- --min-rate 0.05 --max-exposure 0.8 --lending-amount 10000
 ```
 
-### 5. Market Data Test (`test_market_data.rs`)
+### 5. Random Trades Bot (`random_trades.rs`)
+
+**Comprehensive automated trading with random order generation**
+
+- **Strategy**: Places random trader and lend orders at regular intervals
+- **Features**: ZkOS account management, order monitoring, account rotation
+- **Best for**: Learning ZkOS patterns, testing account lifecycle, automated trading examples
+
+For more details, see the [**Full Documentation**](./docs/random_trades.md).
+
+```bash
+cargo run --bin random_trades
+```
+
+### 6. Market Data Test (`test_market_data.rs`)
 
 **API integration testing utility**
 

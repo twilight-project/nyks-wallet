@@ -22,5 +22,9 @@ Below is a list of the available documentation. Each document provides a compreh
 
   - A trend-following bot that uses technical indicators to make trading decisions.
 
+- **[🎲 Random Trades Bot (`random_trades.md`)](./random_trades.md)**
+
+  - A comprehensive automated trading bot that places random trader and lend orders with proper ZkOS account management.
+
 - **[📊 Market Data API Test Utility (`test_market_data.md`)](./test_market_data.md)**
   - A utility for testing and demonstrating the market data fetching capabilities of the Relayer API.

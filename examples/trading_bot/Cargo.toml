@@ -23,6 +23,11 @@ path = "src/lending_bot.rs"
 name = "test_market_data"
 path = "src/test_market_data.rs"
 
+[[bin]]
+name = "random_trades"
+path = "src/random_trades.rs"
+
+
 [dependencies]
 nyks-wallet = { path = "../../" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

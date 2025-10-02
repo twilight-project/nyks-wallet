@@ -442,7 +442,7 @@ impl OrderWallet {
         );
         let transaction = bincode::deserialize(&hex::decode(tx_hex).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-        let tx_hash = tokio::task::spawn_blocking(move || {
+        let _tx_hash = tokio::task::spawn_blocking(move || {
             twilight_client_sdk::chain::tx_commit_broadcast_transaction(transaction)
         })
         .await
