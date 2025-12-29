@@ -75,6 +75,7 @@ mod tests {
     // This test creates a new wallet, gets test tokens, updates the balance and account info,
     // and exports the wallet to a JSON file.
     // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_complete_flow --exact --show-output
+    // cargo test --manifest-path /home/ubuntu/Relayer-dev/SLTP/nyks-wallet/Cargo.toml --lib --all-features -- test::tests::test_wallet_complete_flow --exact --nocapture
     #[tokio::test]
     #[serial]
     async fn test_wallet_complete_flow() -> anyhow::Result<()> {

@@ -250,7 +250,7 @@ impl RandomOrderBot {
         // Generate random order parameters
         let mut rng = rand::thread_rng();
         let variation;
-        let order_type = if rng.gen_bool(0.1) {
+        let order_type = if rng.gen_bool(0.7) {
             OrderType::MARKET
         } else {
             OrderType::LIMIT
@@ -374,6 +374,7 @@ impl RandomOrderBot {
                                 account_index, order_info.order_type
                             );
                             orders_to_close.push(*account_index);
+                            break;
                         }
                         OrderStatus::CANCELLED => {
                             info!("Order cancelled: account={}", account_index);
@@ -488,7 +489,11 @@ impl RandomOrderBot {
             _ => {
                 // Close trader order
                 match order_wallet
-                    .close_trader_order(account_index, OrderType::MARKET, 0.0)
+                    .close_trader_order(
+                        account_index,
+                        OrderType::MARKET,
+                        self.current_market_price as f64,
+                    )
                     .await
                 {
                     Ok(_) => {
@@ -545,14 +550,14 @@ impl RandomOrderBot {
             sleep(Duration::from_millis(100)).await;
         }
 
-        // // Place lend orders
-        // for i in 0..self.config.initial_lend_orders {
-        //     if let Err(e) = self.place_random_lend_order(order_wallet).await {
-        //         error!("Failed to place lend order {}: {}", i + 1, e);
-        //     }
-        //     // Small delay between orders
-        //     sleep(Duration::from_millis(6500)).await;
-        // }
+        // Place lend orders
+        for i in 0..self.config.initial_lend_orders {
+            if let Err(e) = self.place_random_lend_order(order_wallet).await {
+                error!("Failed to place lend order {}: {}", i + 1, e);
+            }
+            // Small delay between orders
+            sleep(Duration::from_millis(6500)).await;
+        }
 
         info!(
             "Initial orders placed: {} trader, {} lend orders active",
@@ -583,48 +588,49 @@ impl RandomOrderBot {
         // // Place initial orders
         self.place_initial_orders(order_wallet).await?;
 
-        // info!(
-        //     "Starting main trading loop with {} second intervals",
-        //     self.config.order_interval_seconds
-        // );
+        info!(
+            "Starting main trading loop with {} second intervals",
+            self.config.order_interval_seconds
+        );
 
         // // Main trading loop
-        // loop {
-        //     // Update market price
-        //     if let Err(e) = self.update_market_price(order_wallet).await {
-        //         warn!("Failed to update market price: {}", e);
-        //     }
+        loop {
+            //     // Update market price
+            if let Err(e) = self.update_market_price(order_wallet).await {
+                warn!("Failed to update market price: {}", e);
+            }
 
-        //     // Update existing orders
-        //     if let Err(e) = self.update_orders(order_wallet).await {
-        //         error!("Failed to update orders: {}", e);
-        //     }
+            //     // Update existing orders
+            if let Err(e) = self.update_orders(order_wallet).await {
+                error!("Failed to update orders: {}", e);
+            }
+            sleep(Duration::from_secs(self.config.order_interval_seconds)).await;
 
-        //     // Place new orders if we have available accounts
-        //     if !self.available_accounts.is_empty() {
-        //         let mut rng = rand::thread_rng();
-        //         let should_place_trader = rng.gen_bool(0.6); // 60% chance for trader order
-        //         let should_place_lend = rng.gen_bool(0.4); // 40% chance for lend order
+            // Place new orders if we have available accounts
+            if !self.available_accounts.is_empty() {
+                let mut rng = rand::thread_rng();
+                let should_place_trader = rng.gen_bool(0.6); // 60% chance for trader order
+                let should_place_lend = rng.gen_bool(0.4); // 40% chance for lend order
 
-        //         if should_place_trader {
-        //             if let Err(e) = self.place_random_trader_order(order_wallet).await {
-        //                 error!("Failed to place trader order: {}", e);
-        //             }
-        //         }
+                if should_place_trader {
+                    if let Err(e) = self.place_random_trader_order(order_wallet).await {
+                        error!("Failed to place trader order: {}", e);
+                    }
+                }
 
-        //         if should_place_lend {
-        //             if let Err(e) = self.place_random_lend_order(order_wallet).await {
-        //                 error!("Failed to place lend order: {}", e);
-        //             }
-        //         }
-        //     }
+                if should_place_lend {
+                    if let Err(e) = self.place_random_lend_order(order_wallet).await {
+                        error!("Failed to place lend order: {}", e);
+                    }
+                }
+            }
 
-        //     // Log statistics
-        //     self.log_stats();
+            // Log statistics
+            self.log_stats();
 
-        //     // Wait for next iteration
-        //     sleep(Duration::from_secs(self.config.order_interval_seconds)).await;
-        // }
+            //     // Wait for next iteration
+            // sleep(Duration::from_secs(self.config.order_interval_seconds)).await;
+        }
         Ok(())
     }
 
@@ -651,15 +657,15 @@ impl RandomOrderBot {
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Debug)
+        .filter_level(log::LevelFilter::Info)
         .init();
     dotenv::dotenv().ok();
 
     // Create bot configuration
     let config = RandomOrderBotConfig {
         initial_capital: 200_000, // 200k sats
-        initial_trader_orders: 10,
-        initial_lend_orders: 10,
+        initial_trader_orders: 15,
+        initial_lend_orders: 15,
         order_interval_seconds: 10,
         min_leverage: 10,
         max_leverage: 50,
@@ -667,7 +673,7 @@ async fn main() -> Result<(), anyhow::Error> {
     };
 
     // Initialize wallet
-    let wallet_id = "random_order_bot1".to_string();
+    let wallet_id = "random_order_bot4".to_string();
     let mut order_wallet;
     let wallet_exists = OrderWallet::get_wallet_id_from_db(&wallet_id, None)
         .map_err(|e| anyhow::anyhow!("Failed to check wallet ID existence: {}", e))?;
@@ -686,6 +692,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Get test tokens for development
     let mut wallet = order_wallet.wallet.clone();
     let _ = nyks_wallet::wallet::get_test_tokens(&mut wallet).await?;
+    // let _ = nyks_wallet::wallet::get_test_tokens(&mut wallet).await?;
 
     // Create and run the bot
     let mut bot = RandomOrderBot::new(config);
