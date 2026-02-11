@@ -9,6 +9,11 @@ name = "relayer-init"
 path = "src/bin/relayer_init.rs"
 required-features = ["order-wallet"]
 
+[[bin]]
+name = "relayer-cli"
+path = "src/bin/relayer_cli.rs"
+required-features = ["order-wallet"]
+
 [lib]
 name = "nyks_wallet"
 path = "src/lib.rs"
@@ -92,6 +97,7 @@ tendermint-rpc = { version = "0.34", features = ["http-client"] }
 uuid = { version = "1.6.1", features = ["v4", "serde"] }
 zeroize = "1.7"
 aes-gcm = "0.10"
+clap = { version = "4", features = ["derive"] }
 
 # ---- Database (feature-gated) ----------------------------------------------
 diesel = { version = "2.1", features = ["chrono", "r2d2"], optional = true }
