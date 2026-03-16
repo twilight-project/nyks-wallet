@@ -452,6 +452,7 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             password,
             with_db,
         } => {
+            let mnemonic = mnemonic.trim().to_string();
             let mut ow =
                 OrderWallet::import_from_mnemonic(&mnemonic, None).map_err(|e| e.to_string())?;
             println!("Wallet imported successfully");

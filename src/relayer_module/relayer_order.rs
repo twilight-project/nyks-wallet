@@ -119,15 +119,15 @@ pub async fn close_trader_order_sltp_internal(
         TXType::ORDERTX,
         Some(SlTpOrder::new(stop_loss_price, take_profit_price)),
     );
-    // let response = relayer_api_client
-    //     .settle_trade_order(ExecuteTraderOrderZkos::decode_from_hex_string(
-    //         request_msg.clone(),
-    //     )?)
-    //     .await
-    //     .map_err(|e| e.to_string())?;
-    println!("request_msg: {}", request_msg);
-    Ok("".to_string())
-    // Ok(response.id_key.to_string())
+    let response = relayer_api_client
+        .settle_trade_order(ExecuteTraderOrderZkos::decode_from_hex_string(
+            request_msg.clone(),
+        )?)
+        .await
+        .map_err(|e| e.to_string())?;
+    // println!("request_msg: {}", request_msg);
+    // Ok("".to_string())
+    Ok(response.id_key.to_string())
 }
 
 pub async fn close_lend_order(

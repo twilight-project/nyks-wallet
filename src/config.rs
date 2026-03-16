@@ -15,6 +15,9 @@ lazy_static! {
     pub static ref RELAYER_API_RPC_SERVER_URL: String = std::env::var("RELAYER_API_RPC_SERVER_URL")
         .unwrap_or("http://0.0.0.0:8088/api".to_string());
     pub static ref CHAIN_ID: String = std::env::var("CHAIN_ID").unwrap_or("nyks".to_string());
+    /// Network type: "testnet" or "mainnet". Controls BIP-44 coin type (1 vs 118).
+    pub static ref NETWORK_TYPE: String =
+        std::env::var("NETWORK_TYPE").unwrap_or("mainnet".to_string());
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EndpointConfig {

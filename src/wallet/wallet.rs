@@ -5,8 +5,8 @@ use crate::{faucet::*, generate_seed};
 use anyhow::anyhow;
 use bip32::{DerivationPath, XPrv};
 use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
+use cosmrs::crypto::{secp256k1::SigningKey, PublicKey};
 use cosmrs::AccountId;
-use cosmrs::crypto::{PublicKey, secp256k1::SigningKey};
 use log::{debug, error, info};
 use reqwest::Client;
 use ripemd::Ripemd160;
@@ -15,11 +15,30 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 use zeroize::ZeroizeOnDrop;
 pub const BECH_PREFIX: &str = "twilight";
+
 pub type NYKS = u64;
 pub type SATS = u64;
+
+/// Returns the BIP-44 coin type based on `NETWORK_TYPE` env var.
+/// Testnet = 1 (SLIP-44), Mainnet = 118 (Cosmos). Must match Keplr's `slip44`.
+fn coin_type() -> u32 {
+    use crate::config::NETWORK_TYPE;
+    match NETWORK_TYPE.as_str() {
+        "mainnet" => 118,
+        _ => 1,
+    }
+}
+
+/// Returns the BIP-44 derivation path using the configured coin type.
+fn derivation_path() -> DerivationPath {
+    let ct = coin_type();
+    format!("m/44'/{ct}'/0'/0/0")
+        .parse()
+        .expect("valid derivation path")
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Balance {
     pub nyks: NYKS,
@@ -68,9 +87,7 @@ fn account_from_mnemonic() -> anyhow::Result<(SigningKey, PublicKey, AccountId)>
     println!("✅ Mnemonic validated successfully");
 
     let seed = mnemonic.to_seed("");
-    let path: DerivationPath = "m/44'/118'/0'/0/0"
-        .parse()
-        .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
+    let path = derivation_path();
 
     let xprv = XPrv::derive_from_path(&seed, &path)
         .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
@@ -256,9 +273,7 @@ pub async fn create_and_export_randmon_wallet_account(name: &str) -> anyhow::Res
 
     let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
     let seed = mnemonic.to_seed("");
-    let path: DerivationPath = "m/44'/118'/0'/0/0"
-        .parse()
-        .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
+    let path = derivation_path();
 
     let xprv = XPrv::derive_from_path(&seed, &path)
         .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
@@ -324,9 +339,7 @@ impl Wallet {
         let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
         let seed = mnemonic.to_seed("");
-        let path: DerivationPath = "m/44'/118'/0'/0/0"
-            .parse()
-            .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
+        let path = derivation_path();
 
         let xprv = XPrv::derive_from_path(&seed, &path)
             .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
@@ -360,9 +373,7 @@ impl Wallet {
     pub async fn create_new_with_random_btc_address() -> anyhow::Result<Wallet> {
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
         let seed = mnemonic.to_seed("");
-        let path: DerivationPath = "m/44'/118'/0'/0/0"
-            .parse()
-            .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
+        let path = derivation_path();
 
         let xprv = XPrv::derive_from_path(&seed, &path)
             .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
@@ -429,9 +440,7 @@ impl Wallet {
         let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
         let mnemonic = Mnemonic::parse_in(B39Lang::English, mnemonic)?;
         let seed = mnemonic.to_seed("");
-        let path: DerivationPath = "m/44'/118'/0'/0/0"
-            .parse()
-            .map_err(|e| anyhow!("Invalid derivation path: {}", e))?;
+        let path = derivation_path();
         let xprv = XPrv::derive_from_path(&seed, &path)
             .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
         let private_key_bytes = xprv.private_key().to_bytes();
@@ -701,4 +710,26 @@ pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
     debug!("    new balance: {:?}", balance);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_import_wallet_from_mnemonic() {
+        let mnemonic = "test test test test test test test test test test test junk";
+        let wallet = Wallet::from_mnemonic(mnemonic, None).expect("Failed to import wallet");
+        let ct = coin_type();
+        println!(
+            "NETWORK_TYPE:       {}",
+            std::env::var("NETWORK_TYPE").unwrap_or("testnet".to_string())
+        );
+        println!("Coin type:          {}", ct);
+        println!("Derivation path:    m/44'/{ct}'/0'/0/0");
+        println!("Wallet address:     {}", wallet.twilightaddress);
+        println!("Wallet BTC address: {}", wallet.btc_address);
+        println!("Public key hex:     {}", hex::encode(&wallet.public_key));
+        println!("Private key hex:    {}", hex::encode(&wallet.private_key));
+    }
 }
