@@ -93,7 +93,6 @@ fn account_from_mnemonic() -> anyhow::Result<(SigningKey, PublicKey, AccountId)>
         .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
 
     let private_key_bytes = xprv.private_key().to_bytes();
-    println!("{}", hex::encode(private_key_bytes));
     let signing_key = SigningKey::from_slice(&private_key_bytes)
         .map_err(|e| anyhow!("Invalid private key: {}", e))?;
 
