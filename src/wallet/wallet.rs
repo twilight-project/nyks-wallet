@@ -496,7 +496,7 @@ impl Wallet {
     pub fn import_from_json(path: &str) -> anyhow::Result<Wallet> {
         let json_string: String = std::fs::read_to_string(path)?;
         let account_info: Value = serde_json::from_str(&json_string)?;
-
+        let wallet_config = WalletEndPointConfig::from_env();
         let wallet = Wallet {
             private_key: hex::decode(account_info["private_key"].as_str().unwrap().to_string())
                 .unwrap_or_default(),
@@ -517,19 +517,19 @@ impl Wallet {
             chain_config: WalletEndPointConfig::new(
                 account_info["lcd_endpoint"]
                     .as_str()
-                    .unwrap_or("http://0.0.0.0:1317")
+                    .unwrap_or(&wallet_config.lcd_endpoint)
                     .to_string(),
                 account_info["faucet_endpoint"]
                     .as_str()
-                    .unwrap_or("http://0.0.0.0:6969")
+                    .unwrap_or(&wallet_config.faucet_endpoint)
                     .to_string(),
                 account_info["rpc_endpoint"]
                     .as_str()
-                    .unwrap_or("http://0.0.0.0:26657")
+                    .unwrap_or(&wallet_config.rpc_endpoint)
                     .to_string(),
                 account_info["chain_id"]
                     .as_str()
-                    .unwrap_or("nyks")
+                    .unwrap_or(&wallet_config.chain_id.as_str())
                     .to_string(),
             ),
         };

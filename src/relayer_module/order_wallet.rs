@@ -22,17 +22,17 @@ use crate::{
     },
     wallet::Wallet,
     zkos_accounts::{
-        encrypted_account::{DERIVATION_MESSAGE, KeyManager},
+        encrypted_account::{KeyManager, DERIVATION_MESSAGE},
         zkaccount::ZkAccountDB,
     },
 };
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use crate::database::{DatabaseManager, WalletList, connection::run_migrations_once};
+use crate::database::{connection::run_migrations_once, DatabaseManager, WalletList};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::security::SecurePassword;
 use log::{debug, error};
-use relayer_module::utils::{TxResult, build_and_sign_msg_mint_burn_trading_btc, send_tx_to_chain};
+use relayer_module::utils::{build_and_sign_msg_mint_burn_trading_btc, send_tx_to_chain, TxResult};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
@@ -406,6 +406,7 @@ impl OrderWallet {
         }
         self.zk_accounts.update_on_chain(&new_account_index, true)?;
         self.zk_accounts.update_on_chain(&index, false)?;
+        self.zk_accounts.update_balance(&index, 0u64)?;
         let account = utxo_detail.output.to_quisquis_account()?;
 
         self.zk_accounts
@@ -1282,7 +1283,7 @@ mod tests {
     use log::info;
     use serial_test::serial;
     use std::sync::Once;
-    use tokio::time::{Duration, sleep};
+    use tokio::time::{sleep, Duration};
     use twilight_client_sdk::relayer_types::PositionType;
     static INIT: Once = Once::new();
 
