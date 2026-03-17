@@ -212,9 +212,15 @@ impl OrderWallet {
         // Load zk accounts
         let zk_accounts = db_manager.load_all_zk_accounts()?;
         let max_account_index = db_manager.get_max_account_index()?;
+        // index is the *next* account index to use, so it must be max + 1
+        let next_index = if zk_accounts.is_empty() {
+            0
+        } else {
+            max_account_index + 1
+        };
         let zk_accounts_db = ZkAccountDB {
             accounts: zk_accounts,
-            index: max_account_index,
+            index: next_index,
         };
 
         let mut order_wallet = OrderWallet::init(wallet, zk_accounts_db, EndpointConfig::default())
