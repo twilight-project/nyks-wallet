@@ -54,7 +54,7 @@ impl SecureWalletData {
     /// Create from existing wallet for backward compatibility
     pub fn from_wallet(wallet: &crate::wallet::Wallet) -> Self {
         Self::new(
-            wallet.private_key.clone(),
+            wallet.private_key_bytes().to_vec(),
             wallet.public_key.clone(),
             wallet.twilightaddress.clone(),
             wallet.btc_address.clone(),

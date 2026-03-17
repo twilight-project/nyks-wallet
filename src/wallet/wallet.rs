@@ -305,9 +305,9 @@ pub async fn create_and_export_random_wallet_account(name: &str) -> anyhow::Resu
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ZeroizeOnDrop)]
+#[derive(Clone, Serialize, Deserialize, ZeroizeOnDrop)]
 pub struct Wallet {
-    pub private_key: Vec<u8>,
+    pub(crate) private_key: Vec<u8>,
     pub public_key: Vec<u8>,
     pub twilightaddress: String,
     pub balance_nyks: NYKS,
@@ -331,7 +331,29 @@ impl std::fmt::Display for Wallet {
     }
 }
 
+impl std::fmt::Debug for Wallet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Wallet")
+            .field("private_key", &"[REDACTED]")
+            .field("public_key", &hex::encode(&self.public_key))
+            .field("twilightaddress", &self.twilightaddress)
+            .field("balance_nyks", &self.balance_nyks)
+            .field("balance_sats", &self.balance_sats)
+            .field("sequence", &self.sequence)
+            .field("btc_address", &self.btc_address)
+            .field("btc_address_registered", &self.btc_address_registered)
+            .field("account_info", &self.account_info)
+            .field("chain_config", &self.chain_config)
+            .finish()
+    }
+}
+
 impl Wallet {
+    /// Controlled access to private key bytes. Prefer `signing_key()` when possible.
+    pub fn private_key_bytes(&self) -> &[u8] {
+        &self.private_key
+    }
+
     pub fn new(chain_config: Option<WalletEndPointConfig>) -> anyhow::Result<Self> {
         let chain_config = chain_config.unwrap_or_default();
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
@@ -657,6 +679,5 @@ mod tests {
         println!("Wallet address:     {}", wallet.twilightaddress);
         println!("Wallet BTC address: {}", wallet.btc_address);
         println!("Public key hex:     {}", hex::encode(&wallet.public_key));
-        println!("Private key hex:    {}", hex::encode(&wallet.private_key));
     }
 }

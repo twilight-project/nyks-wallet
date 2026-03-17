@@ -256,7 +256,7 @@ mod tests {
         init_logger();
         global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
-        let private_key = wallet.private_key.clone();
+        let private_key = wallet.private_key_bytes().to_vec();
         let twilight_address = wallet.twilightaddress.clone();
         let sign_mgs = "hello";
         let chain_id = "nyks";
@@ -275,7 +275,7 @@ mod tests {
         global_setup().await;
         // Create a mock 64-byte signature/seed
         let wallet = Wallet::import_from_json("test.json").unwrap();
-        let private_key = wallet.private_key.clone();
+        let private_key = wallet.private_key_bytes().to_vec();
         let twilight_address = wallet.twilightaddress.clone();
         let chain_id = "nyks";
 

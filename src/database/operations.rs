@@ -471,6 +471,96 @@ impl DatabaseManager {
         );
         Ok(())
     }
+
+    // -------------------------
+    // Order History operations
+    // -------------------------
+
+    pub fn save_order_history(
+        &self,
+        entry: crate::database::models::NewDbOrderHistory,
+    ) -> Result<(), String> {
+        use crate::database::schema::order_history;
+        let mut conn = get_conn(self.pool())?;
+        diesel::insert_into(order_history::table)
+            .values(&entry)
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to save order history: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load_order_history(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::database::models::DbOrderHistory>, String> {
+        use crate::database::schema::order_history;
+        let mut conn = get_conn(self.pool())?;
+        let rows = order_history::table
+            .filter(order_history::wallet_id.eq(&self.wallet_id))
+            .order(order_history::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load::<crate::database::models::DbOrderHistory>(&mut conn)
+            .map_err(|e| format!("Failed to load order history: {}", e))?;
+        Ok(rows)
+    }
+
+    pub fn load_order_history_by_account(
+        &self,
+        account_index: u64,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::database::models::DbOrderHistory>, String> {
+        use crate::database::schema::order_history;
+        let mut conn = get_conn(self.pool())?;
+        let rows = order_history::table
+            .filter(
+                order_history::wallet_id
+                    .eq(&self.wallet_id)
+                    .and(order_history::account_index.eq(account_index as i64)),
+            )
+            .order(order_history::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load::<crate::database::models::DbOrderHistory>(&mut conn)
+            .map_err(|e| format!("Failed to load order history by account: {}", e))?;
+        Ok(rows)
+    }
+
+    // -------------------------
+    // Transfer History operations
+    // -------------------------
+
+    pub fn save_transfer_history(
+        &self,
+        entry: crate::database::models::NewDbTransferHistory,
+    ) -> Result<(), String> {
+        use crate::database::schema::transfer_history;
+        let mut conn = get_conn(self.pool())?;
+        diesel::insert_into(transfer_history::table)
+            .values(&entry)
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to save transfer history: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load_transfer_history(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::database::models::DbTransferHistory>, String> {
+        use crate::database::schema::transfer_history;
+        let mut conn = get_conn(self.pool())?;
+        let rows = transfer_history::table
+            .filter(transfer_history::wallet_id.eq(&self.wallet_id))
+            .order(transfer_history::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load::<crate::database::models::DbTransferHistory>(&mut conn)
+            .map_err(|e| format!("Failed to load transfer history: {}", e))?;
+        Ok(rows)
+    }
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]

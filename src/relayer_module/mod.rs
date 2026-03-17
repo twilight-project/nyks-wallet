@@ -113,8 +113,11 @@
 //!
 //! See [`utils`] for retry configuration and helper functions.
 
+pub mod nonce_manager;
 pub mod order_wallet;
+pub mod portfolio;
 pub mod relayer_api;
+pub mod transaction_history;
 pub mod relayer_order;
 pub mod relayer_types;
 mod utils;
