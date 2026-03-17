@@ -31,7 +31,7 @@ mod tests {
     async fn global_setup() {
         INIT_ASYNC
             .get_or_init(|| async {
-                match create_and_export_randmon_wallet_account("test").await {
+                match create_and_export_random_wallet_account("test").await {
                     Ok(_) => println!("wallet created successfully"),
                     Err(_) => warn!(
                         "error: {:?}",
@@ -49,7 +49,7 @@ mod tests {
     async fn test_create_wallet() {
         init_logger();
         dotenv::dotenv().ok();
-        match create_and_export_randmon_wallet_account("test1").await {
+        match create_and_export_random_wallet_account("test1").await {
             Ok(_) => println!("wallet created successfully"),
             Err(_) => println!(
                 "error: {:?}",

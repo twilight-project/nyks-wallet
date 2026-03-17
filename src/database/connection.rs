@@ -103,8 +103,8 @@ pub fn init_pool(db_url: Option<String>) -> Result<DbPool, String> {
         use sqlite_tuning::SqlitePragmas;
         debug!("Using SQLite database URL: {}", url);
         return Pool::builder()
-            .max_size(15)
-            .min_idle(Some(2))
+            .max_size(4)
+            .min_idle(Some(1))
             .connection_timeout(Duration::from_secs(8))
             .connection_customizer(Box::new(SqlitePragmas))
             .build(manager)

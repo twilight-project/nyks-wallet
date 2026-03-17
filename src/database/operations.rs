@@ -24,8 +24,6 @@ use rand_core::RngCore;
 use secrecy::{ExposeSecret, SecretString};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use serde::{Deserialize, Serialize};
-#[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use sha2::{Digest, Sha256};
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use std::{collections::HashMap, sync::Arc};
@@ -487,7 +485,7 @@ fn encrypt_wallet(
     OsRng.fill_bytes(&mut nonce_bytes);
 
     // Derive key from password using PBKDF2
-    let key_bytes = derive_key(password, &salt);
+    let key_bytes = derive_key(password, &salt)?;
     let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -511,7 +509,7 @@ fn decrypt_wallet(
     nonce: &[u8],
     password: &SecretString,
 ) -> Result<Wallet, String> {
-    let key_bytes = derive_key(password, salt);
+    let key_bytes = derive_key(password, salt)?;
     let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
     let nonce = Nonce::from_slice(nonce);
@@ -527,17 +525,7 @@ fn decrypt_wallet(
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-fn derive_key(password: &SecretString, salt: &[u8]) -> [u8; 32] {
-    // Use secure password derivation
-    SecurePassword::derive_key_from_passphrase(password, salt).unwrap_or_else(|_| {
-        // Fallback to simple derivation if secure method fails
-
-        use log::info;
-        info!("Fallback to simple derivation");
-        let mut hasher = Sha256::default();
-        hasher.update(password.expose_secret().as_bytes());
-        hasher.update(salt);
-        let key_bytes = hasher.finalize();
-        key_bytes.into()
-    })
+fn derive_key(password: &SecretString, salt: &[u8]) -> Result<[u8; 32], String> {
+    SecurePassword::derive_key_from_passphrase(password, salt)
+        .map_err(|e| format!("Key derivation failed: {}", e))
 }

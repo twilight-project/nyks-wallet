@@ -1,6 +1,5 @@
 use crate::config::WalletEndPointConfig;
 use crate::security::print_secret_to_tty;
-// use crate::nyks_rpc::rpcclient::txrequest::NYKS_LCD_BASE_URL;
 use crate::{faucet::*, generate_seed};
 use anyhow::anyhow;
 use bip32::{DerivationPath, XPrv};
@@ -39,6 +38,39 @@ fn derivation_path() -> DerivationPath {
         .parse()
         .expect("valid derivation path")
 }
+
+/// Derived key material from a mnemonic phrase.
+struct DerivedKeys {
+    private_key: Vec<u8>,
+    public_key: Vec<u8>,
+    account_id: AccountId,
+}
+
+/// Shared key derivation pipeline: mnemonic -> seed -> XPrv -> SigningKey -> PublicKey -> AccountId.
+/// All wallet creation methods use this to avoid duplicating the derivation logic.
+fn derive_keys(mnemonic: &Mnemonic) -> anyhow::Result<DerivedKeys> {
+    let seed = mnemonic.to_seed("");
+    let path = derivation_path();
+
+    let xprv = XPrv::derive_from_path(&seed, &path)
+        .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
+
+    let private_key_bytes = xprv.private_key().to_bytes();
+
+    let signing_key = SigningKey::from_slice(&private_key_bytes)
+        .map_err(|e| anyhow!("Invalid private key: {}", e))?;
+    let public_key = signing_key.public_key();
+    let account_id = public_key
+        .account_id(BECH_PREFIX)
+        .map_err(|e| anyhow!("Address generation failed: {}", e))?;
+
+    Ok(DerivedKeys {
+        private_key: private_key_bytes.to_vec(),
+        public_key: public_key.to_bytes().to_vec(),
+        account_id,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Balance {
     pub nyks: NYKS,
@@ -61,14 +93,14 @@ fn account_from_mnemonic() -> anyhow::Result<(SigningKey, PublicKey, AccountId)>
 
     let cleaned = phrase.trim().to_lowercase();
     let word_count = cleaned.split_whitespace().count();
-    println!("Validating mnemonic with {} words...", word_count);
+    debug!("Validating mnemonic with {} words...", word_count);
 
     // First, surface spelling issues or bad checksum explicitly.
     if let Err(e) = Mnemonic::parse_in(B39Lang::English, &cleaned) {
         match e {
             Bip39Error::UnknownWord(index) => {
                 return Err(anyhow!(
-                    "Unknown word  at position {} — double‑check spelling against the official BIP‑39 list.",
+                    "Unknown word at position {} — double-check spelling against the official BIP-39 list.",
                     index + 1
                 ));
             }
@@ -83,27 +115,17 @@ fn account_from_mnemonic() -> anyhow::Result<(SigningKey, PublicKey, AccountId)>
 
     // Safe to parse now.
     let mnemonic = Mnemonic::parse_in(B39Lang::English, &cleaned)?;
+    debug!("Mnemonic validated successfully");
 
-    println!("✅ Mnemonic validated successfully");
+    let keys = derive_keys(&mnemonic)?;
 
-    let seed = mnemonic.to_seed("");
-    let path = derivation_path();
-
-    let xprv = XPrv::derive_from_path(&seed, &path)
-        .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
-
-    let private_key_bytes = xprv.private_key().to_bytes();
-    let signing_key = SigningKey::from_slice(&private_key_bytes)
+    let signing_key = SigningKey::from_slice(&keys.private_key)
         .map_err(|e| anyhow!("Invalid private key: {}", e))?;
-
     let public_key = signing_key.public_key();
-    let account_id = public_key
-        .account_id(BECH_PREFIX)
-        .map_err(|e| anyhow!("Address generation failed: {}", e))?;
 
-    println!("✅ Cosmos account derived from mnemonic successfully");
+    debug!("Cosmos account derived from mnemonic successfully");
 
-    Ok((signing_key, public_key, account_id))
+    Ok((signing_key, public_key, keys.account_id))
 }
 
 /// Import account from hex private key
@@ -134,45 +156,43 @@ fn account_from_private_key_hex() -> anyhow::Result<(SigningKey, PublicKey, Acco
 }
 
 pub async fn check_code(lcd_endpoint: &str, faucet_endpoint: &str) -> anyhow::Result<()> {
-    println!("🚀 Twilight Market Maker Client");
-    println!("================================");
+    info!("Twilight Market Maker Client");
 
-    println!("\nChoose account import method:");
-    println!("1. Generate new random account (testing)");
-    println!("2. Import from mnemonic phrase");
-    println!("3. Import from private key hex");
+    info!("Choose account import method:");
+    info!("1. Generate new random account (testing)");
+    info!("2. Import from mnemonic phrase");
+    info!("3. Import from private key hex");
 
     let choice = prompt_password("Enter choice (1, 2, or 3): ")?;
 
     let (signing_key, public_key, account_id) = match choice.trim() {
         "1" => {
-            println!("\n📱 Generating new random account...");
+            info!("Generating new random account...");
             generate_cosmos_account(BECH_PREFIX)?
         }
         "2" => {
-            println!("\n📱 Importing account from mnemonic...");
+            info!("Importing account from mnemonic...");
             account_from_mnemonic()?
         }
         "3" => {
-            println!("\n📱 Importing account from private key...");
+            info!("Importing account from private key...");
             account_from_private_key_hex()?
         }
         _ => {
-            println!("Invalid choice, using random account");
+            info!("Invalid choice, using random account");
             generate_cosmos_account(BECH_PREFIX)?
         }
     };
 
-    println!("✅ Account ready!");
-    println!("   Address: {}", account_id);
+    info!("Account ready! Address: {}", account_id);
 
     // Step 1: Get testnet tokens from faucet
-    println!("\n💰 Requesting testnet tokens from faucet...");
+    info!("Requesting testnet tokens from faucet...");
     match get_nyks(&account_id.to_string(), faucet_endpoint).await {
-        Ok(_) => println!("✅ Successfully received testnet tokens"),
+        Ok(_) => info!("Successfully received testnet tokens"),
         Err(e) => {
-            eprintln!("❌ Failed to get tokens from faucet: {}", e);
-            println!("💡 You may need to wait or try again later");
+            error!("Failed to get tokens from faucet: {}", e);
+            info!("You may need to wait or try again later");
         }
     };
 
@@ -180,19 +200,9 @@ pub async fn check_code(lcd_endpoint: &str, faucet_endpoint: &str) -> anyhow::Re
     sleep(Duration::from_secs(5)).await;
 
     // Step 2: Register Bitcoin deposit address
-    println!("\n🔗 Registering Bitcoin deposit address...");
-    // let btc_address = "bc1qxdlfjgffe9a4sc9yswdvnaxtjz8e46jnu3vkqu"; // Example address
-    // Generate a random Bitcoin testnet address using existing crypto
-    let random_key = SigningKey::random();
-    let pubkey_bytes = random_key.public_key().to_bytes();
-    let btc_address = format!(
-        "bc1q{}",
-        hex::encode(&pubkey_bytes[..19])
-            .chars()
-            .take(38)
-            .collect::<String>()
-    );
-    debug!("   Generated BTC Address: {}", btc_address);
+    info!("Registering Bitcoin deposit address...");
+    let (_wif, btc_address) = crate::wallet::generate_btc_key::generate_random_btc_address()?;
+    debug!("Generated BTC Address: {}", btc_address);
 
     match sign_and_send_reg_deposit_tx(
         signing_key,
@@ -205,11 +215,10 @@ pub async fn check_code(lcd_endpoint: &str, faucet_endpoint: &str) -> anyhow::Re
     {
         Ok(_) => {
             info!("Successfully registered BTC deposit address!");
-            debug!("   BTC Address: {}", btc_address);
-            debug!("   Amount: 50,000 satoshis");
+            debug!("BTC Address: {}", btc_address);
         }
         Err(e) => {
-            eprintln!("❌ Failed to register BTC deposit address: {}", e);
+            error!("Failed to register BTC deposit address: {}", e);
         }
     };
 
@@ -217,22 +226,21 @@ pub async fn check_code(lcd_endpoint: &str, faucet_endpoint: &str) -> anyhow::Re
     sleep(Duration::from_secs(5)).await;
 
     // Step 3: Mint test satoshis
-    println!("\n🪙 Minting test satoshis...");
+    info!("Minting test satoshis...");
     match mint_sats(&account_id.to_string(), faucet_endpoint).await {
-        Ok(_) => println!("✅ Successfully minted test satoshis"),
+        Ok(_) => info!("Successfully minted test satoshis"),
         Err(e) => {
-            eprintln!("❌ Failed to mint satoshis: {}", e);
-            println!("💡 You may need to wait or try again later");
+            error!("Failed to mint satoshis: {}", e);
+            info!("You may need to wait or try again later");
         }
     };
 
-    println!("\n🎉 Market maker client operations completed!");
-    println!("   Check your account balance on the Twilight explorer");
-    println!("   https://explorer.twilight.rest");
+    info!("Market maker client operations completed!");
 
     Ok(())
 }
 
+/// Fetch on-chain balance for the given address via LCD endpoint.
 pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<Balance> {
     let url = format!("{}/cosmos/bank/v1beta1/balances/{}", lcd_endpoint, address);
     let client = Client::new();
@@ -246,7 +254,7 @@ pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<
                 balance.get("amount").and_then(|a| a.as_str()),
                 balance.get("denom").and_then(|d| d.as_str()),
             ) {
-                println!("Balance: {} {}", amount, denom);
+                debug!("Balance: {} {}", amount, denom);
                 if denom == "nyks" {
                     balance_nyks = amount.parse::<NYKS>().unwrap_or(0);
                 } else if denom == "sats" {
@@ -261,7 +269,7 @@ pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<
     })
 }
 
-pub async fn create_and_export_randmon_wallet_account(name: &str) -> anyhow::Result<()> {
+pub async fn create_and_export_random_wallet_account(name: &str) -> anyhow::Result<()> {
     let write_path = format!("{}.json", name);
     if std::path::Path::new(&write_path).exists() {
         return Err(anyhow!(
@@ -271,38 +279,17 @@ pub async fn create_and_export_randmon_wallet_account(name: &str) -> anyhow::Res
     }
 
     let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
-    let seed = mnemonic.to_seed("");
-    let path = derivation_path();
+    let keys = derive_keys(&mnemonic)?;
+    let (_wif, btc_address) =
+        crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
 
-    let xprv = XPrv::derive_from_path(&seed, &path)
-        .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
-
-    let private_key_bytes = xprv.private_key().to_bytes();
-
-    let signing_key = SigningKey::from_slice(&private_key_bytes)
-        .map_err(|e| anyhow!("Invalid private key: {}", e))?;
-    let public_key = signing_key.public_key();
-    println!("{}", hex::encode(public_key.to_bytes()));
-    let account_id = public_key
-        .account_id(BECH_PREFIX)
-        .map_err(|e| anyhow!("Address generation failed: {}", e))?;
-
-    println!("twilight account address: {}", account_id);
-    let random_key = SigningKey::random();
-    let pubkey_bytes = random_key.public_key().to_bytes();
-    let btc_address = format!(
-        "bc1q{}",
-        hex::encode(&pubkey_bytes[..19])
-            .chars()
-            .take(38)
-            .collect::<String>()
-    );
+    debug!("twilight account address: {}", keys.account_id);
 
     let account_info = serde_json::json!({
         "mnemonic": mnemonic.to_string(),
-        "private_key": hex::encode(private_key_bytes),
-        "public_key": hex::encode(public_key.to_bytes()),
-        "twilightaddress": account_id.to_string(),
+        "private_key": hex::encode(&keys.private_key),
+        "public_key": hex::encode(&keys.public_key),
+        "twilightaddress": keys.account_id.to_string(),
         "btc_address": btc_address.to_string(),
         "btc_address_registered": false,
         "balance_nyks": 0,
@@ -313,7 +300,7 @@ pub async fn create_and_export_randmon_wallet_account(name: &str) -> anyhow::Res
     let json_string = serde_json::to_string_pretty(&account_info)?;
     std::fs::write(write_path.clone(), json_string)?;
 
-    println!("✅ Account information saved to {}", write_path);
+    info!("Account information saved to {}", write_path);
 
     Ok(())
 }
@@ -333,32 +320,29 @@ pub struct Wallet {
     #[zeroize(skip)]
     pub chain_config: WalletEndPointConfig,
 }
+
+impl std::fmt::Display for Wallet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Wallet(address={}, nyks={}, sats={}, btc={})",
+            self.twilightaddress, self.balance_nyks, self.balance_sats, self.btc_address
+        )
+    }
+}
+
 impl Wallet {
     pub fn new(chain_config: Option<WalletEndPointConfig>) -> anyhow::Result<Self> {
-        let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
+        let chain_config = chain_config.unwrap_or_default();
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
-        let seed = mnemonic.to_seed("");
-        let path = derivation_path();
-
-        let xprv = XPrv::derive_from_path(&seed, &path)
-            .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
-
-        let private_key_bytes = xprv.private_key().to_bytes();
-
-        let signing_key = SigningKey::from_slice(&private_key_bytes)
-            .map_err(|e| anyhow!("Invalid private key: {}", e))?;
-        let public_key = signing_key.public_key();
-        let account_id = public_key
-            .account_id(BECH_PREFIX)
-            .map_err(|e| anyhow!("Address generation failed: {}", e))?;
+        let keys = derive_keys(&mnemonic)?;
         let (_wif, btc_address) =
             crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
-        // save_mnemonic(&account_id.to_string(), mnemonic.to_string())?;
         print_secret_to_tty(&mut mnemonic.to_string())?;
         Ok(Wallet {
-            private_key: private_key_bytes.to_vec(),
-            public_key: public_key.to_bytes().to_vec(),
-            twilightaddress: account_id.to_string(),
+            private_key: keys.private_key,
+            public_key: keys.public_key,
+            twilightaddress: keys.account_id.to_string(),
             balance_nyks: 0,
             balance_sats: 0,
             sequence: 0,
@@ -371,35 +355,14 @@ impl Wallet {
 
     pub async fn create_new_with_random_btc_address() -> anyhow::Result<Wallet> {
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
-        let seed = mnemonic.to_seed("");
-        let path = derivation_path();
-
-        let xprv = XPrv::derive_from_path(&seed, &path)
-            .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
-
-        let private_key_bytes = xprv.private_key().to_bytes();
-
-        let signing_key = SigningKey::from_slice(&private_key_bytes)
-            .map_err(|e| anyhow!("Invalid private key: {}", e))?;
-        let public_key = signing_key.public_key();
-        let account_id = public_key
-            .account_id(BECH_PREFIX)
-            .map_err(|e| anyhow!("Address generation failed: {}", e))?;
-
-        let random_key = SigningKey::random();
-        let pubkey_bytes = random_key.public_key().to_bytes();
-        let btc_address = format!(
-            "bc1q{}",
-            hex::encode(&pubkey_bytes[..19])
-                .chars()
-                .take(38)
-                .collect::<String>()
-        );
+        let keys = derive_keys(&mnemonic)?;
+        let (_wif, btc_address) =
+            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
 
         Ok(Wallet {
-            private_key: private_key_bytes.to_vec(),
-            public_key: public_key.to_bytes().to_vec(),
-            twilightaddress: account_id.to_string(),
+            private_key: keys.private_key,
+            public_key: keys.public_key,
+            twilightaddress: keys.account_id.to_string(),
             balance_nyks: 0,
             balance_sats: 0,
             sequence: 0,
@@ -417,7 +380,7 @@ impl Wallet {
         btc_address: String,
         chain_config: Option<WalletEndPointConfig>,
     ) -> Wallet {
-        let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
+        let chain_config = chain_config.unwrap_or_default();
         Wallet {
             private_key: hex::decode(private_key.clone()).unwrap_or_default(),
             public_key: hex::decode(public_key).unwrap_or_default(),
@@ -436,25 +399,15 @@ impl Wallet {
         mnemonic: &str,
         chain_config: Option<WalletEndPointConfig>,
     ) -> anyhow::Result<Wallet> {
-        let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
+        let chain_config = chain_config.unwrap_or_default();
         let mnemonic = Mnemonic::parse_in(B39Lang::English, mnemonic)?;
-        let seed = mnemonic.to_seed("");
-        let path = derivation_path();
-        let xprv = XPrv::derive_from_path(&seed, &path)
-            .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
-        let private_key_bytes = xprv.private_key().to_bytes();
-        let signing_key = SigningKey::from_slice(&private_key_bytes)
-            .map_err(|e| anyhow!("Invalid private key: {}", e))?;
-        let public_key = signing_key.public_key();
-        let account_id = public_key
-            .account_id(BECH_PREFIX)
-            .map_err(|e| anyhow!("Address generation failed: {}", e))?;
+        let keys = derive_keys(&mnemonic)?;
         let (_wif, btc_address) =
             crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
         Ok(Wallet {
-            private_key: private_key_bytes.to_vec(),
-            public_key: public_key.to_bytes().to_vec(),
-            twilightaddress: account_id.to_string(),
+            private_key: keys.private_key,
+            public_key: keys.public_key,
+            twilightaddress: keys.account_id.to_string(),
             balance_nyks: 0,
             balance_sats: 0,
             sequence: 0,
@@ -470,7 +423,7 @@ impl Wallet {
         btc_address: &str,
         chain_config: Option<WalletEndPointConfig>,
     ) -> anyhow::Result<Wallet> {
-        let chain_config = chain_config.unwrap_or(WalletEndPointConfig::default());
+        let chain_config = chain_config.unwrap_or_default();
         let private_key = hex::decode(private_key.to_string())?;
         let signing_key = SigningKey::from_slice(&private_key).map_err(|e| anyhow!("{}", e))?;
         let public_key = signing_key.public_key();
@@ -528,7 +481,7 @@ impl Wallet {
                     .to_string(),
                 account_info["chain_id"]
                     .as_str()
-                    .unwrap_or(&wallet_config.chain_id.as_str())
+                    .unwrap_or(wallet_config.chain_id.as_str())
                     .to_string(),
             ),
         };
@@ -543,38 +496,15 @@ impl Wallet {
     pub fn public_key(&self) -> anyhow::Result<PublicKey> {
         Ok(self.signing_key()?.public_key())
     }
+
+    /// Fetch and update on-chain balance, reusing the shared `check_balance` function.
     pub async fn update_balance(&mut self) -> anyhow::Result<Balance> {
-        let url = format!(
-            "{}/cosmos/bank/v1beta1/balances/{}",
-            self.chain_config.lcd_endpoint, self.twilightaddress
-        );
-        let client = Client::new();
-        let response = client.get(url).send().await?;
-        let balance: Value = response.json().await?;
-        let mut balance_nyks = 0;
-        let mut balance_sats = 0;
-        if let Some(balances) = balance.get("balances").and_then(|b| b.as_array()) {
-            for balance in balances {
-                if let (Some(amount), Some(denom)) = (
-                    balance.get("amount").and_then(|a| a.as_str()),
-                    balance.get("denom").and_then(|d| d.as_str()),
-                ) {
-                    debug!("Updating balance: {} {}", amount, denom);
-                    if denom == "nyks" {
-                        balance_nyks = amount.parse::<NYKS>().unwrap_or(0);
-                    } else if denom == "sats" {
-                        balance_sats = amount.parse::<SATS>().unwrap_or(0);
-                    }
-                }
-            }
-        }
-        self.balance_nyks = balance_nyks;
-        self.balance_sats = balance_sats;
-        Ok(Balance {
-            nyks: balance_nyks,
-            sats: balance_sats,
-        })
+        let balance = check_balance(&self.twilightaddress, &self.chain_config.lcd_endpoint).await?;
+        self.balance_nyks = balance.nyks;
+        self.balance_sats = balance.sats;
+        Ok(balance)
     }
+
     pub async fn account_info(&self) -> anyhow::Result<AccountResponse> {
         let account_details =
             fetch_account_details(&self.twilightaddress, &self.chain_config.lcd_endpoint).await?;
@@ -629,7 +559,7 @@ impl Wallet {
         ))
     }
 }
-// #[cfg(feature = "testnet")]
+
 pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
     let balance = wallet.update_balance().await?;
     debug!("Checking balance values if nyks is less than 50000");
@@ -643,7 +573,7 @@ pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
         .await
         .unwrap_or_else(|e| {
             error!("Failed to get tokens from faucet: {}", e);
-            info!("💡 You may need to wait or try again later");
+            info!("You may need to wait or try again later");
         });
     } else {
         info!("Skipping get tokens from faucet because nyks is greater than 50000");
@@ -665,9 +595,8 @@ pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
         {
             Ok(_) => {
                 info!("Successfully registered BTC deposit address!");
-                debug!("   BTC Address: {}", &wallet.btc_address);
-                debug!("   Amount: 50,000 satoshis");
-                info!("   waiting for registered BTC deposit address to appear on-chain");
+                debug!("BTC Address: {}", &wallet.btc_address);
+                info!("waiting for registered BTC deposit address to appear on-chain");
                 sleep(Duration::from_secs(10)).await;
                 info!("Minting test BTC...");
                 mint_sats(
@@ -677,19 +606,18 @@ pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
                 .await
                 .unwrap_or_else(|e| {
                     error!("Failed to mint satoshis: {}", e);
-                    info!("    You may need to restart the process again or try again later");
+                    info!("You may need to restart the process again or try again later");
                 });
                 wallet.btc_address_registered = true;
             }
             Err(e) => {
                 error!("Failed to register BTC deposit address: {}", e);
-                debug!("   BTC Address: {}", &wallet.btc_address);
-
-                info!("    You may need to restart the process again or try again later");
+                debug!("BTC Address: {}", &wallet.btc_address);
+                info!("You may need to restart the process again or try again later");
             }
         };
     } else if balance.sats < 50000 {
-        debug!("    Skipping register BTC deposit address because sats is less than 50000");
+        debug!("Skipping register BTC deposit address because sats is less than 50000");
         info!("Minting test BTC...");
         mint_sats(
             &wallet.twilightaddress,
@@ -698,15 +626,15 @@ pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
         .await
         .unwrap_or_else(|e| {
             error!("Failed to mint satoshis: {}", e);
-            info!("    You may need to restart the process again or try again later");
+            info!("You may need to restart the process again or try again later");
         });
     } else {
         info!("Skipping minting test BTC because sats is greater than 50000");
     }
-    info!("    waiting for updated sats balance to appear on-chain");
+    info!("waiting for updated sats balance to appear on-chain");
     sleep(Duration::from_secs(10)).await;
     let balance = wallet.update_balance().await?;
-    debug!("    new balance: {:?}", balance);
+    debug!("new balance: {:?}", balance);
 
     Ok(())
 }

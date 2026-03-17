@@ -34,6 +34,13 @@ pub fn segwit_from_mnemonic(mnemonic: &str) -> anyhow::Result<(String, String)> 
     Ok((privkey.to_wif(), addr.to_string()))
 }
 
+/// Generate a random valid BTC segwit address using a fresh mnemonic.
+/// Returns (WIF, bc1... address).
+pub fn generate_random_btc_address() -> anyhow::Result<(String, String)> {
+    let mnemonic = Mnemonic::generate_in(Language::English, 24)?;
+    segwit_from_mnemonic(&mnemonic.to_string())
+}
+
 pub fn segwit_from_private_key(private_key: &str) -> anyhow::Result<(String, String)> {
     let privkey = PrivateKey::from_str(private_key)?;
     let secp = Secp256k1::signing_only();

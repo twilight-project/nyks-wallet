@@ -71,7 +71,7 @@ jsonrpsee = { version = "0.25.1", features = [
 ] }
 keyring = "3.0"
 k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
-lazy_static = "1.4.0"
+# lazy_static replaced by std::sync::LazyLock
 log = "0.4"
 prost = "0.12"
 prost-types = "0.12"
@@ -90,6 +90,8 @@ serde_json = "1.0"
 serde-this-or-that = "0.4.2"
 # serial_test = "2"
 sha2 = "0.10"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 subtle = "2.5"
 thiserror = "2.0.12"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

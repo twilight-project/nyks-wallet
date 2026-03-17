@@ -116,7 +116,7 @@ impl OrderWallet {
     /// If `endpoint_config` is `None`, defaults are used.
     /// The base wallet generates a new mnemonic and prints it once to the TTY.
     pub fn new(endpoint_config: Option<EndpointConfig>) -> WalletResult<Self> {
-        let endpoint_config = endpoint_config.unwrap_or(EndpointConfig::default());
+        let endpoint_config = endpoint_config.unwrap_or_default();
         let wallet_endpoint_config = endpoint_config.to_wallet_endpoint_config();
         let wallet = Wallet::new(Some(wallet_endpoint_config))
             .map_err(|e| WalletError::WalletCreation(e.to_string()))?;
@@ -129,7 +129,7 @@ impl OrderWallet {
         mnemonic: &str,
         endpoint_config: Option<EndpointConfig>,
     ) -> Result<Self, String> {
-        let endpoint_config = endpoint_config.unwrap_or(EndpointConfig::default());
+        let endpoint_config = endpoint_config.unwrap_or_default();
         let relayer_endpoint_config = endpoint_config.to_relayer_endpoint_config();
         let wallet_endpoint_config = endpoint_config.to_wallet_endpoint_config();
         let wallet = Wallet::from_mnemonic(mnemonic, Some(wallet_endpoint_config))
