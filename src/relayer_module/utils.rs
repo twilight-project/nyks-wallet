@@ -165,6 +165,8 @@ pub async fn fetch_tx_hash_with_retry(
             .transaction_hashes(TransactionHashArgs::RequestId {
                 id: request_id.to_string(),
                 status: None,
+                limit: None,
+                offset: None,
             })
             .await
             .map_err(|e| e.to_string())?;

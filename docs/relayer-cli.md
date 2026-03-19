@@ -1,6 +1,6 @@
 # Relayer CLI
 
-Command-line interface for managing Twilight wallets, trading orders, lending, and querying market data.
+Command-line interface for managing Twilight wallets, trading orders, lending, portfolio tracking, transaction history, and querying market data.
 
 ## Building
 
@@ -22,6 +22,8 @@ The binary will be at `target/release/relayer-cli`.
 |---|---|---|
 | `RELAYER_API_RPC_SERVER_URL` | Relayer JSON-RPC endpoint | `http://0.0.0.0:8088/api` |
 | `NYKS_WALLET_PASSPHRASE` | Database encryption password (fallback when `--password` is omitted) | — |
+| `DATABASE_URL_SQLITE` | SQLite database file path | `./wallet_data.db` |
+| `DATABASE_URL_POSTGRESQL` | PostgreSQL connection string (when using `postgresql` feature) | — |
 
 A `.env` file in the working directory is loaded automatically.
 
@@ -31,11 +33,13 @@ A `.env` file in the working directory is loaded automatically.
 relayer-cli <COMMAND>
 ```
 
-Three top-level command groups:
+Five top-level command groups:
 
-- `wallet` — create, import, load, list, export wallets
+- `wallet` — create, import, load, list, export, backup, restore wallets
 - `order` — fund accounts, trade, lend, withdraw
 - `market` — query prices, orderbook, rates
+- `history` — view order and transfer history (requires DB)
+- `portfolio` — portfolio summary, balances, liquidation risks
 
 ---
 
@@ -133,6 +137,49 @@ relayer-cli wallet accounts --wallet-id my-wallet --password s3cret
 ```
 
 Output columns: `INDEX`, `BALANCE`, `ON-CHAIN`, `IO-TYPE`, `ACCOUNT`.
+
+### `wallet backup`
+
+Export a full database backup (all tables) to a JSON file. Includes ZkOS accounts, encrypted wallet data, order wallet config, UTXO details, request IDs, order history, and transfer history. Requires `sqlite` or `postgresql` feature.
+
+```bash
+relayer-cli wallet backup --wallet-id my-wallet --password s3cret
+relayer-cli wallet backup --wallet-id my-wallet --password s3cret --output my-backup.json
+```
+
+| Flag | Description |
+|---|---|
+| `--wallet-id <ID>` | **Required.** Wallet ID to back up |
+| `--password <PASS>` | DB encryption password |
+| `--output <PATH>` | Output file path (default: `wallet_backup.json`) |
+
+### `wallet restore`
+
+Restore a wallet from a backup JSON file. Replaces all existing data for the target wallet ID. Requires `sqlite` or `postgresql` feature.
+
+```bash
+relayer-cli wallet restore --wallet-id my-wallet --password s3cret --input my-backup.json
+
+# Force restore even if the backup's wallet_id doesn't match the target
+relayer-cli wallet restore --wallet-id new-wallet --password s3cret --input my-backup.json --force
+```
+
+| Flag | Description |
+|---|---|
+| `--wallet-id <ID>` | **Required.** Wallet ID to restore into |
+| `--password <PASS>` | DB encryption password |
+| `--input <PATH>` | **Required.** Backup file path |
+| `--force` | Allow restoring even if backup wallet_id doesn't match target |
+
+### `wallet sync-nonce`
+
+Sync the transaction nonce/sequence manager from on-chain state. Useful for debugging sequence issues or pre-warming before a batch of transactions.
+
+```bash
+relayer-cli wallet sync-nonce --wallet-id my-wallet --password s3cret
+```
+
+Output shows the next sequence number, cached account number, and count of released (reclaimable) sequences.
 
 ---
 
@@ -256,6 +303,102 @@ Query the status of a lending order. Outputs JSON.
 ```bash
 relayer-cli order query-lend --account-index 0
 ```
+
+---
+
+## History Commands
+
+View transaction history stored in the database. Requires `sqlite` or `postgresql` feature.
+
+### `history orders`
+
+Show order history (open, close, cancel events) with pagination.
+
+```bash
+relayer-cli history orders --wallet-id my-wallet --password s3cret
+
+# Filter by account index
+relayer-cli history orders --wallet-id my-wallet --password s3cret --account-index 3
+
+# Pagination
+relayer-cli history orders --wallet-id my-wallet --password s3cret --limit 20 --offset 40
+```
+
+| Flag | Description |
+|---|---|
+| `--wallet-id <ID>` | **Required.** Wallet ID |
+| `--password <PASS>` | DB encryption password |
+| `--account-index <N>` | Filter to a specific account index |
+| `--limit <N>` | Max results (default: `50`) |
+| `--offset <N>` | Pagination offset (default: `0`) |
+
+Output columns: `ACCT`, `ACTION`, `TYPE`, `SIDE`, `AMOUNT`, `PRICE`, `STATUS`, `CREATED`.
+
+### `history transfers`
+
+Show transfer history (fund-to-trade, trade-to-fund, trade-to-trade events) with pagination.
+
+```bash
+relayer-cli history transfers --wallet-id my-wallet --password s3cret
+relayer-cli history transfers --wallet-id my-wallet --password s3cret --limit 10
+```
+
+| Flag | Description |
+|---|---|
+| `--wallet-id <ID>` | **Required.** Wallet ID |
+| `--password <PASS>` | DB encryption password |
+| `--limit <N>` | Max results (default: `50`) |
+| `--offset <N>` | Pagination offset (default: `0`) |
+
+Output columns: `DIRECTION`, `FROM`, `TO`, `AMOUNT`, `TX HASH`, `CREATED`.
+
+---
+
+## Portfolio Commands
+
+View portfolio state, per-account balances, and liquidation risk. These commands query live relayer data for open positions.
+
+### `portfolio summary`
+
+Show a full portfolio summary including on-chain balance, trading balances, margin usage, PnL, and all open trader and lend positions.
+
+```bash
+relayer-cli portfolio summary
+relayer-cli portfolio summary --wallet-id my-wallet --password s3cret
+```
+
+Output includes:
+- On-chain and trading balances
+- Total margin used and utilization percentage
+- Unrealized PnL across all positions
+- Lend deposits, current value, and lend PnL
+- Per-position table for trader orders (entry/current price, size, leverage, PnL, liquidation price)
+- Per-position table for lend orders (deposit, current value, PnL, pool shares)
+
+### `portfolio balances`
+
+Show a per-account balance breakdown for all ZkOS accounts.
+
+```bash
+relayer-cli portfolio balances
+relayer-cli portfolio balances --wallet-id my-wallet --password s3cret
+```
+
+Output columns: `INDEX`, `BALANCE`, `IO-TYPE`, `ON-CHAIN`, plus a total.
+
+### `portfolio risks`
+
+Show liquidation risk for all open trader positions. Queries live price data from the relayer.
+
+```bash
+relayer-cli portfolio risks
+relayer-cli portfolio risks --wallet-id my-wallet --password s3cret
+```
+
+Output columns: `ACCT`, `SIDE`, `CURRENT`, `LIQ PRICE`, `DISTANCE` (% from liquidation), `MARGIN %`.
+
+- Positive distance = safe margin
+- Negative distance = past liquidation threshold
 
 ---
 

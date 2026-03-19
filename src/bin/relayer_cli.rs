@@ -28,6 +28,14 @@ enum Commands {
     /// Market data queries
     #[command(subcommand)]
     Market(MarketCmd),
+
+    /// Transaction history queries (requires DB)
+    #[command(subcommand)]
+    History(HistoryCmd),
+
+    /// Portfolio and position tracking
+    #[command(subcommand)]
+    Portfolio(PortfolioCmd),
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +128,51 @@ enum WalletCmd {
 
     /// List all ZkOS accounts for a wallet
     Accounts {
+        /// Load wallet from DB by wallet ID
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Export a full database backup to a JSON file (requires DB)
+    Backup {
+        /// Output file path for the backup
+        #[arg(long, default_value = "wallet_backup.json")]
+        output: String,
+
+        /// Wallet ID to back up
+        #[arg(long)]
+        wallet_id: String,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Restore a wallet from a backup JSON file (requires DB)
+    Restore {
+        /// Input backup file path
+        #[arg(long)]
+        input: String,
+
+        /// Wallet ID to restore into
+        #[arg(long)]
+        wallet_id: String,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+
+        /// Force restore even if backup wallet_id doesn't match
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+
+    /// Sync the nonce/sequence manager from chain state
+    SyncNonce {
         /// Load wallet from DB by wallet ID
         #[arg(long)]
         wallet_id: Option<String>,
@@ -320,6 +373,95 @@ enum OrderCmd {
 }
 
 // ---------------------------------------------------------------------------
+// History sub-commands
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+enum HistoryCmd {
+    /// Show order history (open, close, cancel events)
+    Orders {
+        /// Wallet ID (required, loads from DB)
+        #[arg(long)]
+        wallet_id: String,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+
+        /// Filter by account index
+        #[arg(long)]
+        account_index: Option<u64>,
+
+        /// Maximum number of results
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+
+        /// Offset for pagination
+        #[arg(long, default_value_t = 0)]
+        offset: i64,
+    },
+
+    /// Show transfer history (fund, withdraw, transfer events)
+    Transfers {
+        /// Wallet ID (required, loads from DB)
+        #[arg(long)]
+        wallet_id: String,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+
+        /// Maximum number of results
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+
+        /// Offset for pagination
+        #[arg(long, default_value_t = 0)]
+        offset: i64,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Portfolio sub-commands
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+enum PortfolioCmd {
+    /// Show full portfolio summary (balances, positions, PnL)
+    Summary {
+        /// Load wallet from DB by wallet ID
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Show per-account balance breakdown
+    Balances {
+        /// Load wallet from DB by wallet ID
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Show liquidation risk for open positions
+    Risks {
+        /// Load wallet from DB by wallet ID
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+    },
+}
+
+// ---------------------------------------------------------------------------
 // Market sub-commands
 // ---------------------------------------------------------------------------
 
@@ -409,6 +551,8 @@ async fn main() {
         Commands::Wallet(cmd) => handle_wallet(cmd).await,
         Commands::Order(cmd) => handle_order(cmd).await,
         Commands::Market(cmd) => handle_market(cmd).await,
+        Commands::History(cmd) => handle_history(cmd).await,
+        Commands::Portfolio(cmd) => handle_portfolio(cmd).await,
     };
 
     if let Err(e) = result {
@@ -574,6 +718,62 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                     );
                 }
             }
+            Ok(())
+        }
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::Backup {
+            output,
+            wallet_id,
+            password,
+        } => {
+            let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
+            let db_manager = ow.get_db_manager()
+                .ok_or("Database not enabled on this wallet")?;
+            db_manager.export_backup_to_file(&output)?;
+            println!("Backup exported to {output}");
+            Ok(())
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::Backup { .. } => {
+            Err("Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite".to_string())
+        }
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::Restore {
+            input,
+            wallet_id,
+            password,
+            force,
+        } => {
+            let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
+            let db_manager = ow.get_db_manager()
+                .ok_or("Database not enabled on this wallet")?;
+            db_manager.import_backup_from_file(&input, force)?;
+            println!("Backup restored from {input}");
+            Ok(())
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::Restore { .. } => {
+            Err("Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite".to_string())
+        }
+
+        WalletCmd::SyncNonce {
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            ow.sync_nonce().await?;
+            println!("Nonce synced from chain");
+            println!("  Next sequence: {}", ow.nonce_manager.peek_next());
+            println!("  Account number: {}", ow.nonce_manager.account_number());
+            println!("  Released (pending reuse): {}", ow.nonce_manager.released_count());
             Ok(())
         }
     }
@@ -788,6 +988,257 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
                 "{}",
                 serde_json::to_string_pretty(&order).unwrap_or_else(|_| format!("{:?}", order))
             );
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// History handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
+    #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+    {
+        let _ = cmd;
+        return Err("Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite".to_string());
+    }
+
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    match cmd {
+        HistoryCmd::Orders {
+            wallet_id,
+            password,
+            account_index,
+            limit,
+            offset,
+        } => {
+            let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
+            let filter = nyks_wallet::relayer_module::transaction_history::OrderHistoryFilter {
+                account_index,
+                limit: Some(limit),
+                offset: Some(offset),
+            };
+            let entries = ow.get_order_history(filter)?;
+
+            if entries.is_empty() {
+                println!("No order history found");
+            } else {
+                println!(
+                    "{:<6} {:<12} {:<10} {:<8} {:<10} {:<12} {:<10} {:<20}",
+                    "ACCT", "ACTION", "TYPE", "SIDE", "AMOUNT", "PRICE", "STATUS", "CREATED"
+                );
+                println!("{}", "-".repeat(98));
+                for e in &entries {
+                    println!(
+                        "{:<6} {:<12} {:<10} {:<8} {:<10} {:<12} {:<10} {:<20}",
+                        e.account_index,
+                        e.action,
+                        e.order_type,
+                        e.position_type.as_deref().unwrap_or("-"),
+                        e.amount,
+                        e.price
+                            .map(|p| format!("{:.2}", p))
+                            .unwrap_or_else(|| "-".to_string()),
+                        e.status,
+                        &e.created_at[..std::cmp::min(19, e.created_at.len())],
+                    );
+                }
+                println!("\nShowing {} entries", entries.len());
+            }
+            Ok(())
+        }
+
+        HistoryCmd::Transfers {
+            wallet_id,
+            password,
+            limit,
+            offset,
+        } => {
+            let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
+            let filter = nyks_wallet::relayer_module::transaction_history::TransferHistoryFilter {
+                limit: Some(limit),
+                offset: Some(offset),
+            };
+            let entries = ow.get_transfer_history(filter)?;
+
+            if entries.is_empty() {
+                println!("No transfer history found");
+            } else {
+                println!(
+                    "{:<16} {:<8} {:<8} {:<12} {:<40} {:<20}",
+                    "DIRECTION", "FROM", "TO", "AMOUNT", "TX HASH", "CREATED"
+                );
+                println!("{}", "-".repeat(108));
+                for e in &entries {
+                    println!(
+                        "{:<16} {:<8} {:<8} {:<12} {:<40} {:<20}",
+                        e.direction,
+                        e.from_index
+                            .map(|i| i.to_string())
+                            .unwrap_or_else(|| "-".to_string()),
+                        e.to_index
+                            .map(|i| i.to_string())
+                            .unwrap_or_else(|| "-".to_string()),
+                        e.amount,
+                        e.tx_hash.as_deref().unwrap_or("-"),
+                        &e.created_at[..std::cmp::min(19, e.created_at.len())],
+                    );
+                }
+                println!("\nShowing {} entries", entries.len());
+            }
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Portfolio handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
+    match cmd {
+        PortfolioCmd::Summary {
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let portfolio = ow.get_portfolio_summary().await?;
+
+            println!("Portfolio Summary");
+            println!("{}", "=".repeat(50));
+            println!("  On-chain balance:    {} sats", portfolio.wallet_balance_sats);
+            println!("  Trading balance:     {} sats", portfolio.total_trading_balance);
+            println!("  Margin used:         {:.2}", portfolio.total_margin_used);
+            println!("  Unrealized PnL:      {:.2}", portfolio.unrealized_pnl);
+            println!("  Margin utilization:  {:.2}%", portfolio.margin_utilization * 100.0);
+            println!();
+            println!("  Lend deposits:       {:.2}", portfolio.total_lend_deposits);
+            println!("  Lend value:          {:.2}", portfolio.total_lend_value);
+            println!("  Lend PnL:            {:.2}", portfolio.lend_pnl);
+            println!();
+            println!("  Total accounts:      {}", portfolio.total_accounts);
+            println!("  On-chain accounts:   {}", portfolio.on_chain_accounts);
+
+            if !portfolio.trader_positions.is_empty() {
+                println!("\nTrader Positions");
+                println!("{}", "-".repeat(100));
+                println!(
+                    "  {:<6} {:<6} {:>12} {:>12} {:>16} {:>6} {:>12} {:>14}",
+                    "ACCT", "SIDE", "ENTRY", "CURRENT", "SIZE", "LEV", "PnL", "LIQ PRICE"
+                );
+                for p in &portfolio.trader_positions {
+                    println!(
+                        "  {:<6} {:<6} {:>12.2} {:>12.2} {:>16.2} {:>5.0}x {:>12.2} {:>14.2}",
+                        p.account_index,
+                        format!("{:?}", p.position_type),
+                        p.entry_price,
+                        p.current_price,
+                        p.position_size,
+                        p.leverage,
+                        p.unrealized_pnl,
+                        p.liquidation_price,
+                    );
+                }
+            }
+
+            if !portfolio.lend_positions.is_empty() {
+                println!("\nLend Positions");
+                println!("{}", "-".repeat(60));
+                println!(
+                    "  {:<6} {:<12} {:<12} {:<12} {:<10}",
+                    "ACCT", "DEPOSIT", "VALUE", "PnL", "SHARES"
+                );
+                for p in &portfolio.lend_positions {
+                    println!(
+                        "  {:<6} {:<12.2} {:<12.2} {:<12.2} {:<10.4}",
+                        p.account_index,
+                        p.deposit,
+                        p.current_value,
+                        p.pnl,
+                        p.pool_share,
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        PortfolioCmd::Balances {
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let balances = ow.get_account_balances();
+            if balances.is_empty() {
+                println!("No ZkOS accounts found");
+            } else {
+                println!(
+                    "{:<8} {:<14} {:<10} {:<10}",
+                    "INDEX", "BALANCE", "IO-TYPE", "ON-CHAIN"
+                );
+                println!("{}", "-".repeat(46));
+                let mut total: u64 = 0;
+                for b in &balances {
+                    println!(
+                        "{:<8} {:<14} {:<10} {:<10}",
+                        b.account_index,
+                        b.balance,
+                        format!("{:?}", b.io_type),
+                        b.on_chain,
+                    );
+                    total += b.balance;
+                }
+                println!("{}", "-".repeat(46));
+                println!("Total: {} sats across {} accounts", total, balances.len());
+            }
+            Ok(())
+        }
+
+        PortfolioCmd::Risks {
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let risks = ow.get_liquidation_risks().await?;
+            if risks.is_empty() {
+                println!("No open positions with liquidation risk");
+            } else {
+                println!("Liquidation Risk Report");
+                println!("{}", "=".repeat(70));
+                println!(
+                    "{:<8} {:<8} {:<14} {:<14} {:<14} {:<12}",
+                    "ACCT", "SIDE", "CURRENT", "LIQ PRICE", "DISTANCE", "MARGIN %"
+                );
+                println!("{}", "-".repeat(70));
+                for r in &risks {
+                    let distance_str = if r.distance_pct >= 0.0 {
+                        format!("+{:.2}%", r.distance_pct)
+                    } else {
+                        format!("{:.2}%", r.distance_pct)
+                    };
+                    println!(
+                        "{:<8} {:<8} ${:<13.2} ${:<13.2} {:<14} {:<12.2}%",
+                        r.account_index,
+                        format!("{:?}", r.position_type),
+                        r.current_price,
+                        r.liquidation_price,
+                        distance_str,
+                        r.margin_ratio * 100.0,
+                    );
+                }
+            }
             Ok(())
         }
     }

@@ -268,6 +268,12 @@ impl OrderWallet {
             .ok_or(format!("Request ID not found for account index: {}", index))
     }
 
+    /// Get a reference to the database manager, if DB persistence is enabled.
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn get_db_manager(&self) -> Option<&DatabaseManager> {
+        self.db_manager.as_ref()
+    }
+
     /// Ensure the account exists on-chain, has IOType::Coin, and a non-zero balance.
     pub fn ensure_coin_onchain(&self, index: AccountIndex) -> Result<(), String> {
         let a = self

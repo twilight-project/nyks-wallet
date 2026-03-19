@@ -76,16 +76,28 @@ pub enum TransactionHashArgs {
         id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<OrderStatus>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        offset: Option<i64>,
     },
     AccountId {
         id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<OrderStatus>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        offset: Option<i64>,
     },
     RequestId {
         id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<OrderStatus>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        offset: Option<i64>,
     },
 }
 
@@ -208,21 +220,247 @@ pub struct PositionSize {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct LendPoolInfo {
-    id: i64,
-    sequence: i64,
-    nonce: i64,
+    pub id: i64,
+    pub sequence: i64,
+    pub nonce: i64,
     #[serde(deserialize_with = "from_str_to_f64")]
-    total_pool_share: f64,
+    pub total_pool_share: f64,
     #[serde(deserialize_with = "from_str_to_f64")]
-    total_locked_value: f64,
-    pending_orders: i64,
-    aggregate_log_sequence: i64,
+    pub total_locked_value: f64,
+    pub pending_orders: i64,
+    pub aggregate_log_sequence: i64,
+    #[serde(default)]
+    pub last_snapshot_id: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct RequestResponse {
     pub msg: String,
     pub id_key: String,
+}
+
+// --- New types for additional relayer endpoints ---
+
+/// Open interest data (long/short exposure).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct OpenInterest {
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub long_exposure: f64,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub short_exposure: f64,
+    #[serde(default)]
+    pub last_order_timestamp: Option<String>,
+}
+
+/// Risk parameters returned inside `MarketStats`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct RiskParams {
+    pub max_oi_mult: f64,
+    pub max_net_mult: f64,
+    pub max_position_pct: f64,
+    pub min_position_btc: f64,
+    pub max_leverage: f64,
+    pub mm_ratio: f64,
+}
+
+/// Comprehensive market risk statistics from `get_market_stats`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MarketStats {
+    pub pool_equity_btc: f64,
+    pub total_long_btc: f64,
+    pub total_short_btc: f64,
+    pub total_pending_long_btc: f64,
+    pub total_pending_short_btc: f64,
+    pub open_interest_btc: f64,
+    pub net_exposure_btc: f64,
+    pub long_pct: f64,
+    pub short_pct: f64,
+    pub utilization: f64,
+    pub max_long_btc: f64,
+    pub max_short_btc: f64,
+    pub status: String,
+    pub status_reason: Option<String>,
+    pub params: RiskParams,
+}
+
+/// Parameters for the `apy_chart` endpoint.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApyChartArgs {
+    pub range: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lookback: Option<String>,
+}
+
+/// Single data point in an APY chart.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ApyChartPoint {
+    pub bucket_ts: String,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub apy: f64,
+}
+
+/// Parameters for `account_summary_by_twilight_address`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AccountSummaryArgs {
+    pub t_address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[serde(with = "option_rfc3339_date")]
+    pub from: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[serde(with = "option_rfc3339_date")]
+    pub to: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[serde(with = "option_rfc3339_date")]
+    pub since: Option<DateTime<Utc>>,
+}
+
+/// Response from `account_summary_by_twilight_address`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AccountSummary {
+    pub from: String,
+    pub to: String,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub settled_positionsize: f64,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub filled_positionsize: f64,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub liquidated_positionsize: f64,
+    pub settled_count: i64,
+    pub filled_count: i64,
+    pub liquidated_count: i64,
+}
+
+/// Parameters for `all_account_summaries`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AllAccountSummariesArgs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[serde(with = "option_rfc3339_date")]
+    pub from: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[serde(with = "option_rfc3339_date")]
+    pub to: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[serde(with = "option_rfc3339_date")]
+    pub since: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+}
+
+/// Single account entry within `AllAccountSummariesResponse`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AccountSummaryEntry {
+    pub twilight_address: String,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub settled_positionsize: f64,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub filled_positionsize: f64,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub liquidated_positionsize: f64,
+    pub settled_count: i64,
+    pub filled_count: i64,
+    pub liquidated_count: i64,
+}
+
+/// Response from `all_account_summaries`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AllAccountSummariesResponse {
+    pub from: String,
+    pub to: String,
+    pub limit: i64,
+    pub offset: i64,
+    pub summaries: Vec<AccountSummaryEntry>,
+}
+
+/// Settle-limit details embedded in `TraderOrderV1` response.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SettleLimit {
+    pub uuid: Uuid,
+    pub position_type: PositionType,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub price: f64,
+}
+
+/// Enhanced trader order info (v1) with settle_limit and funding_applied.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TraderOrderV1 {
+    #[serde(flatten)]
+    pub order: TraderOrder,
+    #[serde(default)]
+    pub settle_limit: Option<SettleLimit>,
+    #[serde(default)]
+    #[serde(deserialize_with = "option_from_str_to_f64")]
+    pub funding_applied: Option<f64>,
+}
+
+/// A single funding history entry from `order_funding_history`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct FundingHistoryEntry {
+    pub time: String,
+    pub position_side: PositionType,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub payment: f64,
+    #[serde(deserialize_with = "from_str_to_f64")]
+    pub funding_rate: f64,
+    pub order_id: Uuid,
+}
+
+/// Deserialize an optional string-or-number to `Option<f64>`.
+pub fn option_from_str_to_f64<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum MaybeF64 {
+        Str(String),
+        Num(f64),
+        Null,
+    }
+    match Option::<MaybeF64>::deserialize(deserializer)? {
+        Some(MaybeF64::Str(s)) => s.parse::<f64>().map(Some).map_err(de::Error::custom),
+        Some(MaybeF64::Num(n)) => Ok(Some(n)),
+        Some(MaybeF64::Null) | None => Ok(None),
+    }
+}
+
+/// Optional RFC3339 date (de)serializer for `Option<DateTime<Utc>>`.
+mod option_rfc3339_date {
+    use chrono::{DateTime, Utc};
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(date: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match date {
+            Some(d) => serializer.serialize_str(&d.to_rfc3339()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt: Option<String> = Option::deserialize(deserializer)?;
+        match opt {
+            Some(s) => chrono::DateTime::parse_from_rfc3339(&s)
+                .map_err(serde::de::Error::custom)
+                .map(|dt| Some(dt.with_timezone(&Utc))),
+            None => Ok(None),
+        }
+    }
 }
 
 // Custom (de)serializer to enforce RFC3339 formatted date strings when talking to the relayer

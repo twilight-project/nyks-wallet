@@ -11,9 +11,11 @@
 //! and provides a clean async interface for all relayer operations.
 
 use super::relayer_types::{
-    BtcUsdPrice, Candle, Candles, FeeHistory, FundingRate, HistoricalFeeArgs,
-    HistoricalFundingArgs, HistoricalPriceArgs, LendOrder, LendPoolInfo, OrderBook, PositionSize,
-    RecentOrders, RequestResponse, TraderOrder, TransactionHashArgs, TxHash,
+    AccountSummary, AccountSummaryArgs, AllAccountSummariesArgs, AllAccountSummariesResponse,
+    ApyChartArgs, ApyChartPoint, BtcUsdPrice, Candle, Candles, FeeHistory, FundingHistoryEntry,
+    FundingRate, HistoricalFeeArgs, HistoricalFundingArgs, HistoricalPriceArgs, LendOrder,
+    LendPoolInfo, MarketStats, OpenInterest, OrderBook, PositionSize, RecentOrders,
+    RequestResponse, TraderOrder, TraderOrderV1, TransactionHashArgs, TxHash,
 };
 use chrono::{DateTime, Utc};
 use jsonrpsee::core::client::ClientT;
@@ -284,6 +286,94 @@ impl RelayerJsonRpcClient {
     pub async fn lend_pool_info(&self) -> Result<LendPoolInfo, RpcError> {
         self.client.request("lend_pool_info", rpc_params![]).await
     }
+
+    // -------------------------
+    // Pool & Yield APIs
+    // -------------------------
+
+    /// Get the annualized percentage yield for the last 24 hours.
+    pub async fn last_day_apy(&self) -> Result<Option<f64>, RpcError> {
+        self.client.request("last_day_apy", rpc_params![]).await
+    }
+
+    /// Get APY chart data points for visualization.
+    pub async fn apy_chart(&self, params: ApyChartArgs) -> Result<Vec<ApyChartPoint>, RpcError> {
+        self.client
+            .request("apy_chart", AsRpcParams(params))
+            .await
+    }
+
+    // -------------------------
+    // Market Analytics APIs
+    // -------------------------
+
+    /// Get current open interest (long/short exposure).
+    pub async fn open_interest(&self) -> Result<OpenInterest, RpcError> {
+        self.client.request("open_interest", rpc_params![]).await
+    }
+
+    /// Get comprehensive market risk statistics.
+    pub async fn get_market_stats(&self) -> Result<MarketStats, RpcError> {
+        self.client
+            .request("get_market_stats", rpc_params![])
+            .await
+    }
+
+    // -------------------------
+    // Account Analytics APIs
+    // -------------------------
+
+    /// Get trading activity summary for a specific Twilight address.
+    pub async fn account_summary_by_twilight_address(
+        &self,
+        params: AccountSummaryArgs,
+    ) -> Result<AccountSummary, RpcError> {
+        self.client
+            .request("account_summary_by_twilight_address", AsRpcParams(params))
+            .await
+    }
+
+    /// Get paginated trading activity summaries for all addresses.
+    pub async fn all_account_summaries(
+        &self,
+        params: AllAccountSummariesArgs,
+    ) -> Result<AllAccountSummariesResponse, RpcError> {
+        self.client
+            .request("all_account_summaries", AsRpcParams(params))
+            .await
+    }
+
+    // -------------------------
+    // Enhanced Order Query APIs
+    // -------------------------
+
+    /// Query enhanced trader order info (v1) with settle_limit and funding_applied.
+    pub async fn trader_order_info_v1(
+        &self,
+        tx: QueryTraderOrderZkos,
+    ) -> Result<TraderOrderV1, RpcError> {
+        let data = bincode::serialize(&tx).unwrap();
+        let params = HexEncodedData {
+            data: hex::encode(data),
+        };
+        self.client
+            .request("trader_order_info_v1", AsRpcParams(params))
+            .await
+    }
+
+    /// Get funding payment history for a trader order.
+    pub async fn order_funding_history(
+        &self,
+        tx: QueryTraderOrderZkos,
+    ) -> Result<Vec<FundingHistoryEntry>, RpcError> {
+        let data = bincode::serialize(&tx).unwrap();
+        let params = HexEncodedData {
+            data: hex::encode(data),
+        };
+        self.client
+            .request("order_funding_history", AsRpcParams(params))
+            .await
+    }
 }
 
 pub struct AsRpcParams<T>(pub T);
@@ -316,6 +406,8 @@ mod tests {
         let request_id = TransactionHashArgs::RequestId {
             id: "REQID9804F25BCD722E00D408E3034B6E4EC144992DA7871A1F4DCEC86F0CBBCE81D1".to_string(),
             status: Some(OrderStatus::FILLED),
+            limit: None,
+            offset: None,
         };
 
         match relayer.transaction_hashes(request_id).await {

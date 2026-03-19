@@ -11,6 +11,37 @@ use twilight_client_sdk::{
 
 use super::order_wallet::AccountIndex;
 
+/// Compute unrealized PnL for an inverse perpetual BTC/USD position.
+///
+/// For an inverse perpetual the PnL is denominated in BTC (the base currency)
+/// and follows the formula:
+///
+/// - **LONG:**  `position_size * (settle - entry) / (entry * settle)`
+/// - **SHORT:** `position_size * (entry - settle) / (entry * settle)`
+///
+/// `settle_price` is the current mark / index price when the position is still
+/// open (i.e. "unrealized"). The relayer only populates `unrealized_pnl` on the
+/// order after settlement, so we must calculate it ourselves for live positions.
+pub fn unrealized_pnl(
+    position_type: &PositionType,
+    position_size: f64,
+    entry_price: f64,
+    settle_price: f64,
+) -> f64 {
+    if entry_price > 0.0 && settle_price > 0.0 {
+        match position_type {
+            PositionType::LONG => {
+                (position_size * (settle_price - entry_price)) / (entry_price * settle_price)
+            }
+            PositionType::SHORT => {
+                (position_size * (entry_price - settle_price)) / (entry_price * settle_price)
+            }
+        }
+    } else {
+        0.0
+    }
+}
+
 /// Summary of a single trader position with PnL and risk metrics.
 #[derive(Debug, Clone, Serialize)]
 pub struct PositionSummary {
@@ -33,11 +64,22 @@ pub struct PositionSummary {
 
 impl PositionSummary {
     /// Build a position summary from a queried TraderOrder and the current market price.
+    ///
+    /// Unrealized PnL is computed locally using the inverse perpetual formula
+    /// rather than relying on `order.unrealized_pnl` (which is zero until settlement).
     pub fn from_trader_order(
         account_index: AccountIndex,
         order: &TraderOrder,
         current_price: f64,
     ) -> Self {
+        let upnl = unrealized_pnl(
+            &order.position_type,
+            order.positionsize,
+            order.entryprice,
+            current_price,
+        )
+        .round();
+
         let margin_ratio = if order.initial_margin > 0.0 {
             order.available_margin / order.initial_margin
         } else {
@@ -54,7 +96,7 @@ impl PositionSummary {
             available_margin: order.available_margin,
             leverage: order.leverage,
             position_size: order.positionsize,
-            unrealized_pnl: order.unrealized_pnl,
+            unrealized_pnl: upnl,
             liquidation_price: order.liquidation_price,
             bankruptcy_price: order.bankruptcy_price,
             margin_ratio,
@@ -181,4 +223,69 @@ pub struct AccountBalanceInfo {
     pub balance: u64,
     pub io_type: IOType,
     pub on_chain: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx_eq(a: f64, b: f64, eps: f64) -> bool {
+        (a - b).abs() < eps
+    }
+
+    #[test]
+    fn test_long_price_up_is_profit() {
+        // LONG: price goes up → positive PnL
+        let pnl = unrealized_pnl(&PositionType::LONG, 1_000_000.0, 50_000.0, 55_000.0);
+        // (1_000_000 * (55000 - 50000)) / (50000 * 55000) = 5_000_000_000 / 2_750_000_000 ≈ 1.8182
+        assert!(pnl > 0.0);
+        assert!(approx_eq(pnl, 1.818181818, 0.001));
+    }
+
+    #[test]
+    fn test_long_price_down_is_loss() {
+        // LONG: price goes down → negative PnL
+        let pnl = unrealized_pnl(&PositionType::LONG, 1_000_000.0, 50_000.0, 45_000.0);
+        assert!(pnl < 0.0);
+    }
+
+    #[test]
+    fn test_short_price_down_is_profit() {
+        // SHORT: price goes down → positive PnL
+        let pnl = unrealized_pnl(&PositionType::SHORT, 1_000_000.0, 50_000.0, 45_000.0);
+        // (1_000_000 * (50000 - 45000)) / (50000 * 45000) = 5_000_000_000 / 2_250_000_000 ≈ 2.2222
+        assert!(pnl > 0.0);
+        assert!(approx_eq(pnl, 2.222222222, 0.001));
+    }
+
+    #[test]
+    fn test_short_price_up_is_loss() {
+        // SHORT: price goes up → negative PnL
+        let pnl = unrealized_pnl(&PositionType::SHORT, 1_000_000.0, 50_000.0, 55_000.0);
+        assert!(pnl < 0.0);
+    }
+
+    #[test]
+    fn test_same_price_is_zero() {
+        let pnl_long = unrealized_pnl(&PositionType::LONG, 500_000.0, 60_000.0, 60_000.0);
+        let pnl_short = unrealized_pnl(&PositionType::SHORT, 500_000.0, 60_000.0, 60_000.0);
+        assert!(approx_eq(pnl_long, 0.0, 1e-10));
+        assert!(approx_eq(pnl_short, 0.0, 1e-10));
+    }
+
+    #[test]
+    fn test_zero_prices_return_zero() {
+        assert_eq!(unrealized_pnl(&PositionType::LONG, 100.0, 0.0, 50_000.0), 0.0);
+        assert_eq!(unrealized_pnl(&PositionType::LONG, 100.0, 50_000.0, 0.0), 0.0);
+        assert_eq!(unrealized_pnl(&PositionType::SHORT, 100.0, 0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn test_inverse_perpetual_symmetry() {
+        // For same magnitude move, LONG profit != SHORT loss due to inverse nature
+        let long_pnl = unrealized_pnl(&PositionType::LONG, 1_000_000.0, 50_000.0, 55_000.0);
+        let short_pnl = unrealized_pnl(&PositionType::SHORT, 1_000_000.0, 50_000.0, 55_000.0);
+        // They should sum to zero (LONG gain = SHORT loss for same params)
+        assert!(approx_eq(long_pnl + short_pnl, 0.0, 1e-10));
+    }
 }
