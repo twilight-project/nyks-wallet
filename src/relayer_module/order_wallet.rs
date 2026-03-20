@@ -457,12 +457,16 @@ impl OrderWallet {
             if let Ok(account) = self.zk_accounts.get_account(&index) {
                 let _ = self.update_zk_account_in_db(&account);
             }
+            let tx_hash = match &response {
+                Ok(hash) => Some(hash.as_str()),
+                Err(_) => None,
+            };
             self.log_transfer_history(
                 "trade_to_trade",
                 Some(index),
                 Some(new_account_index),
                 sender_account.balance,
-                None,
+                tx_hash,
             );
         }
 

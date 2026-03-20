@@ -1066,13 +1066,13 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
                 println!("No transfer history found");
             } else {
                 println!(
-                    "{:<16} {:<8} {:<8} {:<12} {:<40} {:<20}",
-                    "DIRECTION", "FROM", "TO", "AMOUNT", "TX HASH", "CREATED"
+                    "{:<16} {:<6} {:<6} {:<12} {:<20} {}",
+                    "DIRECTION", "FROM", "TO", "AMOUNT", "CREATED", "TX HASH"
                 );
-                println!("{}", "-".repeat(108));
+                println!("{}", "-".repeat(100));
                 for e in &entries {
                     println!(
-                        "{:<16} {:<8} {:<8} {:<12} {:<40} {:<20}",
+                        "{:<16} {:<6} {:<6} {:<12} {:<20} {}",
                         e.direction,
                         e.from_index
                             .map(|i| i.to_string())
@@ -1081,8 +1081,8 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
                             .map(|i| i.to_string())
                             .unwrap_or_else(|| "-".to_string()),
                         e.amount,
-                        e.tx_hash.as_deref().unwrap_or("-"),
                         &e.created_at[..std::cmp::min(19, e.created_at.len())],
+                        e.tx_hash.as_deref().unwrap_or("-"),
                     );
                 }
                 println!("\nShowing {} entries", entries.len());
