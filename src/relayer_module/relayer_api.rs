@@ -14,7 +14,7 @@ use super::relayer_types::{
     AccountSummary, AccountSummaryArgs, AllAccountSummariesArgs, AllAccountSummariesResponse,
     ApyChartArgs, ApyChartPoint, BtcUsdPrice, Candle, Candles, FeeHistory, FundingHistoryEntry,
     FundingRate, HistoricalFeeArgs, HistoricalFundingArgs, HistoricalPriceArgs, LendOrder,
-    LendPoolInfo, MarketStats, OpenInterest, OrderBook, PositionSize, RecentOrders,
+    LendOrderV1, LendPoolInfo, MarketStats, OpenInterest, OrderBook, PositionSize, RecentOrders,
     RequestResponse, TraderOrder, TraderOrderV1, TransactionHashArgs, TxHash,
 };
 use chrono::{DateTime, Utc};
@@ -186,6 +186,20 @@ impl RelayerJsonRpcClient {
         };
         self.client
             .request("lend_order_info", AsRpcParams(params))
+            .await
+    }
+
+    /// Query enhanced lend order info (v1) with unrealised profit and APR.
+    pub async fn lend_order_info_v1(
+        &self,
+        tx: QueryLendOrderZkos,
+    ) -> Result<LendOrderV1, RpcError> {
+        let data = bincode::serialize(&tx).unwrap();
+        let params = HexEncodedData {
+            data: hex::encode(data),
+        };
+        self.client
+            .request("lend_order_info_v1", AsRpcParams(params))
             .await
     }
 

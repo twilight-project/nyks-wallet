@@ -10,6 +10,7 @@ use twilight_client_sdk::{
 };
 
 use super::order_wallet::AccountIndex;
+use super::relayer_types::{LendOrderV1, OrderTrigger, TraderOrderV1};
 
 /// Compute unrealized PnL for an inverse perpetual BTC/USD position.
 ///
@@ -60,6 +61,14 @@ pub struct PositionSummary {
     pub margin_ratio: f64,
     pub fee_filled: f64,
     pub fee_settled: f64,
+    /// Cumulative funding payment applied (from v1).
+    pub funding_applied: Option<f64>,
+    /// Latest close-limit trigger (from v1).
+    pub settle_limit: Option<OrderTrigger>,
+    /// Take-profit trigger (from v1).
+    pub take_profit: Option<OrderTrigger>,
+    /// Stop-loss trigger (from v1).
+    pub stop_loss: Option<OrderTrigger>,
 }
 
 impl PositionSummary {
@@ -102,7 +111,25 @@ impl PositionSummary {
             margin_ratio,
             fee_filled: order.fee_filled,
             fee_settled: order.fee_settled,
+            funding_applied: None,
+            settle_limit: None,
+            take_profit: None,
+            stop_loss: None,
         }
+    }
+
+    /// Build from enhanced TraderOrderV1 (includes settle_limit, take_profit, stop_loss, funding_applied).
+    pub fn from_trader_order_v1(
+        account_index: AccountIndex,
+        order_v1: &TraderOrderV1,
+        current_price: f64,
+    ) -> Self {
+        let mut summary = Self::from_trader_order(account_index, &order_v1.order, current_price);
+        summary.funding_applied = order_v1.funding_applied;
+        summary.settle_limit = order_v1.settle_limit.clone();
+        summary.take_profit = order_v1.take_profit.clone();
+        summary.stop_loss = order_v1.stop_loss.clone();
+        summary
     }
 }
 
@@ -116,6 +143,10 @@ pub struct LendPositionSummary {
     pub pool_share: f64,
     pub payment: f64,
     pub pnl: f64,
+    /// Unrealised PnL from pool value (from v1, if available).
+    pub unrealised_pnl: Option<f64>,
+    /// Annualised percentage rate (from v1, if available).
+    pub apr: Option<f64>,
 }
 
 impl LendPositionSummary {
@@ -130,7 +161,19 @@ impl LendPositionSummary {
             pool_share: order.npoolshare,
             payment: order.payment,
             pnl,
+            unrealised_pnl: None,
+            apr: None,
         }
+    }
+
+    /// Build from enhanced LendOrderV1 (includes unrealised profit and APR).
+    pub fn from_lend_order_v1(account_index: AccountIndex, order_v1: &LendOrderV1) -> Self {
+        let mut summary = Self::from_lend_order(account_index, &order_v1.order);
+        if let Some(ref profit) = order_v1.unrealised_profit {
+            summary.unrealised_pnl = Some(profit.u_pnl);
+            summary.apr = Some(profit.apr);
+        }
+        summary
     }
 }
 
@@ -177,7 +220,17 @@ impl Portfolio {
         let unrealized_pnl: f64 = trader_positions.iter().map(|p| p.unrealized_pnl).sum();
         let total_lend_deposits: f64 = lend_positions.iter().map(|p| p.deposit).sum();
         let total_lend_value: f64 = lend_positions.iter().map(|p| p.current_value).sum();
-        let lend_pnl = total_lend_value - total_lend_deposits;
+        // Prefer v1 unrealised PnL (computed from live pool TLV) when available
+        let v1_lend_pnl: f64 = lend_positions
+            .iter()
+            .filter_map(|p| p.unrealised_pnl)
+            .sum();
+        let has_v1 = lend_positions.iter().any(|p| p.unrealised_pnl.is_some());
+        let lend_pnl = if has_v1 {
+            v1_lend_pnl
+        } else {
+            total_lend_value - total_lend_deposits
+        };
 
         let denominator = total_trading_balance as f64 + total_margin_used;
         let margin_utilization = if denominator > 0.0 {

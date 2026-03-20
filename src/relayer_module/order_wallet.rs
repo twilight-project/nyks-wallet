@@ -707,6 +707,108 @@ impl OrderWallet {
     // Trader Order Operations
     // -------------------------
 
+    /// Validate that the market is not halted.
+    ///
+    /// Close, cancel, and lend operations are allowed during HEALTHY and CLOSE_ONLY
+    /// but rejected during HALT (per risk_engine.md).
+    pub async fn validate_market_not_halted(&self) -> Result<(), String> {
+        let stats = self
+            .relayer_api_client
+            .get_market_stats()
+            .await
+            .map_err(|e| format!("Failed to fetch market stats: {}", e))?;
+
+        if stats.status == "HALT" {
+            return Err(format!(
+                "Market is halted: {}. All operations are blocked.",
+                stats.status_reason.as_deref().unwrap_or("unknown")
+            ));
+        }
+        Ok(())
+    }
+
+    /// Pre-validate an open order against the relayer's risk engine via `get_market_stats`.
+    ///
+    /// This replicates the server-side validation pipeline locally so the user gets
+    /// an immediate, descriptive error instead of a generic rejection from the relayer.
+    /// Checks performed (matching `risk_engine.md`):
+    /// 1. Market status — reject if HALT or CLOSE_ONLY
+    /// 2. Max leverage — reject if leverage exceeds `params.max_leverage`
+    /// 3. Min position size — reject if entry_value < `params.min_position_btc`
+    /// 4. Per-position cap — reject if entry_value > `params.max_position_pct * pool_equity`
+    /// 5. Directional headroom — reject if entry_value > `max_long_btc` / `max_short_btc`
+    pub async fn validate_open_order(
+        &self,
+        order_side: &PositionType,
+        initial_margin: u64,
+        leverage: u64,
+    ) -> Result<(), String> {
+        let stats = self
+            .relayer_api_client
+            .get_market_stats()
+            .await
+            .map_err(|e| format!("Failed to fetch market stats: {}", e))?;
+
+        // 1. Market status
+        match stats.status.as_str() {
+            "HALT" => {
+                return Err(format!(
+                    "Market is halted: {}",
+                    stats.status_reason.as_deref().unwrap_or("unknown")
+                ));
+            }
+            "CLOSE_ONLY" => {
+                return Err(format!(
+                    "Market is in close-only mode: {}",
+                    stats.status_reason.as_deref().unwrap_or("unknown")
+                ));
+            }
+            _ => {}
+        }
+
+        // entry_value = initial_margin * leverage (in BTC / sats)
+        let entry_value = initial_margin as f64 * leverage as f64;
+
+        // 2. Max leverage
+        if stats.params.max_leverage > 0.0 && leverage as f64 > stats.params.max_leverage {
+            return Err(format!(
+                "Leverage {} exceeds maximum allowed {}",
+                leverage, stats.params.max_leverage
+            ));
+        }
+
+        // 3. Min position size
+        if stats.params.min_position_btc > 0.0 && entry_value < stats.params.min_position_btc {
+            return Err(format!(
+                "Position size {:.0} sats is below minimum {:.0} sats",
+                entry_value, stats.params.min_position_btc
+            ));
+        }
+
+        // 4. Per-position cap
+        let pos_cap = stats.params.max_position_pct * stats.pool_equity_btc;
+        if pos_cap > 0.0 && entry_value > pos_cap {
+            return Err(format!(
+                "Position size {:.0} sats exceeds per-position cap {:.0} sats ({:.1}% of pool equity)",
+                entry_value, pos_cap, stats.params.max_position_pct * 100.0
+            ));
+        }
+
+        // 5. Directional headroom (max_long / max_short already incorporates OI + net limits)
+        let (headroom, direction) = match order_side {
+            PositionType::LONG => (stats.max_long_btc, "long"),
+            PositionType::SHORT => (stats.max_short_btc, "short"),
+        };
+        if entry_value > headroom {
+            return Err(format!(
+                "Position size {:.0} sats exceeds max available {} capacity {:.0} sats (utilization: {:.1}%)",
+                entry_value, direction, headroom, stats.utilization * 100.0
+            ));
+        }
+
+        Ok(())
+    }
+
     pub async fn open_trader_order(
         &mut self,
         index: AccountIndex,
@@ -716,12 +818,17 @@ impl OrderWallet {
         leverage: u64,
     ) -> Result<String, String> {
         self.ensure_coin_onchain(index)?;
-        if leverage == 0 || leverage > 50 {
-            return Err("Leverage must be greater than 0 and less than 50".to_string());
+        if leverage == 0 {
+            return Err("Leverage must be greater than 0".to_string());
         }
         if entry_price == 0 {
             return Err("Entry price must be greater than 0".to_string());
         }
+
+        // Pre-validate against the risk engine before submitting
+        let initial_margin = self.zk_accounts.get_account(&index)?.balance;
+        self.validate_open_order(&order_side, initial_margin, leverage)
+            .await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let _utxo_detail =
             fetch_utxo_details_with_retry(account_address.clone(), IOType::Coin).await?;
@@ -808,6 +915,7 @@ impl OrderWallet {
         order_type: OrderType,
         execution_price: f64,
     ) -> Result<String, String> {
+        self.validate_market_not_halted().await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
         let request_id = self.request_id(index)?;
@@ -886,6 +994,7 @@ impl OrderWallet {
         stop_loss_price: Option<f64>,
         take_profit_price: Option<f64>,
     ) -> Result<String, String> {
+        self.validate_market_not_halted().await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
         let request_id = self.request_id(index)?;
@@ -982,7 +1091,52 @@ impl OrderWallet {
         Ok(response)
     }
 
+    /// Query enhanced trader order info (v1) with settle_limit, take_profit, stop_loss, funding_applied.
+    pub async fn query_trader_order_v1(
+        &mut self,
+        index: AccountIndex,
+    ) -> Result<super::relayer_types::TraderOrderV1, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let query_order = query_trader_order_zkos(
+            account_address.clone(),
+            &secret_key,
+            account_address.clone(),
+            "PENDING".to_string(),
+        );
+        let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
+        let response = self
+            .relayer_api_client
+            .trader_order_info_v1(query_order_zkos)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(response)
+    }
+
+    /// Query enhanced lend order info (v1) with unrealised profit and APR.
+    pub async fn query_lend_order_v1(
+        &mut self,
+        index: AccountIndex,
+    ) -> Result<super::relayer_types::LendOrderV1, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let query_order = query_lend_order_zkos(
+            account_address.clone(),
+            &secret_key,
+            account_address.clone(),
+            OrderStatus::LENDED.to_str(),
+        );
+        let query_order_zkos = QueryLendOrderZkos::decode_from_hex_string(query_order)?;
+        let response = self
+            .relayer_api_client
+            .lend_order_info_v1(query_order_zkos)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(response)
+    }
+
     pub async fn cancel_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
+        self.validate_market_not_halted().await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
         let request_id = self.request_id(index)?;
@@ -1040,6 +1194,7 @@ impl OrderWallet {
     // -------------------------
 
     pub async fn open_lend_order(&mut self, index: AccountIndex) -> Result<String, String> {
+        self.validate_market_not_halted().await?;
         self.ensure_coin_onchain(index)?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let _utxo_detail =
@@ -1121,6 +1276,7 @@ impl OrderWallet {
     }
 
     pub async fn close_lend_order(&mut self, index: AccountIndex) -> Result<String, String> {
+        self.validate_market_not_halted().await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
         let request_id = self.request_id(index)?;
@@ -1512,16 +1668,16 @@ impl OrderWallet {
                 index
             ));
         }
-        let order = self.query_trader_order(index).await?;
+        let order_v1 = self.query_trader_order_v1(index).await?;
         let current_price = self
             .relayer_api_client
             .btc_usd_price()
             .await
             .map(|p| p.price)
-            .unwrap_or(order.entryprice);
-        Ok(super::portfolio::PositionSummary::from_trader_order(
+            .unwrap_or(order_v1.order.entryprice);
+        Ok(super::portfolio::PositionSummary::from_trader_order_v1(
             index,
-            &order,
+            &order_v1,
             current_price,
         ))
     }
@@ -1539,9 +1695,9 @@ impl OrderWallet {
                 index
             ));
         }
-        let order = self.query_lend_order(index).await?;
-        Ok(super::portfolio::LendPositionSummary::from_lend_order(
-            index, &order,
+        let order_v1 = self.query_lend_order_v1(index).await?;
+        Ok(super::portfolio::LendPositionSummary::from_lend_order_v1(
+            index, &order_v1,
         ))
     }
 
@@ -1582,23 +1738,23 @@ impl OrderWallet {
                 }
                 IOType::Memo => {
                     // Try trader order first, fall back to lend order
-                    match self.query_trader_order(account.index).await {
-                        Ok(order) => {
+                    match self.query_trader_order_v1(account.index).await {
+                        Ok(order_v1) => {
                             trader_positions.push(
-                                super::portfolio::PositionSummary::from_trader_order(
+                                super::portfolio::PositionSummary::from_trader_order_v1(
                                     account.index,
-                                    &order,
+                                    &order_v1,
                                     current_price,
                                 ),
                             );
                         }
                         Err(_) => {
                             // Not a trader order — try lend
-                            if let Ok(order) = self.query_lend_order(account.index).await {
+                            if let Ok(order_v1) = self.query_lend_order_v1(account.index).await {
                                 lend_positions.push(
-                                    super::portfolio::LendPositionSummary::from_lend_order(
+                                    super::portfolio::LendPositionSummary::from_lend_order_v1(
                                         account.index,
-                                        &order,
+                                        &order_v1,
                                     ),
                                 );
                             }

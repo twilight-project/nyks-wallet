@@ -929,7 +929,7 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            let order = ow.query_trader_order(account_index).await?;
+            let order = ow.query_trader_order_v1(account_index).await?;
             println!("Trader Order (account {account_index})");
             println!(
                 "{}",
@@ -982,7 +982,7 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            let order = ow.query_lend_order(account_index).await?;
+            let order = ow.query_lend_order_v1(account_index).await?;
             println!("Lend Order (account {account_index})");
             println!(
                 "{}",
@@ -1126,14 +1126,18 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
 
             if !portfolio.trader_positions.is_empty() {
                 println!("\nTrader Positions");
-                println!("{}", "-".repeat(100));
+                println!("{}", "-".repeat(115));
                 println!(
-                    "  {:<6} {:<6} {:>12} {:>12} {:>16} {:>6} {:>12} {:>14}",
-                    "ACCT", "SIDE", "ENTRY", "CURRENT", "SIZE", "LEV", "PnL", "LIQ PRICE"
+                    "  {:<6} {:<6} {:>12} {:>12} {:>16} {:>6} {:>12} {:>14} {:>10}",
+                    "ACCT", "SIDE", "ENTRY", "CURRENT", "SIZE", "LEV", "PnL", "LIQ PRICE", "FUNDING"
                 );
                 for p in &portfolio.trader_positions {
+                    let funding_str = p
+                        .funding_applied
+                        .map(|v| format!("{:.4}", v))
+                        .unwrap_or_else(|| "-".to_string());
                     println!(
-                        "  {:<6} {:<6} {:>12.2} {:>12.2} {:>16.2} {:>5.0}x {:>12.2} {:>14.2}",
+                        "  {:<6} {:<6} {:>12.2} {:>12.2} {:>16.2} {:>5.0}x {:>12.2} {:>14.2} {:>10}",
                         p.account_index,
                         format!("{:?}", p.position_type),
                         p.entry_price,
@@ -1142,24 +1146,35 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
                         p.leverage,
                         p.unrealized_pnl,
                         p.liquidation_price,
+                        funding_str,
                     );
                 }
             }
 
             if !portfolio.lend_positions.is_empty() {
                 println!("\nLend Positions");
-                println!("{}", "-".repeat(60));
+                println!("{}", "-".repeat(80));
                 println!(
-                    "  {:<6} {:<12} {:<12} {:<12} {:<10}",
-                    "ACCT", "DEPOSIT", "VALUE", "PnL", "SHARES"
+                    "  {:<6} {:>12} {:>12} {:>12} {:>12} {:>10} {:>10}",
+                    "ACCT", "DEPOSIT", "VALUE", "PnL", "uPnL", "APR %", "SHARES"
                 );
                 for p in &portfolio.lend_positions {
+                    let upnl_str = p
+                        .unrealised_pnl
+                        .map(|v| format!("{:.4}", v))
+                        .unwrap_or_else(|| "-".to_string());
+                    let apr_str = p
+                        .apr
+                        .map(|v| format!("{:.2}", v))
+                        .unwrap_or_else(|| "-".to_string());
                     println!(
-                        "  {:<6} {:<12.2} {:<12.2} {:<12.2} {:<10.4}",
+                        "  {:<6} {:>12.2} {:>12.2} {:>12.2} {:>12} {:>10} {:>10.4}",
                         p.account_index,
                         p.deposit,
                         p.current_value,
                         p.pnl,
+                        upnl_str,
+                        apr_str,
                         p.pool_share,
                     );
                 }

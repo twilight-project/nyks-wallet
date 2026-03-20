@@ -381,22 +381,33 @@ pub struct AllAccountSummariesResponse {
     pub summaries: Vec<AccountSummaryEntry>,
 }
 
-/// Settle-limit details embedded in `TraderOrderV1` response.
+/// Price trigger details shared by settle_limit, take_profit, and stop_loss
+/// in the `TraderOrderV1` response.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct SettleLimit {
+pub struct OrderTrigger {
     pub uuid: Uuid,
     pub position_type: PositionType,
     #[serde(deserialize_with = "from_str_to_f64")]
     pub price: f64,
+    #[serde(default)]
+    pub created_time: Option<String>,
 }
 
-/// Enhanced trader order info (v1) with settle_limit and funding_applied.
+/// Backwards-compatible alias.
+pub type SettleLimit = OrderTrigger;
+
+/// Enhanced trader order info (v1) with settle_limit, take_profit, stop_loss,
+/// and funding_applied.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TraderOrderV1 {
     #[serde(flatten)]
     pub order: TraderOrder,
     #[serde(default)]
-    pub settle_limit: Option<SettleLimit>,
+    pub settle_limit: Option<OrderTrigger>,
+    #[serde(default)]
+    pub take_profit: Option<OrderTrigger>,
+    #[serde(default)]
+    pub stop_loss: Option<OrderTrigger>,
     #[serde(default)]
     #[serde(deserialize_with = "option_from_str_to_f64")]
     pub funding_applied: Option<f64>,
@@ -412,6 +423,23 @@ pub struct FundingHistoryEntry {
     #[serde(deserialize_with = "from_str_to_f64")]
     pub funding_rate: f64,
     pub order_id: Uuid,
+}
+
+/// Unrealised profit details for a lend position (returned by `lend_order_info_v1`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct UnrealisedProfit {
+    pub u_pnl: f64,
+    pub apr: f64,
+    pub timestamp: String,
+}
+
+/// Enhanced lend order info (v1) with unrealised profit data.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct LendOrderV1 {
+    #[serde(flatten)]
+    pub order: LendOrder,
+    #[serde(default)]
+    pub unrealised_profit: Option<UnrealisedProfit>,
 }
 
 /// Deserialize an optional string-or-number to `Option<f64>`.
