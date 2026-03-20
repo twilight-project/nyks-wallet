@@ -1153,9 +1153,9 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
 
             if !portfolio.lend_positions.is_empty() {
                 println!("\nLend Positions");
-                println!("{}", "-".repeat(80));
+                println!("{}", "-".repeat(95));
                 println!(
-                    "  {:<6} {:>12} {:>12} {:>12} {:>12} {:>10} {:>10}",
+                    "  {:<6} {:>12} {:>12} {:>12} {:>12} {:>10} {:>16}",
                     "ACCT", "DEPOSIT", "VALUE", "PnL", "uPnL", "APR %", "SHARES"
                 );
                 for p in &portfolio.lend_positions {
@@ -1168,7 +1168,7 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
                         .map(|v| format!("{:.2}", v))
                         .unwrap_or_else(|| "-".to_string());
                     println!(
-                        "  {:<6} {:>12.2} {:>12.2} {:>12.2} {:>12} {:>10} {:>10.4}",
+                        "  {:<6} {:>12.2} {:>12.2} {:>12.2} {:>12} {:>10} {:>16.4}",
                         p.account_index,
                         p.deposit,
                         p.current_value,
