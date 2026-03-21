@@ -135,6 +135,10 @@ enum WalletCmd {
         /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
+
+        /// Only show on-chain accounts (hide accounts where on_chain is false)
+        #[arg(long, default_value_t = false)]
+        on_chain_only: bool,
     },
 
     /// Export a full database backup to a JSON file (requires DB)
@@ -555,9 +559,9 @@ fn load_order_wallet_from_db(
 // ---------------------------------------------------------------------------
 //
 // The file is named by the *parent* shell's PID.  Before trusting the cached
-// value we verify that PID is still alive via /proc – so when the terminal is
-// closed and the shell exits, subsequent invocations find the parent dead and
-// silently discard the stale file.
+// value we verify that PID is still alive via kill(pid, 0) – so when the
+// terminal is closed and the shell exits, subsequent invocations find the
+// parent dead and silently discard the stale file.
 //
 // Security model: the file lives in ~/.cache/nyks-wallet/ (mode 0700) and is
 // itself mode 0600 – the same protection as ~/.ssh/id_rsa.  No other process
@@ -595,7 +599,8 @@ fn session_file_path(ppid: u32) -> Option<std::path::PathBuf> {
 /// Save password to session cache, bound to the current shell (PPID).
 #[cfg(unix)]
 fn session_save(password: &str) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     let ppid = get_ppid().ok_or("cannot determine parent shell PID")?;
     let dir = session_dir().ok_or("cannot determine home directory")?;
@@ -606,9 +611,16 @@ fn session_save(password: &str) -> Result<(), String> {
 
     let path = session_file_path(ppid).ok_or("cannot build session file path")?;
     let content = format!("{ppid}\n{password}");
-    std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+    // Create with 0o600 atomically to avoid a TOCTOU window where the file
+    // is briefly world-readable under the default umask.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
         .map_err(|e| e.to_string())?;
+    file.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -676,22 +688,20 @@ fn resolve_wallet_id(wallet_id: Option<String>) -> Option<String> {
     wallet_id.or_else(|| std::env::var("NYKS_WALLET_ID").ok())
 }
 
-/// Resolve an `OrderWallet` – load from DB using wallet_id (arg or env), or create fresh.
+/// Resolve an `OrderWallet` – load from DB using wallet_id (arg or env).
 ///
-/// Priority: CLI arg → `NYKS_WALLET_ID` env var → create a new ephemeral wallet.
-/// Password priority: CLI arg → `NYKS_WALLET_PASSPHRASE` env var.
+/// Priority: CLI arg → `NYKS_WALLET_ID` env var → error.
+/// Password priority: CLI arg → `NYKS_WALLET_PASSPHRASE` env var → session cache.
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 async fn resolve_order_wallet(
     wallet_id: Option<String>,
     password: Option<String>,
 ) -> Result<OrderWallet, String> {
-    let wid = resolve_wallet_id(wallet_id);
+    let wid = resolve_wallet_id(wallet_id).ok_or(
+        "wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID env var)"
+    )?;
     let pwd = resolve_password(password);
-    if let Some(wid) = wid {
-        load_order_wallet_from_db(&wid, pwd, None)
-    } else {
-        OrderWallet::new(None).map_err(|e| e.to_string())
-    }
+    load_order_wallet_from_db(&wid, pwd, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -850,13 +860,18 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         WalletCmd::Accounts {
             wallet_id,
             password,
+            on_chain_only,
         } => {
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             let ow = resolve_order_wallet(wallet_id, password).await?;
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            let accounts = ow.zk_accounts.get_all_accounts();
+            let mut accounts = ow.zk_accounts.get_all_accounts();
+            accounts.sort_by_key(|a| a.index);
+            if on_chain_only {
+                accounts.retain(|a| a.on_chain);
+            }
             if accounts.is_empty() {
                 println!("No ZkOS accounts found");
             } else {
