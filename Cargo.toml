@@ -100,6 +100,7 @@ uuid = { version = "1.6.1", features = ["v4", "serde"] }
 zeroize = "1.7"
 aes-gcm = "0.10"
 clap = { version = "4", features = ["derive"] }
+libc = "0.2"
 
 # ---- Database (feature-gated) ----------------------------------------------
 diesel = { version = "2.1", features = ["chrono", "r2d2"], optional = true }

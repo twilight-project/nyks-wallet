@@ -546,18 +546,21 @@ fn load_order_wallet_from_db(
 
 #[cfg(unix)]
 fn get_ppid() -> Option<u32> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    for line in status.lines() {
-        if let Some(rest) = line.strip_prefix("PPid:") {
-            return rest.trim().parse().ok();
-        }
+    // Use libc::getppid() which works on both Linux and macOS.
+    // The previous /proc/self/status approach only worked on Linux.
+    let ppid = unsafe { libc::getppid() };
+    if ppid > 0 {
+        Some(ppid as u32)
+    } else {
+        None
     }
-    None
 }
 
 #[cfg(unix)]
 fn is_process_alive(pid: u32) -> bool {
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
+    // Signal 0 checks process existence without sending a real signal.
+    // Works on both Linux and macOS (unlike /proc/{pid} which is Linux-only).
+    unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
 fn session_dir() -> Option<std::path::PathBuf> {
@@ -716,7 +719,7 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             if with_db {
-                let pwd = password.map(|p| SecretString::new(p.into()));
+                let pwd = resolve_password(password).map(|p| SecretString::new(p.into()));
                 ow.with_db(pwd, wallet_id.clone())?;
                 println!(
                     "  Database persistence enabled (wallet_id: {})",
@@ -741,7 +744,7 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             if with_db {
-                let pwd = password.map(|p| SecretString::new(p.into()));
+                let pwd = resolve_password(password).map(|p| SecretString::new(p.into()));
                 ow.with_db(pwd, wallet_id.clone())?;
                 println!(
                     "  Database persistence enabled (wallet_id: {})",
