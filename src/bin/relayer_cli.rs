@@ -181,6 +181,14 @@ enum WalletCmd {
         #[arg(long)]
         password: Option<String>,
     },
+
+    /// Unlock: prompt for password once and cache it for this terminal session.
+    /// Subsequent commands will use the cached password automatically.
+    /// The cache is invalidated when the terminal (shell) is closed.
+    Unlock,
+
+    /// Lock: clear the cached session password immediately.
+    Lock,
 }
 
 // ---------------------------------------------------------------------------
@@ -523,9 +531,122 @@ fn load_order_wallet_from_db(
     OrderWallet::load_from_db(wallet_id.to_string(), pwd, db_url)
 }
 
-/// Resolve password: CLI arg → `NYKS_WALLET_PASSPHRASE` env var → None.
+// ---------------------------------------------------------------------------
+// Session password cache  (~/.cache/nyks-wallet/session-<ppid>)
+// ---------------------------------------------------------------------------
+//
+// The file is named by the *parent* shell's PID.  Before trusting the cached
+// value we verify that PID is still alive via /proc – so when the terminal is
+// closed and the shell exits, subsequent invocations find the parent dead and
+// silently discard the stale file.
+//
+// Security model: the file lives in ~/.cache/nyks-wallet/ (mode 0700) and is
+// itself mode 0600 – the same protection as ~/.ssh/id_rsa.  No other process
+// owned by the same user can read it.
+
+#[cfg(unix)]
+fn get_ppid() -> Option<u32> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("PPid:") {
+            return rest.trim().parse().ok();
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+fn session_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(std::path::PathBuf::from(home).join(".cache").join("nyks-wallet"))
+}
+
+#[cfg(unix)]
+fn session_file_path(ppid: u32) -> Option<std::path::PathBuf> {
+    Some(session_dir()?.join(format!("session-{ppid}.lock")))
+}
+
+/// Save password to session cache, bound to the current shell (PPID).
+#[cfg(unix)]
+fn session_save(password: &str) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let ppid = get_ppid().ok_or("cannot determine parent shell PID")?;
+    let dir = session_dir().ok_or("cannot determine home directory")?;
+
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| e.to_string())?;
+
+    let path = session_file_path(ppid).ok_or("cannot build session file path")?;
+    let content = format!("{ppid}\n{password}");
+    std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Load password from session cache; returns None if shell is gone or cache is missing.
+#[cfg(unix)]
+fn session_load() -> Option<String> {
+    let ppid = get_ppid()?;
+    if !is_process_alive(ppid) {
+        session_clear_for(ppid); // clean up stale file
+        return None;
+    }
+    let path = session_file_path(ppid)?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    let (stored, password) = content.split_once('\n')?;
+    if stored.trim().parse::<u32>().ok()? != ppid {
+        return None; // sanity-check: file belongs to this shell
+    }
+    Some(password.to_string())
+}
+
+/// Zeroize and delete the session file for the current shell.
+#[cfg(unix)]
+fn session_clear() {
+    if let Some(ppid) = get_ppid() {
+        session_clear_for(ppid);
+    }
+}
+
+#[cfg(unix)]
+fn session_clear_for(ppid: u32) {
+    if let Some(path) = session_file_path(ppid) {
+        // Overwrite with zeros before unlinking so the content isn't recoverable
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let zeros = vec![0u8; meta.len() as usize];
+            let _ = std::fs::write(&path, &zeros);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+// Non-Unix stubs (Windows / wasm – session cache is a no-op there).
+#[cfg(not(unix))]
+fn session_save(_password: &str) -> Result<(), String> {
+    Err("session cache is only supported on Unix".to_string())
+}
+#[cfg(not(unix))]
+fn session_load() -> Option<String> { None }
+#[cfg(not(unix))]
+fn session_clear() {}
+
+// ---------------------------------------------------------------------------
+// Password / wallet-ID resolution helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve password: CLI arg → `NYKS_WALLET_PASSPHRASE` env var → session cache → None.
 fn resolve_password(password: Option<String>) -> Option<String> {
-    password.or_else(|| std::env::var("NYKS_WALLET_PASSPHRASE").ok())
+    password
+        .or_else(|| std::env::var("NYKS_WALLET_PASSPHRASE").ok())
+        .or_else(session_load)
 }
 
 /// Resolve wallet_id: CLI arg → `NYKS_WALLET_ID` env var → None.
@@ -789,6 +910,29 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             println!("  Next sequence: {}", ow.nonce_manager.peek_next());
             println!("  Account number: {}", ow.nonce_manager.account_number());
             println!("  Released (pending reuse): {}", ow.nonce_manager.released_count());
+            Ok(())
+        }
+
+        WalletCmd::Unlock => {
+            // If a session is already active, ask before overwriting.
+            if session_load().is_some() {
+                eprintln!("A session password is already cached. Run `wallet lock` first to clear it.");
+                return Err("session already active".to_string());
+            }
+            let password = rpassword::prompt_password("Wallet password: ")
+                .map_err(|e| e.to_string())?;
+            if password.is_empty() {
+                return Err("password must not be empty".to_string());
+            }
+            session_save(&password)?;
+            println!("Password cached for this terminal session.");
+            println!("Run `wallet lock` to clear it, or just close the terminal.");
+            Ok(())
+        }
+
+        WalletCmd::Lock => {
+            session_clear();
+            println!("Session password cleared.");
             Ok(())
         }
     }
