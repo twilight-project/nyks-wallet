@@ -234,6 +234,25 @@ enum OrderCmd {
         password: Option<String>,
     },
 
+    /// Split a ZkOS trading account into multiple new accounts
+    Split {
+        /// Source account index
+        #[arg(long)]
+        from: u64,
+
+        /// Comma-separated list of balances for new accounts (e.g. "1000,2000,3000")
+        #[arg(long)]
+        balances: String,
+
+        /// Load wallet from DB by wallet ID
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+    },
+
     /// Open a trader order (leveraged derivative)
     OpenTrade {
         /// ZkOS account index to use
@@ -834,6 +853,47 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             let new_index = ow.trading_to_trading(from).await?;
             println!("Transfer successful");
             println!("  New account index: {new_index}");
+            Ok(())
+        }
+
+        OrderCmd::Split {
+            from,
+            balances,
+            wallet_id,
+            password,
+        } => {
+            let balance_vec: Vec<u64> = balances
+                .split(',')
+                .map(|s| {
+                    s.trim()
+                        .parse::<u64>()
+                        .map_err(|e| format!("Invalid balance '{}': {}", s.trim(), e))
+                })
+                .collect::<Result<Vec<u64>, String>>()?;
+
+            if balance_vec.is_empty() {
+                return Err("At least one balance is required".into());
+            }
+
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let total: u64 = balance_vec.iter().sum();
+            println!(
+                "Splitting ZkOS account {} into {} accounts (total: {} sats)...",
+                from,
+                balance_vec.len(),
+                total
+            );
+            let results = ow
+                .trading_to_trading_multiple_accounts(from, balance_vec)
+                .await?;
+            println!("Split successful");
+            for (idx, bal) in &results {
+                println!("  Account {}: {} sats", idx, bal);
+            }
             Ok(())
         }
 
