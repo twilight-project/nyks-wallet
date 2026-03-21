@@ -52,3 +52,6 @@ wallet_data.db-lock
 examples/trading_bot/mnomenics_key
 env.example
 Audit_report_and_Suggetions.md
+
+# Downloaded build tools
+protoc-*.zip
