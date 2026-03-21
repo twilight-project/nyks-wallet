@@ -42,10 +42,11 @@ Most commands accept `--wallet-id` and `--password` flags. When omitted, the CLI
 relayer-cli <COMMAND>
 ```
 
-Five top-level command groups:
+Six top-level command groups:
 
 - `wallet` — create, import, load, list, export, backup, restore, unlock/lock wallets
-- `order` — fund accounts, trade, lend, split, withdraw
+- `zkaccount` — fund, withdraw, transfer, and split ZkOS trading accounts
+- `order` — open/close/cancel/query trader and lend orders
 - `market` — query prices, orderbook, rates
 - `history` — view order and transfer history (requires DB)
 - `portfolio` — portfolio summary, balances, liquidation risks
@@ -221,59 +222,67 @@ relayer-cli wallet lock
 
 ---
 
-## Order Commands
+## ZkOS Account Commands
 
-All order commands require `--wallet-id` (or the `NYKS_WALLET_ID` env var) to identify which wallet to use. `--password` falls back to `NYKS_WALLET_PASSPHRASE` env var or the session cache set by `wallet unlock`.
+Manage ZkOS trading accounts — fund from on-chain, withdraw back, transfer between accounts, or split into multiple accounts.
 
-### `order fund`
+All zkaccount commands require `--wallet-id` (or the `NYKS_WALLET_ID` env var) to identify which wallet to use. `--password` falls back to `NYKS_WALLET_PASSPHRASE` env var or the session cache set by `wallet unlock`.
+
+### `zkaccount fund`
 
 Fund a new ZkOS trading account from the on-chain wallet.
 
 ```bash
-relayer-cli order fund --amount 100000
-relayer-cli order fund --amount 100000 --wallet-id my-wallet --password s3cret
+relayer-cli zkaccount fund --amount 100000
+relayer-cli zkaccount fund --amount 100000 --wallet-id my-wallet --password s3cret
 ```
 
 | Flag              | Description                              |
 | ----------------- | ---------------------------------------- |
 | `--amount <SATS>` | **Required.** Amount in satoshis to fund |
 
-### `order withdraw`
+### `zkaccount withdraw`
 
 Withdraw from a ZkOS trading account back to the on-chain wallet.
 
 ```bash
-relayer-cli order withdraw --account-index 0
+relayer-cli zkaccount withdraw --account-index 0
 ```
 
 | Flag                  | Description                                       |
 | --------------------- | ------------------------------------------------- |
 | `--account-index <N>` | **Required.** ZkOS account index to withdraw from |
 
-### `order transfer`
+### `zkaccount transfer`
 
 Transfer funds between ZkOS trading accounts (creates a new destination account).
 
 ```bash
-relayer-cli order transfer --from 0
+relayer-cli zkaccount transfer --from 0
 ```
 
-| Flag         | Description                        |
-| ------------ | ---------------------------------- |
+| Flag         | Description                       |
+| ------------ | --------------------------------- |
 | `--from <N>` | **Required.** Source account index |
 
-### `order split`
+### `zkaccount split`
 
 Split a ZkOS trading account into multiple new accounts with specified balances.
 
 ```bash
-relayer-cli order split --from 0 --balances "1000,2000,3000"
+relayer-cli zkaccount split --from 0 --balances "1000,2000,3000"
 ```
 
 | Flag                | Description                                                                     |
 | ------------------- | ------------------------------------------------------------------------------- |
 | `--from <N>`        | **Required.** Source account index                                              |
 | `--balances <LIST>` | **Required.** Comma-separated list of balances in satoshis for the new accounts |
+
+---
+
+## Order Commands
+
+Trading and lending order commands. All order commands require `--wallet-id` (or the `NYKS_WALLET_ID` env var) to identify which wallet to use. `--password` falls back to `NYKS_WALLET_PASSPHRASE` env var or the session cache set by `wallet unlock`.
 
 ### `order open-trade`
 
@@ -511,6 +520,46 @@ Get lending pool information. Outputs JSON.
 
 ```bash
 relayer-cli market lend-pool
+```
+
+### `market pool-share-value`
+
+Get the current pool share value.
+
+```bash
+relayer-cli market pool-share-value
+```
+
+### `market last-day-apy`
+
+Get the annualized percentage yield (APY) for the last 24 hours.
+
+```bash
+relayer-cli market last-day-apy
+```
+
+### `market open-interest`
+
+Get current open interest showing long and short exposure in BTC.
+
+```bash
+relayer-cli market open-interest
+```
+
+### `market market-stats`
+
+Get comprehensive market risk statistics including pool equity, exposure, utilization, and risk parameters.
+
+```bash
+relayer-cli market market-stats
+```
+
+### `market server-time`
+
+Get the relayer server's current UTC time.
+
+```bash
+relayer-cli market server-time
 ```
 
 ---
