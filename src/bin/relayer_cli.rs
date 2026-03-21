@@ -95,11 +95,11 @@ enum WalletCmd {
 
     /// Show wallet balance and account info
     Balance {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -117,22 +117,22 @@ enum WalletCmd {
         #[arg(long, default_value = "wallet.json")]
         output: String,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
 
     /// List all ZkOS accounts for a wallet
     Accounts {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -173,11 +173,11 @@ enum WalletCmd {
 
     /// Sync the nonce/sequence manager from chain state
     SyncNonce {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -195,11 +195,11 @@ enum OrderCmd {
         #[arg(long)]
         amount: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -210,11 +210,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -225,11 +225,11 @@ enum OrderCmd {
         #[arg(long)]
         from: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -256,11 +256,11 @@ enum OrderCmd {
         #[arg(long)]
         leverage: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -287,11 +287,11 @@ enum OrderCmd {
         #[arg(long)]
         take_profit: Option<f64>,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -302,11 +302,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -317,11 +317,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -332,11 +332,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -347,11 +347,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -362,11 +362,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -380,11 +380,11 @@ enum OrderCmd {
 enum HistoryCmd {
     /// Show order history (open, close, cancel events)
     Orders {
-        /// Wallet ID (required, loads from DB)
+        /// Wallet ID (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
-        wallet_id: String,
+        wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
 
@@ -403,11 +403,11 @@ enum HistoryCmd {
 
     /// Show transfer history (fund, withdraw, transfer events)
     Transfers {
-        /// Wallet ID (required, loads from DB)
+        /// Wallet ID (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
-        wallet_id: String,
+        wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
 
@@ -429,33 +429,33 @@ enum HistoryCmd {
 enum PortfolioCmd {
     /// Show full portfolio summary (balances, positions, PnL)
     Summary {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
 
     /// Show per-account balance breakdown
     Balances {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
 
     /// Show liquidation risk for open positions
     Risks {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -512,25 +512,40 @@ fn parse_position_type(
     }
 }
 
-/// Build an `OrderWallet` either from DB or by creating a new one (caller decides).
+/// Build an `OrderWallet` from DB. Password falls back to `NYKS_WALLET_PASSPHRASE` env var.
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 fn load_order_wallet_from_db(
     wallet_id: &str,
     password: Option<String>,
     db_url: Option<String>,
 ) -> Result<OrderWallet, String> {
-    let pwd = password.map(|p| SecretString::new(p.into()));
+    let pwd = resolve_password(password).map(|p| SecretString::new(p.into()));
     OrderWallet::load_from_db(wallet_id.to_string(), pwd, db_url)
 }
 
-/// Resolve an `OrderWallet` – either load from DB (if wallet_id given) or create fresh.
+/// Resolve password: CLI arg → `NYKS_WALLET_PASSPHRASE` env var → None.
+fn resolve_password(password: Option<String>) -> Option<String> {
+    password.or_else(|| std::env::var("NYKS_WALLET_PASSPHRASE").ok())
+}
+
+/// Resolve wallet_id: CLI arg → `NYKS_WALLET_ID` env var → None.
+fn resolve_wallet_id(wallet_id: Option<String>) -> Option<String> {
+    wallet_id.or_else(|| std::env::var("NYKS_WALLET_ID").ok())
+}
+
+/// Resolve an `OrderWallet` – load from DB using wallet_id (arg or env), or create fresh.
+///
+/// Priority: CLI arg → `NYKS_WALLET_ID` env var → create a new ephemeral wallet.
+/// Password priority: CLI arg → `NYKS_WALLET_PASSPHRASE` env var.
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 async fn resolve_order_wallet(
     wallet_id: Option<String>,
     password: Option<String>,
 ) -> Result<OrderWallet, String> {
-    if let Some(wid) = wallet_id {
-        load_order_wallet_from_db(&wid, password, None)
+    let wid = resolve_wallet_id(wallet_id);
+    let pwd = resolve_password(password);
+    if let Some(wid) = wid {
+        load_order_wallet_from_db(&wid, pwd, None)
     } else {
         OrderWallet::new(None).map_err(|e| e.to_string())
     }
@@ -1013,6 +1028,8 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
             limit,
             offset,
         } => {
+            let wallet_id = resolve_wallet_id(wallet_id)
+                .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID)")?;
             let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
             let filter = nyks_wallet::relayer_module::transaction_history::OrderHistoryFilter {
                 account_index,
@@ -1055,6 +1072,8 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
             limit,
             offset,
         } => {
+            let wallet_id = resolve_wallet_id(wallet_id)
+                .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID)")?;
             let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
             let filter = nyks_wallet::relayer_module::transaction_history::TransferHistoryFilter {
                 limit: Some(limit),
