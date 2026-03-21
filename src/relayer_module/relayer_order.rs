@@ -60,7 +60,7 @@ pub async fn create_trader_order(
     )
     .map_err(|e| e.to_string())?;
     let order_data = CreateTraderOrderClientZkos::decode_from_hex_string(order_tx_message.clone())?;
-
+    let _verified = order_data.tx.verify()?;
     let response = relayer_api_client
         .submit_trade_order(order_data)
         .await

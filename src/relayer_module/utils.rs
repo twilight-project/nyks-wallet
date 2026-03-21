@@ -10,13 +10,13 @@ use crate::{
 };
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 use twilight_client_sdk::{
     relayer_rpcclient::method::UtxoDetailResponse, relayer_types::TxHash, zkvm::IOType,
 };
 
 // Retry configuration constants
-const DEFAULT_UTXO_ATTEMPTS: u32 = 30;
+const DEFAULT_UTXO_ATTEMPTS: u32 = 15;
 const TXHASH_ATTEMPTS: u32 = 50;
 const INITIAL_RETRY_DELAY_MS: u64 = 500;
 const MAX_RETRY_DELAY_MS: u64 = 10_000;
