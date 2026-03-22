@@ -161,15 +161,27 @@ server exits.
 
 ### Market data (no authentication)
 
-| Tool | Description |
-|---|---|
-| `market_price` | Current BTC/USD price |
-| `market_orderbook` | Limit order book (bids & asks) |
-| `market_funding_rate` | Perpetual funding rate |
-| `market_fee_rate` | Trading fee schedule |
-| `market_recent_trades` | Recently closed trades |
-| `market_position_size` | Aggregate long / short sizes |
-| `market_lend_pool` | Lending pool info |
+| Tool | Arguments | Description |
+|---|---|---|
+| `market_price` | — | Current BTC/USD price |
+| `market_orderbook` | — | Limit order book (bids & asks) |
+| `market_funding_rate` | — | Current perpetual funding rate |
+| `market_fee_rate` | — | Trading fee schedule |
+| `market_recent_trades` | — | Recently closed trades |
+| `market_position_size` | — | Aggregate long / short sizes |
+| `market_lend_pool` | — | Lending pool info |
+| `market_stats` | — | Comprehensive market statistics (OI, volume, risk params) |
+| `market_open_interest` | — | Current open interest (long & short exposure in BTC) |
+| `market_server_time` | — | Relayer server UTC timestamp (connectivity check) |
+| `market_candles` | `interval?`, `since?`, `limit?`, `offset?` | OHLCV candlestick data |
+| `market_historical_price` | `from?`, `to?`, `limit?`, `offset?` | Historical BTC/USD price snapshots |
+| `market_historical_funding` | `from?`, `to?`, `limit?`, `offset?` | Historical funding-rate entries |
+| `market_pool_share` | — | Current lending-pool share value in sats |
+| `market_apy` | — | Last-24-hour lending APY |
+| `market_apy_chart` | `range?`, `step?`, `lookback?` | APY chart data over time |
+| `market_account_summary` | `twilight_address?` or `wallet_id?` | Trading activity summary for an address |
+
+**`interval`** (for `market_candles`): `ONE_MINUTE` | `FIVE_MINUTE` | `FIFTEEN_MINUTE` | `THIRTY_MINUTE` | `ONE_HOUR` | `FOUR_HOUR` | `EIGHT_HOUR` | `TWELVE_HOUR` | `ONE_DAY`
 
 ### Session password management
 
@@ -182,8 +194,8 @@ server exits.
 
 | Tool | Arguments | Description |
 |---|---|---|
-| `wallet_create` | — | Generate a new wallet |
-| `wallet_import` | `mnemonic` | Import from BIP-39 phrase |
+| `wallet_create` | `wallet_id?`, `password?` | Generate a new wallet (optionally persist to DB) |
+| `wallet_import` | `mnemonic`, `wallet_id?`, `password?` | Import from BIP-39 phrase (optionally persist to DB) |
 | `wallet_balance` | `wallet_id?`, `password?` | On-chain NYKS & SATS balance |
 | `wallet_accounts` | `wallet_id?`, `password?` | List ZkOS trading accounts |
 | `wallet_list` | — | List all wallets in the database |
@@ -201,6 +213,7 @@ server exits.
 | `order_open_lend` | `account_index` | `wallet_id`, `password` | Open lending position |
 | `order_close_lend` | `account_index` | `wallet_id`, `password` | Close lending position |
 | `order_query_lend` | `account_index` | `wallet_id`, `password` | Query lend status + APR |
+| `order_transfer` | `account_index` | `wallet_id`, `password` | Re-anonymise a ZkOS account via private transfer (returns new account index) |
 
 **`order_type`**: `MARKET` | `LIMIT` | `SLTP`
 **`side`**: `LONG` | `SHORT`
@@ -212,6 +225,8 @@ server exits.
 | `portfolio_summary` | `wallet_id?`, `password?` | Full portfolio (PnL, margin, positions) |
 | `portfolio_balances` | `wallet_id?`, `password?` | Per-account balances |
 | `portfolio_risks` | `wallet_id?`, `password?` | Liquidation risk metrics |
+| `portfolio_position_pnl` | `account_index`, `wallet_id?`, `password?` | Detailed PnL & risk for one trading position |
+| `portfolio_lend_pnl` | `account_index`, `wallet_id?`, `password?` | Detailed PnL & APR for one lending position |
 
 ### History (requires database)
 
