@@ -369,6 +369,21 @@ enum OrderCmd {
         password: Option<String>,
     },
 
+    /// Unlock a settled trader order (reclaim account after SLTP settlement)
+    UnlockTrade {
+        /// ZkOS account index
+        #[arg(long)]
+        account_index: u64,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
     /// Open a lend order
     OpenLend {
         /// ZkOS account index to lend from
@@ -1267,6 +1282,31 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             let request_id = ow.close_lend_order(account_index).await?;
             println!("Lend order closed successfully");
             println!("  Request ID: {request_id}");
+            Ok(())
+        }
+
+        OrderCmd::UnlockTrade {
+            account_index,
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let status = ow.unlock_settled_order(account_index).await?;
+            match status {
+                OrderStatus::SETTLED => {
+                    println!("Account {} unlocked successfully (order settled).", account_index);
+                }
+                _ => {
+                    println!(
+                        "Account {} not yet settled (current status: {:?}). No changes made.",
+                        account_index, status
+                    );
+                }
+            }
             Ok(())
         }
 

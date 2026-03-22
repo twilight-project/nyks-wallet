@@ -340,6 +340,21 @@ Query the status of a trader order. Outputs JSON.
 relayer-cli order query-trade --account-index 0
 ```
 
+### `order unlock-trade`
+
+Unlock a settled trader order. Use this to reclaim a ZkOS account after an SLTP (stop-loss/take-profit) order has been settled by the relayer. If the order is not yet settled, no changes are made.
+
+```bash
+relayer-cli order unlock-trade --account-index 0
+relayer-cli order unlock-trade --account-index 0 --wallet-id my-wallet --password s3cret
+```
+
+| Flag                  | Description                            |
+| --------------------- | -------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index       |
+| `--wallet-id <ID>`    | Load wallet from DB                    |
+| `--password <PASS>`   | DB encryption password                 |
+
 ### `order open-lend`
 
 Open a lending order on a ZkOS account.

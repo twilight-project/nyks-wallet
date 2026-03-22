@@ -14,8 +14,8 @@ use crate::{
     config::{EndpointConfig, RelayerEndPointConfig},
     error::{Result as WalletResult, WalletError},
     relayer_module::{
-        self, fetch_removed_utxo_details_with_retry, fetch_tx_hash_with_retry,
-        fetch_utxo_details_with_retry,
+        self, fetch_removed_utxo_details_with_retry, fetch_tx_hash_with_account_address_retry,
+        fetch_tx_hash_with_retry, fetch_utxo_details_with_retry,
         nonce_manager::NonceManager,
         relayer_api::RelayerJsonRpcClient,
         relayer_order::{
@@ -1223,6 +1223,71 @@ impl OrderWallet {
         }
 
         Ok(request_id)
+    }
+
+    /// Check if a previously closed (e.g. SLTP) trader order has settled and, if so,
+    /// unlock the account by refreshing its UTXO, balance, and IO type back to `Coin`.
+    ///
+    /// Returns the current `OrderStatus` so the caller can decide what to do next.
+    pub async fn unlock_settled_order(
+        &mut self,
+        index: AccountIndex,
+    ) -> Result<OrderStatus, String> {
+        let trader_order = self.query_trader_order(index).await?;
+
+        if trader_order.order_status != OrderStatus::SETTLED {
+            return Ok(trader_order.order_status);
+        }
+
+        let account_address = self.zk_accounts.get_account_address(&index)?.to_string();
+        let tx_hash = fetch_tx_hash_with_account_address_retry(
+            &account_address,
+            Some(OrderStatus::SETTLED),
+            &self.relayer_api_client,
+        )
+        .await?;
+        let request_id = tx_hash.request_id.unwrap_or_default();
+        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
+        self.utxo_details.insert(index, utxo_detail.clone());
+
+        // Sync to database
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
+            error!("Failed to sync UTXO detail to database: {}", e);
+        }
+
+        // let trader_order = self.query_trader_order(index).await?;
+        self.zk_accounts
+            .update_balance(&index, trader_order.available_margin as u64)?;
+        debug!(
+            "trader_order available_margin: {:?}",
+            trader_order.available_margin as u64
+        );
+        self.zk_accounts.update_io_type(&index, IOType::Coin)?;
+        let account = utxo_detail.output.to_quisquis_account()?;
+        self.zk_accounts.update_qq_account(&index, account)?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        {
+            if let Ok(account) = self.zk_accounts.get_account(&index) {
+                let _ = self.update_zk_account_in_db(&account);
+            }
+            self.log_order_history(
+                index,
+                &request_id.to_string(),
+                "close",
+                "MARKET",
+                Some(&format!("{:?}", trader_order.position_type)),
+                trader_order.available_margin as u64,
+                Some(0.0),
+                Some(trader_order.leverage as u64),
+                Some(trader_order.unrealized_pnl),
+                "settled",
+                None,
+            );
+        }
+
+        Ok(trader_order.order_status)
     }
 
     // -------------------------
