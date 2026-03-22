@@ -229,11 +229,20 @@ enum WalletCmd {
 
 #[derive(Subcommand)]
 enum ZkaccountCmd {
-    /// Fund a new ZkOS trading account from the on-chain wallet
+    /// Fund a new ZkOS trading account from the on-chain wallet.
+    /// Provide exactly one of --amount (sats), --amount-mbtc (mBTC), or --amount-btc (BTC).
     Fund {
-        /// Amount in satoshis to fund
+        /// Amount in satoshis
         #[arg(long)]
-        amount: u64,
+        amount: Option<u64>,
+
+        /// Amount in milli-BTC (1 mBTC = 100,000 sats)
+        #[arg(long)]
+        amount_mbtc: Option<f64>,
+
+        /// Amount in BTC (1 BTC = 100,000,000 sats)
+        #[arg(long)]
+        amount_btc: Option<f64>,
 
         /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
@@ -274,15 +283,24 @@ enum ZkaccountCmd {
         password: Option<String>,
     },
 
-    /// Split a ZkOS trading account into multiple new accounts
+    /// Split a ZkOS trading account into multiple new accounts.
+    /// Provide exactly one of --balances (sats), --balances-mbtc, or --balances-btc.
     Split {
         /// Source account index
         #[arg(long)]
         from: u64,
 
-        /// Comma-separated list of balances for new accounts (e.g. "1000,2000,3000")
+        /// Comma-separated balances in satoshis (e.g. "1000,2000,3000")
         #[arg(long)]
-        balances: String,
+        balances: Option<String>,
+
+        /// Comma-separated balances in milli-BTC (e.g. "0.01,0.02,0.03")
+        #[arg(long)]
+        balances_mbtc: Option<String>,
+
+        /// Comma-separated balances in BTC (e.g. "0.00001,0.00002")
+        #[arg(long)]
+        balances_btc: Option<String>,
 
         /// Load wallet from DB by wallet ID
         #[arg(long)]
@@ -892,6 +910,13 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                     wallet_id.unwrap_or_else(|| ow.wallet.twilightaddress.clone())
                 );
             }
+
+            println!();
+            println!("Note: If the BTC address above is not the one you use, update it with:");
+            println!("  relayer-cli wallet update-btc-address --btc-address <your-bc1-address> --wallet-id <your_wallet_id>");
+            println!();
+            println!("Tip: To avoid typing --password on every command, cache it for this terminal session:");
+            println!("  relayer-cli wallet unlock");
             Ok(())
         }
 
@@ -1108,8 +1133,8 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                 .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID env var)")?;
 
             // Always prompt via TTY — ignore session cache and env var
-            let old_password = rpassword::prompt_password("Current password: ")
-                .map_err(|e| e.to_string())?;
+            let old_password =
+                rpassword::prompt_password("Current password: ").map_err(|e| e.to_string())?;
             if old_password.is_empty() {
                 return Err("password must not be empty".to_string());
             }
@@ -1117,13 +1142,13 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             // Load wallet with old password to verify it's correct
             let ow = load_order_wallet_from_db(&wid, Some(old_password), None)?;
 
-            let new_password = rpassword::prompt_password("New password: ")
-                .map_err(|e| e.to_string())?;
+            let new_password =
+                rpassword::prompt_password("New password: ").map_err(|e| e.to_string())?;
             if new_password.is_empty() {
                 return Err("new password must not be empty".to_string());
             }
-            let confirm_password = rpassword::prompt_password("Confirm new password: ")
-                .map_err(|e| e.to_string())?;
+            let confirm_password =
+                rpassword::prompt_password("Confirm new password: ").map_err(|e| e.to_string())?;
             if new_password != confirm_password {
                 return Err("passwords do not match".to_string());
             }
@@ -1194,16 +1219,52 @@ async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
     match cmd {
         ZkaccountCmd::Fund {
             amount,
+            amount_mbtc,
+            amount_btc,
             wallet_id,
             password,
         } => {
+            let provided = [amount.is_some(), amount_mbtc.is_some(), amount_btc.is_some()]
+                .iter()
+                .filter(|&&v| v)
+                .count();
+
+            if provided == 0 {
+                return Err(
+                    "No amount specified. Provide one of:\n  \
+                     --amount <sats>        Amount in satoshis\n  \
+                     --amount-mbtc <mbtc>   Amount in milli-BTC (1 mBTC = 100,000 sats)\n  \
+                     --amount-btc <btc>     Amount in BTC (1 BTC = 100,000,000 sats)"
+                        .to_string(),
+                );
+            }
+            if provided > 1 {
+                eprintln!(
+                    "Warning: Multiple amount flags provided. Using priority: --amount > --amount-mbtc > --amount-btc"
+                );
+            }
+
+            let amount_sats: u64 = if let Some(sats) = amount {
+                sats
+            } else if let Some(mbtc) = amount_mbtc {
+                (mbtc * 100_000.0).round() as u64
+            } else if let Some(btc) = amount_btc {
+                (btc * 100_000_000.0).round() as u64
+            } else {
+                unreachable!()
+            };
+
+            if amount_sats == 0 {
+                return Err("Amount must be greater than 0".to_string());
+            }
+
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             let mut ow = resolve_order_wallet(wallet_id, password).await?;
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            println!("Funding {amount} sats to new ZkOS trading account...");
-            let (tx_result, account_index) = ow.funding_to_trading(amount).await?;
+            println!("Funding {amount_sats} sats to new ZkOS trading account...");
+            let (tx_result, account_index) = ow.funding_to_trading(amount_sats).await?;
             println!("Funding successful");
             println!("  TX hash: {}", tx_result.tx_hash);
             println!("  TX code: {}", tx_result.code);
@@ -1247,20 +1308,70 @@ async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
         ZkaccountCmd::Split {
             from,
             balances,
+            balances_mbtc,
+            balances_btc,
             wallet_id,
             password,
         } => {
-            let balance_vec: Vec<u64> = balances
-                .split(',')
-                .map(|s| {
-                    s.trim()
-                        .parse::<u64>()
-                        .map_err(|e| format!("Invalid balance '{}': {}", s.trim(), e))
-                })
-                .collect::<Result<Vec<u64>, String>>()?;
+            let provided = [
+                balances.is_some(),
+                balances_mbtc.is_some(),
+                balances_btc.is_some(),
+            ]
+            .iter()
+            .filter(|&&v| v)
+            .count();
+
+            if provided == 0 {
+                return Err(
+                    "No balances specified. Provide one of:\n  \
+                     --balances <sats>          Comma-separated balances in satoshis\n  \
+                     --balances-mbtc <mbtc>     Comma-separated balances in milli-BTC (1 mBTC = 100,000 sats)\n  \
+                     --balances-btc <btc>       Comma-separated balances in BTC (1 BTC = 100,000,000 sats)"
+                        .to_string(),
+                );
+            }
+            if provided > 1 {
+                eprintln!(
+                    "Warning: Multiple balance flags provided. Using priority: --balances > --balances-mbtc > --balances-btc"
+                );
+            }
+
+            let balance_vec: Vec<u64> = if let Some(ref b) = balances {
+                b.split(',')
+                    .map(|s| {
+                        s.trim()
+                            .parse::<u64>()
+                            .map_err(|e| format!("Invalid balance '{}': {}", s.trim(), e))
+                    })
+                    .collect::<Result<Vec<u64>, String>>()?
+            } else if let Some(ref b) = balances_mbtc {
+                b.split(',')
+                    .map(|s| {
+                        s.trim()
+                            .parse::<f64>()
+                            .map(|v| (v * 100_000.0).round() as u64)
+                            .map_err(|e| format!("Invalid mBTC balance '{}': {}", s.trim(), e))
+                    })
+                    .collect::<Result<Vec<u64>, String>>()?
+            } else if let Some(ref b) = balances_btc {
+                b.split(',')
+                    .map(|s| {
+                        s.trim()
+                            .parse::<f64>()
+                            .map(|v| (v * 100_000_000.0).round() as u64)
+                            .map_err(|e| format!("Invalid BTC balance '{}': {}", s.trim(), e))
+                    })
+                    .collect::<Result<Vec<u64>, String>>()?
+            } else {
+                unreachable!()
+            };
 
             if balance_vec.is_empty() {
                 return Err("At least one balance is required".into());
+            }
+            if balance_vec.iter().any(|&b| b == 0) {
+                return Err("All balances must be greater than 0".to_string());
             }
 
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -1441,7 +1552,10 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             let status = ow.unlock_settled_order(account_index).await?;
             match status {
                 OrderStatus::SETTLED => {
-                    println!("Account {} unlocked successfully (order settled).", account_index);
+                    println!(
+                        "Account {} unlocked successfully (order settled).",
+                        account_index
+                    );
                 }
                 _ => {
                     println!(
@@ -1696,7 +1810,17 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
                 println!("{}", "-".repeat(100));
                 println!(
                     "  {:<6} {:<6} {:>12} {:>16} {:>6} {:>10} {:>12} {:>12} {:>10} {:>10} {:>10}",
-                    "ACCT", "SIDE", "ENTRY", "SIZE", "LEV", "A.MARGIN", "R_PnL", "NET_PnL", "FEE_FILL", "FEE_SETT", "FUNDING"
+                    "ACCT",
+                    "SIDE",
+                    "ENTRY",
+                    "SIZE",
+                    "LEV",
+                    "A.MARGIN",
+                    "R_PnL",
+                    "NET_PnL",
+                    "FEE_FILL",
+                    "FEE_SETT",
+                    "FUNDING"
                 );
                 for p in &portfolio.closed_trader_positions {
                     let funding_str = p
@@ -1719,10 +1843,7 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
                         funding_str,
                     );
                 }
-                println!(
-                    "\n  Total Realised PnL: {:.2}",
-                    portfolio.realised_pnl
-                );
+                println!("\n  Total Realised PnL: {:.2}", portfolio.realised_pnl);
             }
 
             if !portfolio.liquidated_trader_positions.is_empty() {

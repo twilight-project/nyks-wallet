@@ -304,16 +304,26 @@ All zkaccount commands require `--wallet-id` (or the `NYKS_WALLET_ID` env var) t
 
 ### `zkaccount fund`
 
-Fund a new ZkOS trading account from the on-chain wallet.
+Fund a new ZkOS trading account from the on-chain wallet. Provide exactly one of `--amount`, `--amount-mbtc`, or `--amount-btc`. If multiple are given, priority is: `--amount` > `--amount-mbtc` > `--amount-btc`.
 
 ```bash
+# In satoshis
 relayer-cli zkaccount fund --amount 100000
-relayer-cli zkaccount fund --amount 100000 --wallet-id my-wallet --password s3cret
+
+# In milli-BTC (1 mBTC = 100,000 sats)
+relayer-cli zkaccount fund --amount-mbtc 1.0
+
+# In BTC (1 BTC = 100,000,000 sats)
+relayer-cli zkaccount fund --amount-btc 0.001
 ```
 
-| Flag              | Description                              |
-| ----------------- | ---------------------------------------- |
-| `--amount <SATS>` | **Required.** Amount in satoshis to fund |
+| Flag                  | Description                                   |
+| --------------------- | --------------------------------------------- |
+| `--amount <SATS>`     | Amount in satoshis                            |
+| `--amount-mbtc <MBTC>`| Amount in milli-BTC (1 mBTC = 100,000 sats)  |
+| `--amount-btc <BTC>`  | Amount in BTC (1 BTC = 100,000,000 sats)     |
+
+At least one amount flag is required. All values are converted to satoshis before funding.
 
 ### `zkaccount withdraw`
 
@@ -343,14 +353,27 @@ relayer-cli zkaccount transfer --from 0
 
 Split a ZkOS trading account into multiple new accounts with specified balances.
 
+Balances can be provided in three units — **exactly one** must be used. If multiple are provided, priority is: `--balances` > `--balances-mbtc` > `--balances-btc` (a warning is shown).
+
 ```bash
+# In satoshis
 relayer-cli zkaccount split --from 0 --balances "1000,2000,3000"
+
+# In milli-BTC (1 mBTC = 100,000 sats)
+relayer-cli zkaccount split --from 0 --balances-mbtc "0.01,0.02,0.03"
+
+# In BTC (1 BTC = 100,000,000 sats)
+relayer-cli zkaccount split --from 0 --balances-btc "0.00001,0.00002,0.00003"
 ```
 
-| Flag                | Description                                                                     |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `--from <N>`        | **Required.** Source account index                                              |
-| `--balances <LIST>` | **Required.** Comma-separated list of balances in satoshis for the new accounts |
+| Flag                     | Description                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `--from <N>`             | **Required.** Source account index                                             |
+| `--balances <LIST>`      | Comma-separated list of balances in **satoshis**. Priority 1 if multiple given |
+| `--balances-mbtc <LIST>` | Comma-separated list of balances in **milli-BTC** (×100,000). Priority 2       |
+| `--balances-btc <LIST>`  | Comma-separated list of balances in **BTC** (×100,000,000). Priority 3         |
+
+At least one balance flag is required. All values are converted to satoshis internally. Zero-value balances are rejected.
 
 ---
 
