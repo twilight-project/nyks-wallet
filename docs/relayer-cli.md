@@ -18,15 +18,58 @@ The binary will be at `target/release/relayer-cli`.
 
 ## Environment Variables
 
-| Variable                     | Description                                                          | Default                   |
-| ---------------------------- | -------------------------------------------------------------------- | ------------------------- |
-| `NYKS_WALLET_ID`             | Default wallet ID (fallback when `--wallet-id` is omitted)           | —                         |
-| `NYKS_WALLET_PASSPHRASE`     | Database encryption password (fallback when `--password` is omitted) | —                         |
-| `RELAYER_API_RPC_SERVER_URL` | Relayer JSON-RPC endpoint                                            | `http://0.0.0.0:8088/api` |
-| `DATABASE_URL_SQLITE`        | SQLite database file path                                            | `./wallet_data.db`        |
-| `DATABASE_URL_POSTGRESQL`    | PostgreSQL connection string (when using `postgresql` feature)       | —                         |
+A `.env` file in the working directory is loaded automatically. See `.env.example` for a complete template.
 
-A `.env` file in the working directory is loaded automatically.
+### Core
+
+| Variable         | Description                                                                   | Default    |
+| ---------------- | ----------------------------------------------------------------------------- | ---------- |
+| `RUST_LOG`       | Logging level (`info`, `debug`, `trace`)                                      | —          |
+| `RUST_BACKTRACE` | Enable Rust backtraces for debugging (`1` or `full`)                          | —          |
+| `CHAIN_ID`       | Blockchain network identifier                                                 | `nyks`     |
+| `NETWORK_TYPE`   | Network type — controls BIP-44 coin type (`testnet` uses coin type 1, `mainnet` uses 118) | `mainnet`  |
+
+### Chain Endpoints
+
+Used by the on-chain wallet for balance queries, transaction broadcasting, and faucet requests.
+
+| Variable           | Description                                          | Default                |
+| ------------------ | ---------------------------------------------------- | ---------------------- |
+| `NYKS_RPC_BASE_URL`| Nyks chain Tendermint RPC endpoint                   | `http://0.0.0.0:26657` |
+| `NYKS_LCD_BASE_URL`| Nyks chain LCD (REST API) endpoint                   | `http://0.0.0.0:1317`  |
+| `FAUCET_BASE_URL`  | Faucet endpoint for requesting test tokens (testnet only) | `http://0.0.0.0:6969`  |
+
+### Order-Wallet Endpoints (feature: `order-wallet`)
+
+Required when using trading, lending, or ZkOS account commands.
+
+| Variable                     | Description                                                       | Default                   |
+| ---------------------------- | ----------------------------------------------------------------- | ------------------------- |
+| `RELAYER_API_RPC_SERVER_URL` | Relayer public JSON-RPC API endpoint                              | `http://0.0.0.0:8088/api` |
+| `ZKOS_SERVER_URL`            | ZkOS server endpoint for zero-knowledge operations (also used by `relayer-init`) | `http://0.0.0.0:3030`     |
+| `RELAYER_PROGRAM_JSON_PATH`  | Path to the relayer program JSON file (ZkOS circuit parameters)   | `./relayerprogram.json`   |
+
+### Wallet Configuration
+
+| Variable               | Description                                                                         | Default          |
+| ---------------------- | ----------------------------------------------------------------------------------- | ---------------- |
+| `NYKS_WALLET_ID`       | Default wallet ID (fallback when `--wallet-id` is omitted)                          | —                |
+| `NYKS_WALLET_PASSPHRASE` | Database encryption password (fallback when `--password` is omitted). Leave empty to use interactive prompt | — |
+
+### Validator-Wallet (feature: `validator-wallet`)
+
+| Variable               | Description                        | Default               |
+| ---------------------- | ---------------------------------- | --------------------- |
+| `VALIDATOR_WALLET_PATH`| Path to the validator mnemonic file| `validator.mnemonic`  |
+
+### Database (feature: `sqlite` or `postgresql`)
+
+Required for persisting wallets, ZkOS accounts, UTXOs, and order history.
+
+| Variable                 | Description                                                  | Default            |
+| ------------------------ | ------------------------------------------------------------ | ------------------ |
+| `DATABASE_URL_SQLITE`    | SQLite database file path (feature: `sqlite`, enabled by default) | `./wallet_data.db` |
+| `DATABASE_URL_POSTGRESQL`| PostgreSQL connection string (feature: `postgresql`)         | —                  |
 
 ## Password and Wallet ID Resolution
 
@@ -44,7 +87,7 @@ relayer-cli <COMMAND>
 
 Six top-level command groups:
 
-- `wallet` — create, import, load, list, export, backup, restore, unlock/lock wallets
+- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, change-password, update-btc-address
 - `zkaccount` — fund, withdraw, transfer, and split ZkOS trading accounts
 - `order` — open/close/cancel/query trader and lend orders
 - `market` — query prices, orderbook, rates
@@ -64,31 +107,43 @@ relayer-cli wallet create
 
 # With database persistence
 relayer-cli wallet create --with-db --wallet-id my-wallet --password s3cret
+
+# With a custom BTC SegWit address instead of auto-generating one
+relayer-cli wallet create --btc-address bc1q...
 ```
 
-| Flag                | Description                                                   |
-| ------------------- | ------------------------------------------------------------- |
-| `--wallet-id <ID>`  | Optional ID for DB storage (defaults to the Twilight address) |
-| `--password <PASS>` | DB encryption password                                        |
-| `--with-db`         | Enable database persistence                                   |
+| Flag                   | Description                                                   |
+| ---------------------- | ------------------------------------------------------------- |
+| `--wallet-id <ID>`    | Optional ID for DB storage (defaults to the Twilight address) |
+| `--password <PASS>`   | DB encryption password                                        |
+| `--with-db`           | Enable database persistence                                   |
+| `--btc-address <ADDR>`| Optional BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of generating a random one |
 
 ### `wallet import`
 
-Restore a wallet from a BIP-39 mnemonic.
+Restore a wallet from a BIP-39 mnemonic. If `--mnemonic` is omitted, the CLI prompts for it securely via TTY (the phrase is not echoed to the terminal).
 
 ```bash
+# Pass mnemonic on command line
 relayer-cli wallet import --mnemonic "word1 word2 ... word24"
+
+# Prompt for mnemonic securely (recommended)
+relayer-cli wallet import
 
 # With DB persistence
 relayer-cli wallet import --mnemonic "..." --with-db --wallet-id restored_wallet_id --password s3cret
+
+# With a custom BTC SegWit address instead of deriving from mnemonic
+relayer-cli wallet import --btc-address bc1q...
 ```
 
-| Flag                  | Description                           |
-| --------------------- | ------------------------------------- |
-| `--mnemonic <PHRASE>` | **Required.** 24-word BIP-39 mnemonic |
+| Flag                   | Description                           |
+| ---------------------- | ------------------------------------- |
+| `--mnemonic <PHRASE>` | 24-word BIP-39 mnemonic. If omitted, prompts securely via TTY |
 | `--wallet-id <ID>`    | Optional DB wallet ID                 |
 | `--password <PASS>`   | DB encryption password                |
 | `--with-db`           | Enable database persistence           |
+| `--btc-address <ADDR>`| Optional BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of deriving from mnemonic |
 
 ### `wallet load`
 
@@ -220,6 +275,34 @@ Clear the cached session password immediately.
 relayer-cli wallet lock
 ```
 
+### `wallet change-password`
+
+Change the database encryption password for a wallet. Always prompts for both old and new passwords via secure TTY input — the session cache and `NYKS_WALLET_PASSPHRASE` env var are intentionally ignored to prevent accidental password changes.
+
+```bash
+relayer-cli wallet change-password --wallet-id my-wallet
+```
+
+| Flag               | Description                                         |
+| ------------------ | --------------------------------------------------- |
+| `--wallet-id <ID>` | Wallet to change password for (falls back to `NYKS_WALLET_ID`) |
+
+If a session password cache exists, it is updated with the new password automatically.
+
+### `wallet update-btc-address`
+
+Update the BTC deposit address stored in the wallet. The `btc_address_registered` flag is reset to `false` — the address will be re-registered on the next balance check.
+
+```bash
+relayer-cli wallet update-btc-address --btc-address bc1q... --wallet-id my-wallet
+```
+
+| Flag                    | Description                                          |
+| ----------------------- | ---------------------------------------------------- |
+| `--btc-address <ADDR>`  | **Required.** New BTC address                        |
+| `--wallet-id <ID>`      | Wallet ID (falls back to `NYKS_WALLET_ID`)           |
+| `--password <PASS>`     | DB encryption password                               |
+
 ---
 
 ## ZkOS Account Commands
@@ -261,8 +344,8 @@ Transfer funds between ZkOS trading accounts (creates a new destination account)
 relayer-cli zkaccount transfer --from 0
 ```
 
-| Flag         | Description                       |
-| ------------ | --------------------------------- |
+| Flag         | Description                        |
+| ------------ | ---------------------------------- |
 | `--from <N>` | **Required.** Source account index |
 
 ### `zkaccount split`
@@ -349,11 +432,11 @@ relayer-cli order unlock-trade --account-index 0
 relayer-cli order unlock-trade --account-index 0 --wallet-id my-wallet --password s3cret
 ```
 
-| Flag                  | Description                            |
-| --------------------- | -------------------------------------- |
-| `--account-index <N>` | **Required.** ZkOS account index       |
-| `--wallet-id <ID>`    | Load wallet from DB                    |
-| `--password <PASS>`   | DB encryption password                 |
+| Flag                  | Description                      |
+| --------------------- | -------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index |
+| `--wallet-id <ID>`    | Load wallet from DB              |
+| `--password <PASS>`   | DB encryption password           |
 
 ### `order open-lend`
 

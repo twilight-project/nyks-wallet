@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use log::error;
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 use nyks_wallet::relayer_module::relayer_types::OrderStatus;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 
 // ---------------------------------------------------------------------------
 // CLI definition
@@ -62,13 +62,17 @@ enum WalletCmd {
         /// Enable database persistence
         #[arg(long, default_value_t = false)]
         with_db: bool,
+
+        /// Optional BTC SegWit address (bc1q... or bc1p...) to use instead of generating a random one
+        #[arg(long)]
+        btc_address: Option<String>,
     },
 
     /// Import a wallet from a mnemonic phrase
     Import {
-        /// The BIP-39 mnemonic phrase (24 words)
+        /// The BIP-39 mnemonic phrase (24 words). If omitted, prompts securely via TTY.
         #[arg(long)]
-        mnemonic: String,
+        mnemonic: Option<String>,
 
         /// Optional wallet ID for database persistence
         #[arg(long)]
@@ -81,6 +85,10 @@ enum WalletCmd {
         /// Enable database persistence
         #[arg(long, default_value_t = false)]
         with_db: bool,
+
+        /// Optional BTC SegWit address (bc1q... or bc1p...) to use instead of deriving from mnemonic
+        #[arg(long)]
+        btc_address: Option<String>,
     },
 
     /// Load a wallet from the database
@@ -198,6 +206,29 @@ enum WalletCmd {
 
     /// Lock: clear the cached session password immediately.
     Lock,
+
+    /// Change the database encryption password for a wallet.
+    /// Always prompts for both old and new passwords via TTY (ignores session cache and env var).
+    ChangePassword {
+        /// Wallet ID to change password for
+        #[arg(long)]
+        wallet_id: Option<String>,
+    },
+
+    /// Update the BTC deposit address for a wallet.
+    UpdateBtcAddress {
+        /// New BTC address
+        #[arg(long)]
+        btc_address: String,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -785,14 +816,36 @@ async fn main() {
 // Wallet handlers
 // ---------------------------------------------------------------------------
 
+/// Validate that a string is a valid BTC SegWit address (bc1q... or bc1p...) on mainnet.
+fn validate_btc_segwit_address(addr: &str) -> Result<(), String> {
+    use bitcoin::Address;
+    use std::str::FromStr;
+    let parsed = Address::from_str(addr)
+        .map_err(|e| format!("Invalid BTC address: {}", e))?
+        .require_network(bitcoin::Network::Bitcoin)
+        .map_err(|e| format!("Address is not for Bitcoin mainnet: {}", e))?;
+    if !parsed.to_string().starts_with("bc1") {
+        return Err("Address must be a SegWit address (bc1q... or bc1p...)".to_string());
+    }
+    Ok(())
+}
+
 async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
     match cmd {
         WalletCmd::Create {
             wallet_id,
             password,
             with_db,
+            btc_address,
         } => {
+            if let Some(ref addr) = btc_address {
+                validate_btc_segwit_address(addr)?;
+            }
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            if let Some(addr) = btc_address {
+                ow.wallet.btc_address = addr;
+                ow.wallet.btc_address_registered = false;
+            }
             println!("Wallet created successfully");
             println!("  Address: {}", ow.wallet.twilightaddress);
             println!("  BTC address: {}", ow.wallet.btc_address);
@@ -814,10 +867,28 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             wallet_id,
             password,
             with_db,
+            btc_address,
         } => {
-            let mnemonic = mnemonic.trim().to_string();
+            if let Some(ref addr) = btc_address {
+                validate_btc_segwit_address(addr)?;
+            }
+            let mnemonic = match mnemonic {
+                Some(m) => m.trim().to_string(),
+                None => {
+                    let m = rpassword::prompt_password("Mnemonic phrase: ")
+                        .map_err(|e| e.to_string())?;
+                    if m.trim().is_empty() {
+                        return Err("mnemonic must not be empty".to_string());
+                    }
+                    m.trim().to_string()
+                }
+            };
             let mut ow =
                 OrderWallet::import_from_mnemonic(&mnemonic, None).map_err(|e| e.to_string())?;
+            if let Some(addr) = btc_address {
+                ow.wallet.btc_address = addr;
+                ow.wallet.btc_address_registered = false;
+            }
             println!("Wallet imported successfully");
             println!("  Address: {}", ow.wallet.twilightaddress);
             println!("  BTC address: {}", ow.wallet.btc_address);
@@ -1040,6 +1111,88 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             println!("Session password cleared.");
             Ok(())
         }
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::ChangePassword { wallet_id } => {
+            let wid = resolve_wallet_id(wallet_id)
+                .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID env var)")?;
+
+            // Always prompt via TTY — ignore session cache and env var
+            let old_password = rpassword::prompt_password("Current password: ")
+                .map_err(|e| e.to_string())?;
+            if old_password.is_empty() {
+                return Err("password must not be empty".to_string());
+            }
+
+            // Load wallet with old password to verify it's correct
+            let ow = load_order_wallet_from_db(&wid, Some(old_password), None)?;
+
+            let new_password = rpassword::prompt_password("New password: ")
+                .map_err(|e| e.to_string())?;
+            if new_password.is_empty() {
+                return Err("new password must not be empty".to_string());
+            }
+            let confirm_password = rpassword::prompt_password("Confirm new password: ")
+                .map_err(|e| e.to_string())?;
+            if new_password != confirm_password {
+                return Err("passwords do not match".to_string());
+            }
+
+            let db_manager = ow
+                .get_db_manager()
+                .ok_or("database manager not available")?;
+            let new_secret = SecretString::new(new_password.into());
+            db_manager.save_encrypted_wallet(&ow.wallet, &new_secret)?;
+
+            // Update session cache if one exists
+            if session_load().is_some() {
+                session_save(new_secret.expose_secret())?;
+            }
+
+            println!("Password changed successfully for wallet '{}'.", wid);
+            Ok(())
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::ChangePassword { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::UpdateBtcAddress {
+            btc_address,
+            wallet_id,
+            password,
+        } => {
+            validate_btc_segwit_address(&btc_address)?;
+
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+
+            let old_address = ow.wallet.btc_address.clone();
+            ow.wallet.btc_address = btc_address.clone();
+            ow.wallet.btc_address_registered = false;
+
+            let db_manager = ow
+                .get_db_manager()
+                .ok_or("database manager not available")?;
+            let wallet_password = ow
+                .get_wallet_password()
+                .ok_or("wallet password not available — cannot persist changes")?;
+            db_manager.save_encrypted_wallet(&ow.wallet, wallet_password)?;
+
+            println!("BTC address updated for wallet.");
+            println!("  Old: {}", old_address);
+            println!("  New: {}", btc_address);
+            println!("  Registered: false (will re-register on next balance check)");
+            Ok(())
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::UpdateBtcAddress { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
     }
 }
 

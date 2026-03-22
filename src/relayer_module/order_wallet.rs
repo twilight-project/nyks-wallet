@@ -274,6 +274,12 @@ impl OrderWallet {
         self.db_manager.as_ref()
     }
 
+    /// Get a reference to the wallet password, if available.
+    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+    pub fn get_wallet_password(&self) -> Option<&SecretString> {
+        self.wallet_password.as_ref()
+    }
+
     /// Ensure the account exists on-chain, has IOType::Coin, and a non-zero balance.
     pub fn ensure_coin_onchain(&self, index: AccountIndex) -> Result<(), String> {
         let a = self
