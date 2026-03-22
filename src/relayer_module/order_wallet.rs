@@ -1823,6 +1823,7 @@ impl OrderWallet {
         let mut total_trading_balance: u64 = 0;
         let mut trader_positions = Vec::new();
         let mut closed_trader_positions = Vec::new();
+        let mut liquidated_trader_positions = Vec::new();
         let mut lend_positions = Vec::new();
         let mut on_chain_count = 0;
 
@@ -1877,6 +1878,31 @@ impl OrderWallet {
                                 }
 
                                 closed_trader_positions.push(summary);
+                            } else if order_v1.order.order_status == OrderStatus::LIQUIDATE {
+                                let summary =
+                                    super::portfolio::PositionSummary::from_trader_order_v1(
+                                        account.index,
+                                        &order_v1,
+                                        current_price,
+                                    );
+
+                                // Unlock the liquidated account (refresh UTXO, restore to Coin)
+                                match self.unlock_settled_order(account.index).await {
+                                    Ok(_) => {
+                                        info!(
+                                            "Unlocked liquidated account {} during portfolio scan",
+                                            account.index
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to unlock liquidated account {}: {}",
+                                            account.index, e
+                                        );
+                                    }
+                                }
+
+                                liquidated_trader_positions.push(summary);
                             } else {
                                 trader_positions.push(
                                     super::portfolio::PositionSummary::from_trader_order_v1(
@@ -1916,6 +1942,7 @@ impl OrderWallet {
             total_trading_balance,
             trader_positions,
             closed_trader_positions,
+            liquidated_trader_positions,
             lend_positions,
             total_accounts,
             on_chain_count,

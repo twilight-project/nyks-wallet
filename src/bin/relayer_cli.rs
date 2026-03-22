@@ -1473,6 +1473,7 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
             println!("  Margin used:         {:.2}", portfolio.total_margin_used);
             println!("  Unrealized PnL:      {:.2}", portfolio.unrealized_pnl);
             println!("  Realised PnL:        {:.2}", portfolio.realised_pnl);
+            println!("  Liquidation Loss:    {:.2}", portfolio.liquidation_loss);
             println!(
                 "  Margin utilization:  {:.2}%",
                 portfolio.margin_utilization * 100.0
@@ -1578,6 +1579,32 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
                 println!(
                     "\n  Total Realised PnL: {:.2}",
                     portfolio.realised_pnl
+                );
+            }
+
+            if !portfolio.liquidated_trader_positions.is_empty() {
+                println!("\nLiquidated Positions");
+                println!("{}", "-".repeat(80));
+                println!(
+                    "  {:<6} {:<6} {:>12} {:>16} {:>6} {:>12} {:>10} {:>10}",
+                    "ACCT", "SIDE", "ENTRY", "SIZE", "LEV", "I.MARGIN", "FEE_FILL", "FEE_SETT"
+                );
+                for p in &portfolio.liquidated_trader_positions {
+                    println!(
+                        "  {:<6} {:<6} {:>12.2} {:>16.2} {:>5.0}x {:>12.2} {:>10.4} {:>10.4}",
+                        p.account_index,
+                        format!("{:?}", p.position_type),
+                        p.entry_price,
+                        p.position_size,
+                        p.leverage,
+                        p.initial_margin,
+                        p.fee_filled,
+                        p.fee_settled,
+                    );
+                }
+                println!(
+                    "\n  Total Liquidation Loss: {:.2}",
+                    portfolio.liquidation_loss
                 );
             }
 
