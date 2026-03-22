@@ -1,0 +1,84 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1 – Builder
+# ─────────────────────────────────────────────────────────────────────────────
+FROM rust:1.86-bookworm AS builder
+
+# System dependencies needed at compile time
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        protobuf-compiler \
+        libpq-dev \
+        libssl-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Cache dependency compilation by copying manifests first
+COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./
+
+# Stub out every source file so Cargo can compile dependencies without
+# the real sources (cache-bust only when Cargo.toml / Cargo.lock change).
+RUN mkdir -p src/bin && \
+    echo 'fn main() {}' > src/bin/mcp_server.rs && \
+    echo 'fn main() {}' > src/bin/relayer_cli.rs && \
+    echo 'fn main() {}' > src/bin/relayer_init.rs && \
+    echo '' > src/lib.rs
+
+RUN cargo build --release --bin nyks-wallet-mcp --features order-wallet 2>&1 || true
+
+# Now copy the real source tree and do the final build
+COPY src ./src
+
+# Touch the stubs so Cargo knows to recompile
+RUN touch src/bin/mcp_server.rs src/lib.rs
+
+RUN cargo build --release --bin nyks-wallet-mcp --features order-wallet
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2 – Runtime
+# ─────────────────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libssl3 \
+        libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user for security
+RUN useradd -m -u 1000 -s /bin/sh mcp
+USER mcp
+WORKDIR /home/mcp
+
+# Copy the compiled binary
+COPY --from=builder /build/target/release/nyks-wallet-mcp /usr/local/bin/nyks-wallet-mcp
+
+# ── Environment variables (all optional, override via -e / --env-file) ────────
+
+# Twilight / NYKS node endpoints
+ENV NYKS_LCD_BASE_URL="http://host.docker.internal:1317"
+ENV NYKS_RPC_BASE_URL="http://host.docker.internal:26657"
+
+# Relayer and ZkOS server endpoints
+ENV RELAYER_API_RPC_SERVER_URL="http://host.docker.internal:8088/api"
+ENV ZKOS_SERVER_URL="http://host.docker.internal:3030"
+ENV FAUCET_BASE_URL="http://host.docker.internal:6969"
+
+# Chain settings
+ENV CHAIN_ID="nyks"
+ENV NETWORK_TYPE="mainnet"
+
+# Optional: pre-set wallet credentials (avoid storing plaintext in images –
+# prefer passing these at runtime with `docker run -e`).
+# ENV NYKS_WALLET_PASSPHRASE=""
+# ENV NYKS_WALLET_ID=""
+
+# SQLite database directory inside the container
+ENV DATABASE_URL="/home/mcp/data/wallets.db"
+
+# Persist the wallet database on a named volume
+VOLUME ["/home/mcp/data"]
+
+# MCP communicates over stdio – no network port is exposed.
+ENTRYPOINT ["/usr/local/bin/nyks-wallet-mcp"]

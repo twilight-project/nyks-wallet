@@ -14,6 +14,11 @@ name = "relayer-cli"
 path = "src/bin/relayer_cli.rs"
 required-features = ["order-wallet"]
 
+[[bin]]
+name = "nyks-wallet-mcp"
+path = "src/bin/mcp_server.rs"
+required-features = ["order-wallet"]
+
 [lib]
 name = "nyks_wallet"
 path = "src/lib.rs"
