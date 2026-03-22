@@ -12,7 +12,9 @@ use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use tokio::time::{sleep, Duration};
 use twilight_client_sdk::{
-    relayer_rpcclient::method::UtxoDetailResponse, relayer_types::TxHash, zkvm::IOType,
+    relayer_rpcclient::method::UtxoDetailResponse,
+    relayer_types::{OrderStatus, TxHash},
+    zkvm::IOType,
 };
 
 // Retry configuration constants
@@ -165,6 +167,41 @@ pub async fn fetch_tx_hash_with_retry(
             .transaction_hashes(TransactionHashArgs::RequestId {
                 id: request_id.to_string(),
                 status: None,
+                limit: None,
+                offset: None,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        if response.is_empty() {
+            attempts += 1;
+            if attempts >= TXHASH_ATTEMPTS {
+                return Err(format!(
+                    "Failed to get tx hash after {} attempts",
+                    TXHASH_ATTEMPTS
+                ));
+            }
+            sleep(retry_delay(attempts)).await;
+        } else {
+            let latest_tx = response
+                .iter()
+                .max_by_key(|tx| (tx.datetime.trim().parse::<i64>().unwrap_or(i64::MIN), tx.id))
+                .unwrap_or(&response[0]);
+
+            return Ok(latest_tx.clone());
+        }
+    }
+}
+pub async fn fetch_tx_hash_with_account_address_retry(
+    account_address: &str,
+    order_status: Option<OrderStatus>,
+    relayer_api_client: &RelayerJsonRpcClient,
+) -> Result<TxHash, String> {
+    let mut attempts = 0;
+    loop {
+        let response = relayer_api_client
+            .transaction_hashes(TransactionHashArgs::AccountId {
+                id: account_address.to_string(),
+                status: order_status.clone(),
                 limit: None,
                 offset: None,
             })

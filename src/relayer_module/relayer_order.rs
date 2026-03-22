@@ -9,8 +9,8 @@ use twilight_client_sdk::{
     },
     relayer_types::{
         CancelTraderOrderZkos, CreateLendOrderZkos, CreateTraderOrderClientZkos,
-        ExecuteLendOrderZkos, ExecuteTraderOrderZkos, OrderStatus, OrderType, PositionType,
-        SlTpOrder, TXType,
+        ExecuteLendOrderZkos, ExecuteTraderOrderZkos, ExecuteTraderOrderZkosSlTp, OrderStatus,
+        OrderType, PositionType, SlTpOrder, TXType,
     },
     util::create_output_memo_for_lender,
     zkvm::Output,
@@ -120,7 +120,7 @@ pub async fn close_trader_order_sltp_internal(
         Some(SlTpOrder::new(stop_loss_price, take_profit_price)),
     );
     let response = relayer_api_client
-        .settle_trade_order(ExecuteTraderOrderZkos::decode_from_hex_string(
+        .settle_trade_order_sltp(ExecuteTraderOrderZkosSlTp::decode_from_hex_string(
             request_msg.clone(),
         )?)
         .await

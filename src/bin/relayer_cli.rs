@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use log::error;
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
+use nyks_wallet::relayer_module::relayer_types::OrderStatus;
 use secrecy::SecretString;
 
 // ---------------------------------------------------------------------------
@@ -20,6 +21,10 @@ enum Commands {
     /// Wallet management commands
     #[command(subcommand)]
     Wallet(WalletCmd),
+
+    /// ZkOS account management (fund, withdraw, transfer, split)
+    #[command(subcommand)]
+    Zkaccount(ZkaccountCmd),
 
     /// Order and trading commands
     #[command(subcommand)]
@@ -95,11 +100,11 @@ enum WalletCmd {
 
     /// Show wallet balance and account info
     Balance {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -117,24 +122,28 @@ enum WalletCmd {
         #[arg(long, default_value = "wallet.json")]
         output: String,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
 
     /// List all ZkOS accounts for a wallet
     Accounts {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
+
+        /// Only show on-chain accounts (hide accounts where on_chain is false)
+        #[arg(long, default_value_t = false)]
+        on_chain_only: bool,
     },
 
     /// Export a full database backup to a JSON file (requires DB)
@@ -173,33 +182,41 @@ enum WalletCmd {
 
     /// Sync the nonce/sequence manager from chain state
     SyncNonce {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
+
+    /// Unlock: prompt for password once and cache it for this terminal session.
+    /// Subsequent commands will use the cached password automatically.
+    /// The cache is invalidated when the terminal (shell) is closed.
+    Unlock,
+
+    /// Lock: clear the cached session password immediately.
+    Lock,
 }
 
 // ---------------------------------------------------------------------------
-// Order sub-commands
+// ZkOS account sub-commands
 // ---------------------------------------------------------------------------
 
 #[derive(Subcommand)]
-enum OrderCmd {
+enum ZkaccountCmd {
     /// Fund a new ZkOS trading account from the on-chain wallet
     Fund {
         /// Amount in satoshis to fund
         #[arg(long)]
         amount: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -210,11 +227,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -225,11 +242,11 @@ enum OrderCmd {
         #[arg(long)]
         from: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -252,7 +269,14 @@ enum OrderCmd {
         #[arg(long)]
         password: Option<String>,
     },
+}
 
+// ---------------------------------------------------------------------------
+// Order sub-commands
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+enum OrderCmd {
     /// Open a trader order (leveraged derivative)
     OpenTrade {
         /// ZkOS account index to use
@@ -275,11 +299,11 @@ enum OrderCmd {
         #[arg(long)]
         leverage: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -306,11 +330,11 @@ enum OrderCmd {
         #[arg(long)]
         take_profit: Option<f64>,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -321,11 +345,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -336,11 +360,26 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Unlock a settled trader order (reclaim account after SLTP settlement)
+    UnlockTrade {
+        /// ZkOS account index
+        #[arg(long)]
+        account_index: u64,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -351,11 +390,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -366,11 +405,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -381,11 +420,11 @@ enum OrderCmd {
         #[arg(long)]
         account_index: u64,
 
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -399,11 +438,11 @@ enum OrderCmd {
 enum HistoryCmd {
     /// Show order history (open, close, cancel events)
     Orders {
-        /// Wallet ID (required, loads from DB)
+        /// Wallet ID (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
-        wallet_id: String,
+        wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
 
@@ -422,11 +461,11 @@ enum HistoryCmd {
 
     /// Show transfer history (fund, withdraw, transfer events)
     Transfers {
-        /// Wallet ID (required, loads from DB)
+        /// Wallet ID (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
-        wallet_id: String,
+        wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
 
@@ -448,33 +487,33 @@ enum HistoryCmd {
 enum PortfolioCmd {
     /// Show full portfolio summary (balances, positions, PnL)
     Summary {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
 
     /// Show per-account balance breakdown
     Balances {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
 
     /// Show liquidation risk for open positions
     Risks {
-        /// Load wallet from DB by wallet ID
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
     },
@@ -506,6 +545,21 @@ enum MarketCmd {
 
     /// Get lend pool info
     LendPool,
+
+    /// Get current pool share value
+    PoolShareValue,
+
+    /// Get last 24-hour annualized percentage yield (APY)
+    LastDayApy,
+
+    /// Get open interest (long/short exposure)
+    OpenInterest,
+
+    /// Get comprehensive market risk statistics
+    MarketStats,
+
+    /// Get relayer server time
+    ServerTime,
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +571,9 @@ fn parse_order_type(s: &str) -> Result<twilight_client_sdk::relayer_types::Order
         "MARKET" => Ok(twilight_client_sdk::relayer_types::OrderType::MARKET),
         "LIMIT" => Ok(twilight_client_sdk::relayer_types::OrderType::LIMIT),
         "SLTP" => Ok(twilight_client_sdk::relayer_types::OrderType::SLTP),
-        other => Err(format!("Unknown order type: {other}. Use MARKET, LIMIT, or SLTP")),
+        other => Err(format!(
+            "Unknown order type: {other}. Use MARKET, LIMIT, or SLTP"
+        )),
     }
 }
 
@@ -531,28 +587,171 @@ fn parse_position_type(
     }
 }
 
-/// Build an `OrderWallet` either from DB or by creating a new one (caller decides).
+/// Build an `OrderWallet` from DB. Password falls back to `NYKS_WALLET_PASSPHRASE` env var.
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 fn load_order_wallet_from_db(
     wallet_id: &str,
     password: Option<String>,
     db_url: Option<String>,
 ) -> Result<OrderWallet, String> {
-    let pwd = password.map(|p| SecretString::new(p.into()));
+    let pwd = resolve_password(password).map(|p| SecretString::new(p.into()));
     OrderWallet::load_from_db(wallet_id.to_string(), pwd, db_url)
 }
 
-/// Resolve an `OrderWallet` – either load from DB (if wallet_id given) or create fresh.
+// ---------------------------------------------------------------------------
+// Session password cache  (~/.cache/nyks-wallet/session-<ppid>)
+// ---------------------------------------------------------------------------
+//
+// The file is named by the *parent* shell's PID.  Before trusting the cached
+// value we verify that PID is still alive via kill(pid, 0) – so when the
+// terminal is closed and the shell exits, subsequent invocations find the
+// parent dead and silently discard the stale file.
+//
+// Security model: the file lives in ~/.cache/nyks-wallet/ (mode 0700) and is
+// itself mode 0600 – the same protection as ~/.ssh/id_rsa.  No other process
+// owned by the same user can read it.
+
+#[cfg(unix)]
+fn get_ppid() -> Option<u32> {
+    // Use libc::getppid() which works on both Linux and macOS.
+    // The previous /proc/self/status approach only worked on Linux.
+    let ppid = unsafe { libc::getppid() };
+    if ppid > 0 {
+        Some(ppid as u32)
+    } else {
+        None
+    }
+}
+
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    // Signal 0 checks process existence without sending a real signal.
+    // Works on both Linux and macOS (unlike /proc/{pid} which is Linux-only).
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+fn session_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        std::path::PathBuf::from(home)
+            .join(".cache")
+            .join("nyks-wallet"),
+    )
+}
+
+#[cfg(unix)]
+fn session_file_path(ppid: u32) -> Option<std::path::PathBuf> {
+    Some(session_dir()?.join(format!("session-{ppid}.lock")))
+}
+
+/// Save password to session cache, bound to the current shell (PPID).
+#[cfg(unix)]
+fn session_save(password: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let ppid = get_ppid().ok_or("cannot determine parent shell PID")?;
+    let dir = session_dir().ok_or("cannot determine home directory")?;
+
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| e.to_string())?;
+
+    let path = session_file_path(ppid).ok_or("cannot build session file path")?;
+    let content = format!("{ppid}\n{password}");
+    // Create with 0o600 atomically to avoid a TOCTOU window where the file
+    // is briefly world-readable under the default umask.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Load password from session cache; returns None if shell is gone or cache is missing.
+#[cfg(unix)]
+fn session_load() -> Option<String> {
+    let ppid = get_ppid()?;
+    if !is_process_alive(ppid) {
+        session_clear_for(ppid); // clean up stale file
+        return None;
+    }
+    let path = session_file_path(ppid)?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    let (stored, password) = content.split_once('\n')?;
+    if stored.trim().parse::<u32>().ok()? != ppid {
+        return None; // sanity-check: file belongs to this shell
+    }
+    Some(password.to_string())
+}
+
+/// Zeroize and delete the session file for the current shell.
+#[cfg(unix)]
+fn session_clear() {
+    if let Some(ppid) = get_ppid() {
+        session_clear_for(ppid);
+    }
+}
+
+#[cfg(unix)]
+fn session_clear_for(ppid: u32) {
+    if let Some(path) = session_file_path(ppid) {
+        // Overwrite with zeros before unlinking so the content isn't recoverable
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let zeros = vec![0u8; meta.len() as usize];
+            let _ = std::fs::write(&path, &zeros);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+// Non-Unix stubs (Windows / wasm – session cache is a no-op there).
+#[cfg(not(unix))]
+fn session_save(_password: &str) -> Result<(), String> {
+    Err("session cache is only supported on Unix".to_string())
+}
+#[cfg(not(unix))]
+fn session_load() -> Option<String> {
+    None
+}
+#[cfg(not(unix))]
+fn session_clear() {}
+
+// ---------------------------------------------------------------------------
+// Password / wallet-ID resolution helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve password: CLI arg → `NYKS_WALLET_PASSPHRASE` env var → session cache → None.
+fn resolve_password(password: Option<String>) -> Option<String> {
+    password
+        .or_else(|| std::env::var("NYKS_WALLET_PASSPHRASE").ok())
+        .or_else(session_load)
+}
+
+/// Resolve wallet_id: CLI arg → `NYKS_WALLET_ID` env var → None.
+fn resolve_wallet_id(wallet_id: Option<String>) -> Option<String> {
+    wallet_id.or_else(|| std::env::var("NYKS_WALLET_ID").ok())
+}
+
+/// Resolve an `OrderWallet` – load from DB using wallet_id (arg or env).
+///
+/// Priority: CLI arg → `NYKS_WALLET_ID` env var → error.
+/// Password priority: CLI arg → `NYKS_WALLET_PASSPHRASE` env var → session cache.
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 async fn resolve_order_wallet(
     wallet_id: Option<String>,
     password: Option<String>,
 ) -> Result<OrderWallet, String> {
-    if let Some(wid) = wallet_id {
-        load_order_wallet_from_db(&wid, password, None)
-    } else {
-        OrderWallet::new(None).map_err(|e| e.to_string())
-    }
+    let wid = resolve_wallet_id(wallet_id)
+        .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID env var)")?;
+    let pwd = resolve_password(password);
+    load_order_wallet_from_db(&wid, pwd, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -568,6 +767,7 @@ async fn main() {
 
     let result = match cli.command {
         Commands::Wallet(cmd) => handle_wallet(cmd).await,
+        Commands::Zkaccount(cmd) => handle_zkaccount(cmd).await,
         Commands::Order(cmd) => handle_order(cmd).await,
         Commands::Market(cmd) => handle_market(cmd).await,
         Commands::History(cmd) => handle_history(cmd).await,
@@ -599,7 +799,7 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             if with_db {
-                let pwd = password.map(|p| SecretString::new(p.into()));
+                let pwd = resolve_password(password).map(|p| SecretString::new(p.into()));
                 ow.with_db(pwd, wallet_id.clone())?;
                 println!(
                     "  Database persistence enabled (wallet_id: {})",
@@ -624,7 +824,7 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             if with_db {
-                let pwd = password.map(|p| SecretString::new(p.into()));
+                let pwd = resolve_password(password).map(|p| SecretString::new(p.into()));
                 ow.with_db(pwd, wallet_id.clone())?;
                 println!(
                     "  Database persistence enabled (wallet_id: {})",
@@ -651,9 +851,10 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         }
 
         #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-        WalletCmd::Load { .. } => {
-            Err("Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite".to_string())
-        }
+        WalletCmd::Load { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
 
         WalletCmd::Balance {
             wallet_id,
@@ -664,7 +865,11 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            let balance = ow.wallet.update_balance().await.map_err(|e| e.to_string())?;
+            let balance = ow
+                .wallet
+                .update_balance()
+                .await
+                .map_err(|e| e.to_string())?;
             println!("Wallet Balance");
             println!("  Address:  {}", ow.wallet.twilightaddress);
             println!("  NYKS:     {}", balance.nyks);
@@ -689,9 +894,10 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         }
 
         #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-        WalletCmd::List { .. } => {
-            Err("Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite".to_string())
-        }
+        WalletCmd::List { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
 
         WalletCmd::Export {
             output,
@@ -703,7 +909,9 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            ow.wallet.export_to_json(&output).map_err(|e| e.to_string())?;
+            ow.wallet
+                .export_to_json(&output)
+                .map_err(|e| e.to_string())?;
             println!("Wallet exported to {output}");
             Ok(())
         }
@@ -711,13 +919,18 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         WalletCmd::Accounts {
             wallet_id,
             password,
+            on_chain_only,
         } => {
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             let ow = resolve_order_wallet(wallet_id, password).await?;
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            let accounts = ow.zk_accounts.get_all_accounts();
+            let mut accounts = ow.zk_accounts.get_all_accounts();
+            accounts.sort_by_key(|a| a.index);
+            if on_chain_only {
+                accounts.retain(|a| a.on_chain);
+            }
             if accounts.is_empty() {
                 println!("No ZkOS accounts found");
             } else {
@@ -747,7 +960,8 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             password,
         } => {
             let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
-            let db_manager = ow.get_db_manager()
+            let db_manager = ow
+                .get_db_manager()
                 .ok_or("Database not enabled on this wallet")?;
             db_manager.export_backup_to_file(&output)?;
             println!("Backup exported to {output}");
@@ -755,9 +969,10 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         }
 
         #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-        WalletCmd::Backup { .. } => {
-            Err("Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite".to_string())
-        }
+        WalletCmd::Backup { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         WalletCmd::Restore {
@@ -767,7 +982,8 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             force,
         } => {
             let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
-            let db_manager = ow.get_db_manager()
+            let db_manager = ow
+                .get_db_manager()
                 .ok_or("Database not enabled on this wallet")?;
             db_manager.import_backup_from_file(&input, force)?;
             println!("Backup restored from {input}");
@@ -775,9 +991,10 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         }
 
         #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-        WalletCmd::Restore { .. } => {
-            Err("Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite".to_string())
-        }
+        WalletCmd::Restore { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
 
         WalletCmd::SyncNonce {
             wallet_id,
@@ -792,19 +1009,47 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             println!("Nonce synced from chain");
             println!("  Next sequence: {}", ow.nonce_manager.peek_next());
             println!("  Account number: {}", ow.nonce_manager.account_number());
-            println!("  Released (pending reuse): {}", ow.nonce_manager.released_count());
+            println!(
+                "  Released (pending reuse): {}",
+                ow.nonce_manager.released_count()
+            );
+            Ok(())
+        }
+
+        WalletCmd::Unlock => {
+            // If a session is already active, ask before overwriting.
+            if session_load().is_some() {
+                eprintln!(
+                    "A session password is already cached. Run `wallet lock` first to clear it."
+                );
+                return Err("session already active".to_string());
+            }
+            let password =
+                rpassword::prompt_password("Wallet password: ").map_err(|e| e.to_string())?;
+            if password.is_empty() {
+                return Err("password must not be empty".to_string());
+            }
+            session_save(&password)?;
+            println!("Password cached for this terminal session.");
+            println!("Run `wallet lock` to clear it, or just close the terminal.");
+            Ok(())
+        }
+
+        WalletCmd::Lock => {
+            session_clear();
+            println!("Session password cleared.");
             Ok(())
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Order handlers
+// ZkOS account handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
+async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
     match cmd {
-        OrderCmd::Fund {
+        ZkaccountCmd::Fund {
             amount,
             wallet_id,
             password,
@@ -823,7 +1068,7 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             Ok(())
         }
 
-        OrderCmd::Withdraw {
+        ZkaccountCmd::Withdraw {
             account_index,
             wallet_id,
             password,
@@ -839,7 +1084,7 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             Ok(())
         }
 
-        OrderCmd::Transfer {
+        ZkaccountCmd::Transfer {
             from,
             wallet_id,
             password,
@@ -856,7 +1101,7 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             Ok(())
         }
 
-        OrderCmd::Split {
+        ZkaccountCmd::Split {
             from,
             balances,
             wallet_id,
@@ -896,7 +1141,15 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             }
             Ok(())
         }
+    }
+}
 
+// ---------------------------------------------------------------------------
+// Order handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
+    match cmd {
         OrderCmd::OpenTrade {
             account_index,
             order_type,
@@ -1032,6 +1285,31 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             Ok(())
         }
 
+        OrderCmd::UnlockTrade {
+            account_index,
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let status = ow.unlock_settled_order(account_index).await?;
+            match status {
+                OrderStatus::SETTLED => {
+                    println!("Account {} unlocked successfully (order settled).", account_index);
+                }
+                _ => {
+                    println!(
+                        "Account {} not yet settled (current status: {:?}). No changes made.",
+                        account_index, status
+                    );
+                }
+            }
+            Ok(())
+        }
+
         OrderCmd::QueryLend {
             account_index,
             wallet_id,
@@ -1061,7 +1339,10 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
     #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
     {
         let _ = cmd;
-        return Err("Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite".to_string());
+        return Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        );
     }
 
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -1073,6 +1354,8 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
             limit,
             offset,
         } => {
+            let wallet_id = resolve_wallet_id(wallet_id)
+                .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID)")?;
             let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
             let filter = nyks_wallet::relayer_module::transaction_history::OrderHistoryFilter {
                 account_index,
@@ -1115,6 +1398,8 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
             limit,
             offset,
         } => {
+            let wallet_id = resolve_wallet_id(wallet_id)
+                .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID)")?;
             let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
             let filter = nyks_wallet::relayer_module::transaction_history::TransferHistoryFilter {
                 limit: Some(limit),
@@ -1169,15 +1454,35 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
 
             let portfolio = ow.get_portfolio_summary().await?;
 
+            // Extract mark price from the first trader position (same for all).
+            let mark_price = portfolio.trader_positions.first().map(|p| p.current_price);
+
             println!("Portfolio Summary");
             println!("{}", "=".repeat(50));
-            println!("  On-chain balance:    {} sats", portfolio.wallet_balance_sats);
-            println!("  Trading balance:     {} sats", portfolio.total_trading_balance);
+            if let Some(mp) = mark_price {
+                println!("  Mark price:          ${:.2}", mp);
+            }
+            println!(
+                "  On-chain balance:    {} sats",
+                portfolio.wallet_balance_sats
+            );
+            println!(
+                "  Trading balance:     {} sats",
+                portfolio.total_trading_balance
+            );
             println!("  Margin used:         {:.2}", portfolio.total_margin_used);
             println!("  Unrealized PnL:      {:.2}", portfolio.unrealized_pnl);
-            println!("  Margin utilization:  {:.2}%", portfolio.margin_utilization * 100.0);
+            println!("  Realised PnL:        {:.2}", portfolio.realised_pnl);
+            println!("  Liquidation Loss:    {:.2}", portfolio.liquidation_loss);
+            println!(
+                "  Margin utilization:  {:.2}%",
+                portfolio.margin_utilization * 100.0
+            );
             println!();
-            println!("  Lend deposits:       {:.2}", portfolio.total_lend_deposits);
+            println!(
+                "  Lend deposits:       {:.2}",
+                portfolio.total_lend_deposits
+            );
             println!("  Lend value:          {:.2}", portfolio.total_lend_value);
             println!("  Lend PnL:            {:.2}", portfolio.lend_pnl);
             println!();
@@ -1186,29 +1491,121 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
 
             if !portfolio.trader_positions.is_empty() {
                 println!("\nTrader Positions");
-                println!("{}", "-".repeat(115));
+                println!("{}", "-".repeat(160));
                 println!(
-                    "  {:<6} {:<6} {:>12} {:>12} {:>16} {:>6} {:>12} {:>14} {:>10}",
-                    "ACCT", "SIDE", "ENTRY", "CURRENT", "SIZE", "LEV", "PnL", "LIQ PRICE", "FUNDING"
+                    "  {:<6} {:<10} {:<6} {:>12} {:>16} {:>6} {:>10} {:>12} {:>14} {:>10} {:>12} {:>10} {:>10} {:>10}",
+                    "ACCT", "STATUS", "SIDE", "ENTRY", "SIZE", "LEV", "A.MARGIN",
+                    "U_PnL", "LIQ PRICE", "FEE", "FUNDING", "LIMIT", "TP", "SL"
                 );
                 for p in &portfolio.trader_positions {
                     let funding_str = p
                         .funding_applied
                         .map(|v| format!("{:.4}", v))
                         .unwrap_or_else(|| "-".to_string());
+                    let limit_str = p
+                        .settle_limit
+                        .as_ref()
+                        .map(|t| format!("{:.2}", t.price))
+                        .unwrap_or_else(|| "-".to_string());
+                    let tp_str = p
+                        .take_profit
+                        .as_ref()
+                        .map(|t| format!("{:.2}", t.price))
+                        .unwrap_or_else(|| "-".to_string());
+                    let sl_str = p
+                        .stop_loss
+                        .as_ref()
+                        .map(|t| format!("{:.2}", t.price))
+                        .unwrap_or_else(|| "-".to_string());
+                    let is_pending = p.order_status == OrderStatus::PENDING;
+                    let pnl_str = if is_pending {
+                        "-".to_string()
+                    } else {
+                        format!("{:.2}", p.unrealized_pnl)
+                    };
+                    let liq_str = if is_pending {
+                        "-".to_string()
+                    } else {
+                        format!("{:.2}", p.liquidation_price)
+                    };
                     println!(
-                        "  {:<6} {:<6} {:>12.2} {:>12.2} {:>16.2} {:>5.0}x {:>12.2} {:>14.2} {:>10}",
+                        "  {:<6} {:<10} {:<6} {:>12.2} {:>16.2} {:>5.0}x {:>10.2} {:>12} {:>14} {:>10.4} {:>12} {:>10} {:>10} {:>10}",
+                        p.account_index,
+                        format!("{:?}", p.order_status),
+                        format!("{:?}", p.position_type),
+                        p.entry_price,
+                        p.position_size,
+                        p.leverage,
+                        p.available_margin,
+                        pnl_str,
+                        liq_str,
+                        p.fee_filled,
+                        funding_str,
+                        limit_str,
+                        tp_str,
+                        sl_str,
+                    );
+                }
+            }
+
+            if !portfolio.closed_trader_positions.is_empty() {
+                println!("\nClosed Positions (Settled & Unlocked)");
+                println!("{}", "-".repeat(100));
+                println!(
+                    "  {:<6} {:<6} {:>12} {:>16} {:>6} {:>10} {:>12} {:>12} {:>10} {:>10} {:>10}",
+                    "ACCT", "SIDE", "ENTRY", "SIZE", "LEV", "A.MARGIN", "R_PnL", "NET_PnL", "FEE_FILL", "FEE_SETT", "FUNDING"
+                );
+                for p in &portfolio.closed_trader_positions {
+                    let funding_str = p
+                        .funding_applied
+                        .map(|v| format!("{:.4}", v))
+                        .unwrap_or_else(|| "-".to_string());
+                    let net_pnl = p.available_margin - p.initial_margin;
+                    println!(
+                        "  {:<6} {:<6} {:>12.2} {:>16.2} {:>5.0}x {:>10.2} {:>12.2} {:>12.2} {:>10.4} {:>10.4} {:>10}",
                         p.account_index,
                         format!("{:?}", p.position_type),
                         p.entry_price,
-                        p.current_price,
                         p.position_size,
                         p.leverage,
+                        p.available_margin,
                         p.unrealized_pnl,
-                        p.liquidation_price,
+                        net_pnl,
+                        p.fee_filled,
+                        p.fee_settled,
                         funding_str,
                     );
                 }
+                println!(
+                    "\n  Total Realised PnL: {:.2}",
+                    portfolio.realised_pnl
+                );
+            }
+
+            if !portfolio.liquidated_trader_positions.is_empty() {
+                println!("\nLiquidated Positions");
+                println!("{}", "-".repeat(80));
+                println!(
+                    "  {:<6} {:<6} {:>12} {:>16} {:>6} {:>12} {:>10} {:>10}",
+                    "ACCT", "SIDE", "ENTRY", "SIZE", "LEV", "I.MARGIN", "FEE_FILL", "FEE_SETT"
+                );
+                for p in &portfolio.liquidated_trader_positions {
+                    println!(
+                        "  {:<6} {:<6} {:>12.2} {:>16.2} {:>5.0}x {:>12.2} {:>10.4} {:>10.4}",
+                        p.account_index,
+                        format!("{:?}", p.position_type),
+                        p.entry_price,
+                        p.position_size,
+                        p.leverage,
+                        p.initial_margin,
+                        p.fee_filled,
+                        p.fee_settled,
+                    );
+                }
+                println!(
+                    "\n  Total Liquidation Loss: {:.2}",
+                    portfolio.liquidation_loss
+                );
             }
 
             if !portfolio.lend_positions.is_empty() {
@@ -1339,7 +1736,10 @@ async fn handle_market(cmd: MarketCmd) -> Result<(), String> {
         }
 
         MarketCmd::Orderbook => {
-            let book = client.open_limit_orders().await.map_err(|e| e.to_string())?;
+            let book = client
+                .open_limit_orders()
+                .await
+                .map_err(|e| e.to_string())?;
             println!("Order Book");
             println!("\n  BIDS (buy):");
             println!("  {:<16} {:<16}", "PRICE", "SIZE");
@@ -1408,6 +1808,79 @@ async fn handle_market(cmd: MarketCmd) -> Result<(), String> {
                 "{}",
                 serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info))
             );
+        }
+
+        MarketCmd::PoolShareValue => {
+            let value = client.pool_share_value().await.map_err(|e| e.to_string())?;
+            println!("Pool Share Value");
+            println!("  Value: {:.8}", value);
+        }
+
+        MarketCmd::LastDayApy => {
+            let apy = client.last_day_apy().await.map_err(|e| e.to_string())?;
+            println!("Last 24h APY");
+            match apy {
+                Some(v) => println!("  APY: {:.4}%", v),
+                None => println!("  APY: not available"),
+            }
+        }
+
+        MarketCmd::OpenInterest => {
+            let oi = client.open_interest().await.map_err(|e| e.to_string())?;
+            println!("Open Interest");
+            println!("  Long exposure:  {:.4} SATS", oi.long_exposure);
+            println!("  Short exposure: {:.4} SATS", oi.short_exposure);
+            if let Some(ts) = &oi.last_order_timestamp {
+                println!("  Last order:     {}", ts);
+            }
+        }
+
+        MarketCmd::MarketStats => {
+            let stats = client.get_market_stats().await.map_err(|e| e.to_string())?;
+            println!("Market Statistics");
+            println!("{}", "=".repeat(45));
+            println!("  Pool equity:       {:.4} SATS", stats.pool_equity_btc);
+            println!("  Total long:        {:.4} SATS", stats.total_long_btc);
+            println!("  Total short:       {:.4} SATS", stats.total_short_btc);
+            println!(
+                "  Pending long:      {:.4} SATS",
+                stats.total_pending_long_btc
+            );
+            println!(
+                "  Pending short:     {:.4} SATS",
+                stats.total_pending_short_btc
+            );
+            println!("  Open interest:     {:.4} SATS", stats.open_interest_btc);
+            println!("  Net exposure:      {:.4} SATS", stats.net_exposure_btc);
+            println!("  Long %:            {:.2}%", stats.long_pct * 100.0);
+            println!("  Short %:           {:.2}%", stats.short_pct * 100.0);
+            println!("  Utilization:       {:.2}%", stats.utilization * 100.0);
+            println!("  Max long:          {:.4} SATS", stats.max_long_btc);
+            println!("  Max short:         {:.4} SATS", stats.max_short_btc);
+            println!("  Status:            {}", stats.status);
+            if let Some(reason) = &stats.status_reason {
+                println!("  Status reason:     {}", reason);
+            }
+            println!("\nRisk Parameters");
+            println!("{}", "-".repeat(45));
+            println!("  Max OI multiplier: {:.2}", stats.params.max_oi_mult);
+            println!("  Max net multiplier:{:.2}", stats.params.max_net_mult);
+            println!(
+                "  Max position %:    {:.2}%",
+                stats.params.max_position_pct * 100.0
+            );
+            println!(
+                "  Min position:      {:.4} BTC",
+                stats.params.min_position_btc
+            );
+            println!("  Max leverage:      {:.0}x", stats.params.max_leverage);
+            println!("  MM ratio:          {:.4}", stats.params.mm_ratio);
+        }
+
+        MarketCmd::ServerTime => {
+            let time = client.server_time().await.map_err(|e| e.to_string())?;
+            println!("Server Time");
+            println!("  UTC: {}", time);
         }
     }
     Ok(())
