@@ -1245,14 +1245,16 @@ impl OrderWallet {
     ) -> Result<OrderStatus, String> {
         let trader_order = self.query_trader_order(index).await?;
 
-        if trader_order.order_status != OrderStatus::SETTLED {
+        if trader_order.order_status != OrderStatus::SETTLED
+            && trader_order.order_status != OrderStatus::LIQUIDATE
+        {
             return Ok(trader_order.order_status);
         }
 
         let account_address = self.zk_accounts.get_account_address(&index)?.to_string();
         let tx_hash = fetch_tx_hash_with_account_address_retry(
             &account_address,
-            Some(OrderStatus::SETTLED),
+            Some(trader_order.order_status.clone()),
             &self.relayer_api_client,
         )
         .await?;
@@ -1292,7 +1294,7 @@ impl OrderWallet {
                 Some(0.0),
                 Some(trader_order.leverage as u64),
                 Some(trader_order.unrealized_pnl),
-                "settled",
+                &format!("{}", trader_order.order_status.to_str()),
                 None,
             );
         }
