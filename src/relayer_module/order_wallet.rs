@@ -938,7 +938,7 @@ impl OrderWallet {
             &secret_key,
             account_address.clone(),
             tx_hash.order_id,
-            order_type,
+            order_type.clone(),
             execution_price,
             &self.relayer_api_client,
         )
@@ -952,6 +952,10 @@ impl OrderWallet {
             );
             return Ok(request_id);
         }
+        if order_type == OrderType::LIMIT {
+            info!("Limit order is settled on Market Price due to mark price hit limit price");
+        }
+
         let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
         self.utxo_details.insert(index, utxo_detail.clone());
 
@@ -962,6 +966,11 @@ impl OrderWallet {
         }
 
         let trader_order = self.query_trader_order(index).await?;
+        info!(
+            "PnL: {:?}, Net PnL: {:?}",
+            trader_order.unrealized_pnl,
+            trader_order.available_margin - trader_order.initial_margin
+        );
         self.zk_accounts
             .update_balance(&index, trader_order.available_margin as u64)?;
         debug!(
@@ -1030,7 +1039,6 @@ impl OrderWallet {
         let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
         tokio::time::sleep(Duration::from_millis(200)).await;
         let trader_order = self.query_trader_order(index).await?;
-        info!("trader_order: {:?}", trader_order);
         if trader_order.order_status != OrderStatus::SETTLED {
             // SLTP orders are conditional — they stay pending until the market
             // price hits the stop-loss or take-profit level.  We only need to
@@ -1058,9 +1066,11 @@ impl OrderWallet {
                 );
             }
         } else {
+            info!("Order settled on Market Price due to mark price hit SLTP price");
             info!(
-                "Order settled on Market Price due to SLTP price hit, status: {}",
-                tx_hash.order_status.to_str()
+                "PnL: {:?}, Net PnL: {:?}",
+                trader_order.unrealized_pnl,
+                trader_order.available_margin - trader_order.initial_margin
             );
             let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
             self.utxo_details.insert(index, utxo_detail.clone());
@@ -1812,6 +1822,7 @@ impl OrderWallet {
 
         let mut total_trading_balance: u64 = 0;
         let mut trader_positions = Vec::new();
+        let mut closed_trader_positions = Vec::new();
         let mut lend_positions = Vec::new();
         let mut on_chain_count = 0;
 
@@ -1838,13 +1849,43 @@ impl OrderWallet {
                     // Try trader order first, fall back to lend order
                     match self.query_trader_order_v1(account.index).await {
                         Ok(order_v1) => {
-                            trader_positions.push(
-                                super::portfolio::PositionSummary::from_trader_order_v1(
-                                    account.index,
-                                    &order_v1,
-                                    current_price,
-                                ),
-                            );
+                            if order_v1.order.order_status == OrderStatus::SETTLED {
+                                // Build summary using the relayer's PnL (realised)
+                                let mut summary =
+                                    super::portfolio::PositionSummary::from_trader_order_v1(
+                                        account.index,
+                                        &order_v1,
+                                        current_price,
+                                    );
+                                // Use the relayer-reported unrealized_pnl as realised PnL
+                                summary.unrealized_pnl = order_v1.order.unrealized_pnl;
+
+                                // Unlock the settled account (refresh UTXO, restore to Coin)
+                                match self.unlock_settled_order(account.index).await {
+                                    Ok(_) => {
+                                        info!(
+                                            "Unlocked settled account {} during portfolio scan",
+                                            account.index
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to unlock settled account {}: {}",
+                                            account.index, e
+                                        );
+                                    }
+                                }
+
+                                closed_trader_positions.push(summary);
+                            } else {
+                                trader_positions.push(
+                                    super::portfolio::PositionSummary::from_trader_order_v1(
+                                        account.index,
+                                        &order_v1,
+                                        current_price,
+                                    ),
+                                );
+                            }
                         }
                         Err(_) => {
                             // Not a trader order — try lend
@@ -1874,6 +1915,7 @@ impl OrderWallet {
             wallet_balance_sats,
             total_trading_balance,
             trader_positions,
+            closed_trader_positions,
             lend_positions,
             total_accounts,
             on_chain_count,

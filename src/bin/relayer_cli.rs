@@ -1472,6 +1472,7 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
             );
             println!("  Margin used:         {:.2}", portfolio.total_margin_used);
             println!("  Unrealized PnL:      {:.2}", portfolio.unrealized_pnl);
+            println!("  Realised PnL:        {:.2}", portfolio.realised_pnl);
             println!(
                 "  Margin utilization:  {:.2}%",
                 portfolio.margin_utilization * 100.0
@@ -1544,6 +1545,40 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
                         sl_str,
                     );
                 }
+            }
+
+            if !portfolio.closed_trader_positions.is_empty() {
+                println!("\nClosed Positions (Settled & Unlocked)");
+                println!("{}", "-".repeat(100));
+                println!(
+                    "  {:<6} {:<6} {:>12} {:>16} {:>6} {:>10} {:>12} {:>12} {:>10} {:>10} {:>10}",
+                    "ACCT", "SIDE", "ENTRY", "SIZE", "LEV", "A.MARGIN", "R_PnL", "NET_PnL", "FEE_FILL", "FEE_SETT", "FUNDING"
+                );
+                for p in &portfolio.closed_trader_positions {
+                    let funding_str = p
+                        .funding_applied
+                        .map(|v| format!("{:.4}", v))
+                        .unwrap_or_else(|| "-".to_string());
+                    let net_pnl = p.available_margin - p.initial_margin;
+                    println!(
+                        "  {:<6} {:<6} {:>12.2} {:>16.2} {:>5.0}x {:>10.2} {:>12.2} {:>12.2} {:>10.4} {:>10.4} {:>10}",
+                        p.account_index,
+                        format!("{:?}", p.position_type),
+                        p.entry_price,
+                        p.position_size,
+                        p.leverage,
+                        p.available_margin,
+                        p.unrealized_pnl,
+                        net_pnl,
+                        p.fee_filled,
+                        p.fee_settled,
+                        funding_str,
+                    );
+                }
+                println!(
+                    "\n  Total Realised PnL: {:.2}",
+                    portfolio.realised_pnl
+                );
             }
 
             if !portfolio.lend_positions.is_empty() {
