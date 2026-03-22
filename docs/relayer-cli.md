@@ -443,12 +443,18 @@ relayer-cli portfolio summary --wallet-id my-wallet --password s3cret
 ```
 
 Output includes:
-- On-chain and trading balances
+- Mark price, on-chain and trading balances
 - Total margin used and utilization percentage
-- Unrealized PnL across all positions
+- Unrealized PnL across open positions (excludes PENDING orders)
+- Realised PnL from settled positions
+- Liquidation loss from liquidated positions
 - Lend deposits, current value, and lend PnL
-- Per-position table for trader orders (entry/current price, size, leverage, PnL, liquidation price, funding)
-- Per-position table for lend orders (deposit, current value, PnL, unrealised PnL, APR, pool shares)
+- **Trader Positions** table: `ACCT`, `STATUS`, `SIDE`, `ENTRY`, `SIZE`, `LEV`, `A.MARGIN`, `U_PnL`, `LIQ PRICE`, `FEE`, `FUNDING`, `LIMIT`, `TP`, `SL`
+- **Closed Positions** table (settled & unlocked): `ACCT`, `SIDE`, `ENTRY`, `SIZE`, `LEV`, `A.MARGIN`, `R_PnL`, `NET_PnL`, `FEE_FILL`, `FEE_SETT`, `FUNDING`, plus total realised PnL
+- **Liquidated Positions** table: `ACCT`, `SIDE`, `ENTRY`, `SIZE`, `LEV`, `I.MARGIN`, `FEE_FILL`, `FEE_SETT`, plus total liquidation loss
+- **Lend Positions** table: `ACCT`, `DEPOSIT`, `VALUE`, `PnL`, `uPnL`, `APR %`, `SHARES`
+
+Settled and liquidated accounts are automatically unlocked (restored to Coin state) when the summary is generated.
 
 ### `portfolio balances`
 
