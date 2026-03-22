@@ -217,7 +217,12 @@ impl Portfolio {
         on_chain_accounts: usize,
     ) -> Self {
         let total_margin_used: f64 = trader_positions.iter().map(|p| p.initial_margin).sum();
-        let unrealized_pnl: f64 = trader_positions.iter().map(|p| p.unrealized_pnl).sum();
+        // Exclude PENDING positions from PnL — they haven't been filled yet.
+        let unrealized_pnl: f64 = trader_positions
+            .iter()
+            .filter(|p| p.order_status != OrderStatus::PENDING)
+            .map(|p| p.unrealized_pnl)
+            .sum();
         let total_lend_deposits: f64 = lend_positions.iter().map(|p| p.deposit).sum();
         let total_lend_value: f64 = lend_positions.iter().map(|p| p.current_value).sum();
         // Prefer v1 unrealised PnL (computed from live pool TLV) when available

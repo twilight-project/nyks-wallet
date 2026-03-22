@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use log::error;
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
+use nyks_wallet::relayer_module::relayer_types::OrderStatus;
 use secrecy::SecretString;
 
 // ---------------------------------------------------------------------------
@@ -1413,8 +1414,14 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
 
             let portfolio = ow.get_portfolio_summary().await?;
 
+            // Extract mark price from the first trader position (same for all).
+            let mark_price = portfolio.trader_positions.first().map(|p| p.current_price);
+
             println!("Portfolio Summary");
             println!("{}", "=".repeat(50));
+            if let Some(mp) = mark_price {
+                println!("  Mark price:          ${:.2}", mp);
+            }
             println!(
                 "  On-chain balance:    {} sats",
                 portfolio.wallet_balance_sats
@@ -1442,35 +1449,59 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
 
             if !portfolio.trader_positions.is_empty() {
                 println!("\nTrader Positions");
-                println!("{}", "-".repeat(115));
+                println!("{}", "-".repeat(160));
                 println!(
-                    "  {:<6} {:<6} {:>12} {:>12} {:>16} {:>6} {:>12} {:>14} {:>10}",
-                    "ACCT",
-                    "SIDE",
-                    "ENTRY",
-                    "CURRENT",
-                    "SIZE",
-                    "LEV",
-                    "PnL",
-                    "LIQ PRICE",
-                    "FUNDING"
+                    "  {:<6} {:<10} {:<6} {:>12} {:>16} {:>6} {:>10} {:>12} {:>14} {:>10} {:>12} {:>10} {:>10} {:>10}",
+                    "ACCT", "STATUS", "SIDE", "ENTRY", "SIZE", "LEV", "A.MARGIN",
+                    "U_PnL", "LIQ PRICE", "FEE", "FUNDING", "LIMIT", "TP", "SL"
                 );
                 for p in &portfolio.trader_positions {
                     let funding_str = p
                         .funding_applied
                         .map(|v| format!("{:.4}", v))
                         .unwrap_or_else(|| "-".to_string());
+                    let limit_str = p
+                        .settle_limit
+                        .as_ref()
+                        .map(|t| format!("{:.2}", t.price))
+                        .unwrap_or_else(|| "-".to_string());
+                    let tp_str = p
+                        .take_profit
+                        .as_ref()
+                        .map(|t| format!("{:.2}", t.price))
+                        .unwrap_or_else(|| "-".to_string());
+                    let sl_str = p
+                        .stop_loss
+                        .as_ref()
+                        .map(|t| format!("{:.2}", t.price))
+                        .unwrap_or_else(|| "-".to_string());
+                    let is_pending = p.order_status == OrderStatus::PENDING;
+                    let pnl_str = if is_pending {
+                        "-".to_string()
+                    } else {
+                        format!("{:.2}", p.unrealized_pnl)
+                    };
+                    let liq_str = if is_pending {
+                        "-".to_string()
+                    } else {
+                        format!("{:.2}", p.liquidation_price)
+                    };
                     println!(
-                        "  {:<6} {:<6} {:>12.2} {:>12.2} {:>16.2} {:>5.0}x {:>12.2} {:>14.2} {:>10}",
+                        "  {:<6} {:<10} {:<6} {:>12.2} {:>16.2} {:>5.0}x {:>10.2} {:>12} {:>14} {:>10.4} {:>12} {:>10} {:>10} {:>10}",
                         p.account_index,
+                        format!("{:?}", p.order_status),
                         format!("{:?}", p.position_type),
                         p.entry_price,
-                        p.current_price,
                         p.position_size,
                         p.leverage,
-                        p.unrealized_pnl,
-                        p.liquidation_price,
+                        p.available_margin,
+                        pnl_str,
+                        liq_str,
+                        p.fee_filled,
                         funding_str,
+                        limit_str,
+                        tp_str,
+                        sl_str,
                     );
                 }
             }

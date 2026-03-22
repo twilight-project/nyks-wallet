@@ -28,7 +28,7 @@ use jsonrpsee::rpc_params;
 use serde::{Deserialize, Serialize};
 use twilight_client_sdk::relayer_types::{
     CancelTraderOrderZkos, CreateLendOrderZkos, CreateTraderOrderClientZkos, ExecuteLendOrderZkos,
-    ExecuteTraderOrderZkos, QueryLendOrderZkos, QueryTraderOrderZkos,
+    ExecuteTraderOrderZkos, ExecuteTraderOrderZkosSlTp, QueryLendOrderZkos, QueryTraderOrderZkos,
 };
 
 /// Wrapper for hex-encoded binary data sent to relayer endpoints.
@@ -269,6 +269,18 @@ impl RelayerJsonRpcClient {
             .await
     }
 
+    pub async fn settle_trade_order_sltp(
+        &self,
+        tx: ExecuteTraderOrderZkosSlTp,
+    ) -> Result<RequestResponse, RpcError> {
+        let params = HexEncodedData {
+            data: tx.encode_as_hex_string(),
+        };
+        self.client
+            .request("settle_trade_order", AsRpcParams(params))
+            .await
+    }
+
     pub async fn settle_lend_order(
         &self,
         tx: ExecuteLendOrderZkos,
@@ -312,9 +324,7 @@ impl RelayerJsonRpcClient {
 
     /// Get APY chart data points for visualization.
     pub async fn apy_chart(&self, params: ApyChartArgs) -> Result<Vec<ApyChartPoint>, RpcError> {
-        self.client
-            .request("apy_chart", AsRpcParams(params))
-            .await
+        self.client.request("apy_chart", AsRpcParams(params)).await
     }
 
     // -------------------------
@@ -328,9 +338,7 @@ impl RelayerJsonRpcClient {
 
     /// Get comprehensive market risk statistics.
     pub async fn get_market_stats(&self) -> Result<MarketStats, RpcError> {
-        self.client
-            .request("get_market_stats", rpc_params![])
-            .await
+        self.client.request("get_market_stats", rpc_params![]).await
     }
 
     // -------------------------
