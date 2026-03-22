@@ -18,6 +18,7 @@
 
 use std::sync::Arc;
 
+use bip39::{Language as B39Lang, Mnemonic};
 use chrono::{DateTime, Duration, Utc};
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 use nyks_wallet::relayer_module::relayer_api::RelayerJsonRpcClient;
@@ -38,12 +39,16 @@ use tokio::sync::Mutex;
 struct ServerState {
     /// Password cached in memory for the lifetime of this server process.
     session_password: Mutex<Option<String>>,
+    /// Mnemonic cached in memory. Single-use: cleared after wallet_import consumes it.
+    /// Set via `wallet_set_mnemonic` so the AI agent never sees it in tool arguments.
+    session_mnemonic: Mutex<Option<String>>,
 }
 
 impl ServerState {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             session_password: Mutex::new(None),
+            session_mnemonic: Mutex::new(None),
         })
     }
 
@@ -52,6 +57,16 @@ impl ServerState {
         tool_arg
             .or_else(|| std::env::var("NYKS_WALLET_PASSPHRASE").ok())
             .or(self.session_password.lock().await.clone())
+    }
+
+    /// Consume the session mnemonic (single-use: clears it after returning).
+    /// Returns: tool arg → session cache (cleared on read).
+    async fn consume_mnemonic(&self, tool_arg: Option<String>) -> Option<String> {
+        if tool_arg.is_some() {
+            return tool_arg;
+        }
+        let mut guard = self.session_mnemonic.lock().await;
+        guard.take() // returns the value and sets the slot to None
     }
 }
 
@@ -147,6 +162,25 @@ fn tools_list() -> Value {
             "description": "Clear the in-memory session password.",
             "inputSchema": { "type": "object", "properties": {}, "required": [] }
         },
+        {
+            "name": "wallet_set_mnemonic",
+            "description": "Cache a BIP-39 mnemonic phrase in server memory for the next \
+                            `wallet_import` call. The mnemonic is consumed (cleared) after \
+                            a single use so the AI agent never needs to pass it as a \
+                            `wallet_import` argument. Call this once before `wallet_import`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mnemonic": { "type": "string", "description": "BIP-39 mnemonic (12 or 24 words)" }
+                },
+                "required": ["mnemonic"]
+            }
+        },
+        {
+            "name": "wallet_clear_mnemonic",
+            "description": "Clear the in-memory session mnemonic without using it.",
+            "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
 
         // ── Wallet management ──────────────────────────────────────────────
         {
@@ -169,15 +203,18 @@ fn tools_list() -> Value {
             "name": "wallet_import",
             "description": "Import a wallet from a BIP-39 mnemonic phrase. \
                             Provide wallet_id (and optionally password) to persist the wallet \
-                            to the local database.",
+                            to the local database. \
+                            `mnemonic` is optional when a session mnemonic has been pre-loaded \
+                            via `wallet_set_mnemonic` — in that case omit this argument entirely \
+                            so the mnemonic never appears in agent tool calls.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "mnemonic":  { "type": "string", "description": "BIP-39 mnemonic (12 or 24 words)" },
+                    "mnemonic":  { "type": "string", "description": "BIP-39 mnemonic (12 or 24 words). Omit if session mnemonic is set." },
                     "wallet_id": { "type": "string", "description": "Optional wallet ID for DB persistence" },
                     "password":  { "type": "string", "description": "DB encryption password (optional)" }
                 },
-                "required": ["mnemonic"]
+                "required": []
             }
         },
         {
@@ -276,6 +313,21 @@ fn tools_list() -> Value {
         {
             "name": "order_cancel_trade",
             "description": "Cancel a pending trade order.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "account_index": { "type": "integer" },
+                    "wallet_id": { "type": "string" },
+                    "password": { "type": "string" }
+                },
+                "required": ["account_index"]
+            }
+        },
+        {
+            "name": "order_unlock_trade",
+            "description": "Unlock a settled or liquidated trade account so its funds can be \
+                            reused. Only acts when the order status is SETTLED or LIQUIDATE; \
+                            returns the current status otherwise.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -727,48 +779,98 @@ async fn call_tool(state: Arc<ServerState>, name: &str, args: &Value) -> Value {
             tool_ok("Session password cleared.")
         }
 
-        // ── Wallet management ───────────────────────────────────────────────
-        "wallet_create" => {
-            let wallet_id = arg_str(args, "wallet_id");
-            let pwd = state.resolve_password(arg_str(args, "password")).await;
-            match OrderWallet::new(None) {
-                Err(e) => tool_err(e.to_string()),
-                Ok(mut ow) => {
-                    // Optionally persist to database when wallet_id is provided.
-                    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-                    if let Some(ref wid) = wallet_id {
-                        let pwd_secret = pwd.as_deref().map(|p| SecretString::new(p.into()));
-                        match ow.with_db(pwd_secret, Some(wid.clone())) {
-                            Err(e) => return tool_err(format!("DB setup failed: {e}")),
-                            Ok(persisted) => {
-                                if let Err(e) = persisted.save_order_wallet_to_db() {
-                                    return tool_err(format!("DB save failed: {e}"));
-                                }
-                                return tool_ok(serde_json::to_string_pretty(&json!({
-                                    "twilight_address": persisted.wallet.twilightaddress,
-                                    "btc_address": persisted.wallet.btc_address,
-                                    "wallet_id": wid,
-                                    "persisted": true,
-                                    "note": "The mnemonic was printed to the terminal that started this MCP server. \
-                                             Save it securely – it will not be shown again."
-                                })).unwrap());
-                            }
+        "wallet_set_mnemonic" => {
+            match arg_str(args, "mnemonic") {
+                None => tool_err("Missing required argument: mnemonic"),
+                Some(m) if m.trim().is_empty() => tool_err("Mnemonic must not be empty"),
+                Some(m) => {
+                    // Validate the mnemonic before caching it.
+                    match Mnemonic::parse_in_normalized(B39Lang::English, m.trim()) {
+                        Err(e) => tool_err(format!("Invalid mnemonic: {e}")),
+                        Ok(_) => {
+                            *state.session_mnemonic.lock().await = Some(m.trim().to_string());
+                            tool_ok("Session mnemonic set. Call `wallet_import` without a \
+                                     `mnemonic` argument to use it. It will be cleared after \
+                                     a single use.")
                         }
                     }
-                    tool_ok(serde_json::to_string_pretty(&json!({
-                        "twilight_address": ow.wallet.twilightaddress,
-                        "btc_address": ow.wallet.btc_address,
-                        "persisted": false,
-                        "note": "The mnemonic was printed to the terminal that started this MCP server. \
-                                 Save it securely – it will not be shown again."
-                    })).unwrap())
                 }
             }
         }
 
+        "wallet_clear_mnemonic" => {
+            *state.session_mnemonic.lock().await = None;
+            tool_ok("Session mnemonic cleared.")
+        }
+
+        // ── Wallet management ───────────────────────────────────────────────
+        "wallet_create" => {
+            let wallet_id = arg_str(args, "wallet_id");
+            let pwd = state.resolve_password(arg_str(args, "password")).await;
+
+            // Try normal creation first (prints mnemonic to /dev/tty when a TTY is present).
+            // If no TTY is attached (Docker, piped stdio), fall back: generate the mnemonic
+            // here, print it to stderr (visible to the server operator only, never to the
+            // AI agent), and build the wallet via import_from_mnemonic.
+            let ow_result = OrderWallet::new(None);
+            let mut ow = match ow_result {
+                Ok(ow) => ow,
+                Err(_) => {
+                    let mnemonic = match Mnemonic::generate_in(B39Lang::English, 24) {
+                        Err(e) => return tool_err(format!("Failed to generate mnemonic: {e}")),
+                        Ok(m) => m,
+                    };
+                    let mnemonic_str = mnemonic.to_string();
+                    eprintln!(
+                        "\n[nyks-wallet] *** NEW WALLET MNEMONIC — SAVE THIS SECURELY ***\n{mnemonic_str}\n*** END OF MNEMONIC ***\n"
+                    );
+                    match OrderWallet::import_from_mnemonic(&mnemonic_str, None) {
+                        Err(e) => return tool_err(e),
+                        Ok(ow) => ow,
+                    }
+                }
+            };
+
+            // Optionally persist to database when wallet_id is provided.
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            if let Some(ref wid) = wallet_id {
+                let pwd_secret = pwd.as_deref().map(|p| SecretString::new(p.into()));
+                match ow.with_db(pwd_secret, Some(wid.clone())) {
+                    Err(e) => return tool_err(format!("DB setup failed: {e}")),
+                    Ok(persisted) => {
+                        if let Err(e) = persisted.save_order_wallet_to_db() {
+                            return tool_err(format!("DB save failed: {e}"));
+                        }
+                        return tool_ok(serde_json::to_string_pretty(&json!({
+                            "twilight_address": persisted.wallet.twilightaddress,
+                            "btc_address": persisted.wallet.btc_address,
+                            "wallet_id": wid,
+                            "persisted": true,
+                            "note": "The mnemonic was printed to the server terminal (TTY) or \
+                                     to stderr. Save it securely – it will not be shown again."
+                        })).unwrap());
+                    }
+                }
+            }
+            tool_ok(serde_json::to_string_pretty(&json!({
+                "twilight_address": ow.wallet.twilightaddress,
+                "btc_address": ow.wallet.btc_address,
+                "persisted": false,
+                "note": "The mnemonic was printed to the server terminal (TTY) or to stderr. \
+                         Save it securely – it will not be shown again."
+            })).unwrap())
+        }
+
         "wallet_import" => {
-            match arg_str(args, "mnemonic") {
-                None => tool_err("Missing required argument: mnemonic"),
+            // Mnemonic resolution order: explicit tool arg → session mnemonic (single-use).
+            // Using the session mnemonic means the AI agent never sees the mnemonic in
+            // its tool-call arguments — the operator sets it once via wallet_set_mnemonic.
+            let mnemonic_opt = state.consume_mnemonic(arg_str(args, "mnemonic")).await;
+            match mnemonic_opt {
+                None => tool_err(
+                    "No mnemonic provided. Either pass `mnemonic` as an argument or \
+                     pre-load it with the `wallet_set_mnemonic` tool."
+                ),
                 Some(mnemonic) => {
                     let wallet_id = arg_str(args, "wallet_id");
                     let pwd = state.resolve_password(arg_str(args, "password")).await;
@@ -993,6 +1095,26 @@ async fn call_tool(state: Arc<ServerState>, name: &str, args: &Value) -> Value {
                         Err(e) => tool_err(e.to_string()),
                         Ok(request_id) => tool_ok(serde_json::to_string_pretty(&json!({
                             "request_id": request_id,
+                        })).unwrap()),
+                    }
+                }
+            }
+        }
+
+        "order_unlock_trade" => {
+            let account_index = match arg_u64(args, "account_index") {
+                None => return tool_err("Missing required argument: account_index"),
+                Some(i) => i,
+            };
+            let pwd = state.resolve_password(arg_str(args, "password")).await;
+            match load_wallet(arg_str(args, "wallet_id"), pwd).await {
+                Err(e) => tool_err(e),
+                Ok(mut ow) => {
+                    match ow.unlock_settled_order(account_index).await {
+                        Err(e) => tool_err(e.to_string()),
+                        Ok(status) => tool_ok(serde_json::to_string_pretty(&json!({
+                            "account_index": account_index,
+                            "order_status": format!("{:?}", status),
                         })).unwrap()),
                     }
                 }
