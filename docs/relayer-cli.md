@@ -100,50 +100,41 @@ Six top-level command groups:
 
 ### `wallet create`
 
-Create a new wallet. Prints the mnemonic phrase once — save it.
+Create a new wallet and persist it to the database. Prints the mnemonic phrase once — save it.
 
 ```bash
 relayer-cli wallet create
-
-# With database persistence
-relayer-cli wallet create --with-db --wallet-id my-wallet --password s3cret
-
-# With a custom BTC SegWit address instead of auto-generating one
+relayer-cli wallet create --wallet-id my-wallet --password s3cret
 relayer-cli wallet create --btc-address bc1q...
 ```
 
 | Flag                   | Description                                                   |
 | ---------------------- | ------------------------------------------------------------- |
-| `--wallet-id <ID>`    | Optional ID for DB storage (defaults to the Twilight address) |
-| `--password <PASS>`   | DB encryption password                                        |
-| `--with-db`           | Enable database persistence                                   |
-| `--btc-address <ADDR>`| Optional BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of generating a random one |
+| `--wallet-id <ID>`    | Wallet ID for DB storage (defaults to the Twilight address)   |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+| `--btc-address <ADDR>`| BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of generating a random one |
 
 ### `wallet import`
 
-Restore a wallet from a BIP-39 mnemonic. If `--mnemonic` is omitted, the CLI prompts for it securely via TTY (the phrase is not echoed to the terminal).
+Import a wallet from a BIP-39 mnemonic and persist it to the database. If `--mnemonic` is omitted, the CLI prompts for it securely via TTY (the phrase is not echoed to the terminal).
 
 ```bash
-# Pass mnemonic on command line
-relayer-cli wallet import --mnemonic "word1 word2 ... word24"
-
 # Prompt for mnemonic securely (recommended)
 relayer-cli wallet import
 
-# With DB persistence
-relayer-cli wallet import --mnemonic "..." --with-db --wallet-id restored_wallet_id --password s3cret
+# Pass mnemonic on command line
+relayer-cli wallet import --mnemonic "word1 word2 ... word24"
 
-# With a custom BTC SegWit address instead of deriving from mnemonic
+relayer-cli wallet import --wallet-id restored --password s3cret
 relayer-cli wallet import --btc-address bc1q...
 ```
 
 | Flag                   | Description                           |
 | ---------------------- | ------------------------------------- |
 | `--mnemonic <PHRASE>` | 24-word BIP-39 mnemonic. If omitted, prompts securely via TTY |
-| `--wallet-id <ID>`    | Optional DB wallet ID                 |
-| `--password <PASS>`   | DB encryption password                |
-| `--with-db`           | Enable database persistence           |
-| `--btc-address <ADDR>`| Optional BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of deriving from mnemonic |
+| `--wallet-id <ID>`    | Wallet ID for DB storage (defaults to the Twilight address)   |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+| `--btc-address <ADDR>`| BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of deriving from mnemonic |
 
 ### `wallet load`
 

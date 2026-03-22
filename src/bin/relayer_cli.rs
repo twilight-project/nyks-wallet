@@ -49,42 +49,34 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum WalletCmd {
-    /// Create a new wallet (prints mnemonic once)
+    /// Create a new wallet (always persisted to database)
     Create {
-        /// Optional wallet ID for database persistence
+        /// Wallet ID for database storage (defaults to the Twilight address if omitted)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password (reads from NYKS_WALLET_PASSPHRASE env if absent)
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
-
-        /// Enable database persistence
-        #[arg(long, default_value_t = false)]
-        with_db: bool,
 
         /// Optional BTC SegWit address (bc1q... or bc1p...) to use instead of generating a random one
         #[arg(long)]
         btc_address: Option<String>,
     },
 
-    /// Import a wallet from a mnemonic phrase
+    /// Import a wallet from a mnemonic phrase (always persisted to database)
     Import {
         /// The BIP-39 mnemonic phrase (24 words). If omitted, prompts securely via TTY.
         #[arg(long)]
         mnemonic: Option<String>,
 
-        /// Optional wallet ID for database persistence
+        /// Wallet ID for database storage (defaults to the Twilight address if omitted)
         #[arg(long)]
         wallet_id: Option<String>,
 
-        /// Database encryption password
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
-
-        /// Enable database persistence
-        #[arg(long, default_value_t = false)]
-        with_db: bool,
 
         /// Optional BTC SegWit address (bc1q... or bc1p...) to use instead of deriving from mnemonic
         #[arg(long)]
@@ -835,7 +827,6 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         WalletCmd::Create {
             wallet_id,
             password,
-            with_db,
             btc_address,
         } => {
             if let Some(ref addr) = btc_address {
@@ -851,11 +842,11 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             println!("  BTC address: {}", ow.wallet.btc_address);
 
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if with_db {
+            {
                 let pwd = resolve_password(password).map(|p| SecretString::new(p.into()));
                 ow.with_db(pwd, wallet_id.clone())?;
                 println!(
-                    "  Database persistence enabled (wallet_id: {})",
+                    "  Wallet ID: {}",
                     wallet_id.unwrap_or_else(|| ow.wallet.twilightaddress.clone())
                 );
             }
@@ -866,7 +857,6 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             mnemonic,
             wallet_id,
             password,
-            with_db,
             btc_address,
         } => {
             if let Some(ref addr) = btc_address {
@@ -894,11 +884,11 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             println!("  BTC address: {}", ow.wallet.btc_address);
 
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if with_db {
+            {
                 let pwd = resolve_password(password).map(|p| SecretString::new(p.into()));
                 ow.with_db(pwd, wallet_id.clone())?;
                 println!(
-                    "  Database persistence enabled (wallet_id: {})",
+                    "  Wallet ID: {}",
                     wallet_id.unwrap_or_else(|| ow.wallet.twilightaddress.clone())
                 );
             }
