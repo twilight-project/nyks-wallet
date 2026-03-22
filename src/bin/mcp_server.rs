@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! nyks-wallet MCP Server
 //!
 //! Implements the Model Context Protocol (2024-11-05) over stdio.
@@ -17,8 +18,13 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Duration, Utc};
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 use nyks_wallet::relayer_module::relayer_api::RelayerJsonRpcClient;
+use nyks_wallet::relayer_module::relayer_types::{
+    AccountSummaryArgs, ApyChartArgs, Candles, HistoricalFundingArgs, HistoricalPriceArgs,
+    Interval,
+};
 use nyks_wallet::relayer_module::transaction_history::{OrderHistoryFilter, TransferHistoryFilter};
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -145,18 +151,31 @@ fn tools_list() -> Value {
         // ── Wallet management ──────────────────────────────────────────────
         {
             "name": "wallet_create",
-            "description": "Create a new Twilight wallet. Returns the Twilight address, \
-                            BTC bridge address, and mnemonic. Store the mnemonic safely – \
-                            it will not be shown again.",
-            "inputSchema": { "type": "object", "properties": {}, "required": [] }
-        },
-        {
-            "name": "wallet_import",
-            "description": "Import a wallet from a BIP-39 mnemonic phrase.",
+            "description": "Create a new Twilight wallet. Returns the Twilight address and \
+                            BTC bridge address. The mnemonic is printed once to the terminal \
+                            that started this server – save it securely. \
+                            Provide wallet_id (and optionally password) to persist the wallet \
+                            to the local database for future use.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "mnemonic": { "type": "string", "description": "BIP-39 mnemonic (12 or 24 words)" }
+                    "wallet_id": { "type": "string", "description": "Optional wallet ID for DB persistence" },
+                    "password":  { "type": "string", "description": "DB encryption password (optional if session password is set)" }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "wallet_import",
+            "description": "Import a wallet from a BIP-39 mnemonic phrase. \
+                            Provide wallet_id (and optionally password) to persist the wallet \
+                            to the local database.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mnemonic":  { "type": "string", "description": "BIP-39 mnemonic (12 or 24 words)" },
+                    "wallet_id": { "type": "string", "description": "Optional wallet ID for DB persistence" },
+                    "password":  { "type": "string", "description": "DB encryption password (optional)" }
                 },
                 "required": ["mnemonic"]
             }
@@ -388,6 +407,158 @@ fn tools_list() -> Value {
                 },
                 "required": ["wallet_id"]
             }
+        },
+
+        // ── Extended market analytics ──────────────────────────────────────
+        {
+            "name": "market_stats",
+            "description": "Get comprehensive market statistics including open interest, \
+                            volume, funding, liquidation risk parameters, and 24-hour metrics.",
+            "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+            "name": "market_open_interest",
+            "description": "Get current open interest: total long and short exposure in BTC.",
+            "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+            "name": "market_server_time",
+            "description": "Get the relayer server's current UTC timestamp. \
+                            Useful for health-checks and verifying connectivity.",
+            "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+            "name": "market_candles",
+            "description": "Get OHLCV candlestick data. \
+                            interval: ONE_MINUTE | FIVE_MINUTE | FIFTEEN_MINUTE | THIRTY_MINUTE | ONE_HOUR | FOUR_HOUR | EIGHT_HOUR | TWELVE_HOUR | ONE_DAY. \
+                            since: ISO-8601 timestamp (default: 24 h ago). \
+                            limit: number of candles to return (default: 100).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "interval": {
+                        "type": "string",
+                        "enum": ["ONE_MINUTE","FIVE_MINUTE","FIFTEEN_MINUTE","THIRTY_MINUTE",
+                                 "ONE_HOUR","FOUR_HOUR","EIGHT_HOUR","TWELVE_HOUR","ONE_DAY"],
+                        "default": "ONE_HOUR"
+                    },
+                    "since": { "type": "string", "description": "ISO-8601 start timestamp (optional)" },
+                    "limit": { "type": "integer", "default": 100 },
+                    "offset": { "type": "integer", "default": 0 }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "market_historical_price",
+            "description": "Get historical BTC/USD price snapshots for a time range.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "string", "description": "ISO-8601 start timestamp (default: 24 h ago)" },
+                    "to":   { "type": "string", "description": "ISO-8601 end timestamp (default: now)" },
+                    "limit":  { "type": "integer", "default": 100 },
+                    "offset": { "type": "integer", "default": 0 }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "market_historical_funding",
+            "description": "Get historical perpetual funding-rate entries for a time range.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "string", "description": "ISO-8601 start timestamp (default: 24 h ago)" },
+                    "to":   { "type": "string", "description": "ISO-8601 end timestamp (default: now)" },
+                    "limit":  { "type": "integer", "default": 100 },
+                    "offset": { "type": "integer", "default": 0 }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "market_pool_share",
+            "description": "Get the current value of one lending-pool share in satoshis.",
+            "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+            "name": "market_apy",
+            "description": "Get the last-24-hour annualised percentage yield (APY) for the lending pool.",
+            "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+            "name": "market_apy_chart",
+            "description": "Get APY chart data for the lending pool. \
+                            range: e.g. '7d', '30d', '90d' (default: '7d').",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "range": { "type": "string", "description": "Time range, e.g. '7d', '30d'", "default": "7d" },
+                    "step":  { "type": "string", "description": "Bucket step (optional)" },
+                    "lookback": { "type": "string", "description": "Lookback window (optional)" }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "market_account_summary",
+            "description": "Get trading activity summary for a specific Twilight address \
+                            (settled/filled/liquidated position sizes and counts).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "twilight_address": { "type": "string", "description": "Bech32 Twilight address" },
+                    "wallet_id": { "type": "string", "description": "Wallet ID (used to look up address if twilight_address not given)" },
+                    "password": { "type": "string" }
+                },
+                "required": []
+            }
+        },
+
+        // ── Extended order / account operations ────────────────────────────
+        {
+            "name": "order_transfer",
+            "description": "Re-anonymise a ZkOS trading account by performing a private \
+                            account-to-account transfer on-chain. Returns the new account index. \
+                            The old account is spent; the same balance appears at the new index.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "account_index": { "type": "integer", "description": "Source ZkOS account index" },
+                    "wallet_id": { "type": "string" },
+                    "password": { "type": "string" }
+                },
+                "required": ["account_index"]
+            }
+        },
+
+        // ── Extended portfolio queries ──────────────────────────────────────
+        {
+            "name": "portfolio_position_pnl",
+            "description": "Get detailed PnL and risk metrics for a single open trading position.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "account_index": { "type": "integer" },
+                    "wallet_id": { "type": "string" },
+                    "password": { "type": "string" }
+                },
+                "required": ["account_index"]
+            }
+        },
+        {
+            "name": "portfolio_lend_pnl",
+            "description": "Get detailed PnL and APR metrics for a single active lending position.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "account_index": { "type": "integer" },
+                    "wallet_id": { "type": "string" },
+                    "password": { "type": "string" }
+                },
+                "required": ["account_index"]
+            }
         }
     ])
 }
@@ -413,6 +584,32 @@ fn relayer_client() -> Result<RelayerJsonRpcClient, String> {
     let endpoint = std::env::var("RELAYER_API_RPC_SERVER_URL")
         .unwrap_or_else(|_| "http://0.0.0.0:8088/api".to_string());
     RelayerJsonRpcClient::new(&endpoint).map_err(|e| e.to_string())
+}
+
+fn parse_interval(s: &str) -> Result<Interval, String> {
+    match s.to_uppercase().as_str() {
+        "ONE_MINUTE"     | "1M"  | "1MIN"  => Ok(Interval::ONE_MINUTE),
+        "FIVE_MINUTE"    | "5M"  | "5MIN"  => Ok(Interval::FIVE_MINUTE),
+        "FIFTEEN_MINUTE" | "15M" | "15MIN" => Ok(Interval::FIFTEEN_MINUTE),
+        "THIRTY_MINUTE"  | "30M" | "30MIN" => Ok(Interval::THIRTY_MINUTE),
+        "ONE_HOUR"       | "1H"            => Ok(Interval::ONE_HOUR),
+        "FOUR_HOUR"      | "4H"            => Ok(Interval::FOUR_HOUR),
+        "EIGHT_HOUR"     | "8H"            => Ok(Interval::EIGHT_HOUR),
+        "TWELVE_HOUR"    | "12H"           => Ok(Interval::TWELVE_HOUR),
+        "ONE_DAY"        | "1D"  | "DAY"   => Ok(Interval::ONE_DAY),
+        other => Err(format!(
+            "Unknown interval '{other}'. Use ONE_MINUTE, FIVE_MINUTE, FIFTEEN_MINUTE, \
+             THIRTY_MINUTE, ONE_HOUR, FOUR_HOUR, EIGHT_HOUR, TWELVE_HOUR, or ONE_DAY"
+        )),
+    }
+}
+
+/// Parse an optional ISO-8601 string argument, falling back to `default_fn()`.
+fn arg_datetime(args: &Value, key: &str, default_fn: impl Fn() -> DateTime<Utc>) -> DateTime<Utc> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+        .unwrap_or_else(default_fn)
 }
 
 fn parse_order_type(
@@ -532,13 +729,36 @@ async fn call_tool(state: Arc<ServerState>, name: &str, args: &Value) -> Value {
 
         // ── Wallet management ───────────────────────────────────────────────
         "wallet_create" => {
+            let wallet_id = arg_str(args, "wallet_id");
+            let pwd = state.resolve_password(arg_str(args, "password")).await;
             match OrderWallet::new(None) {
                 Err(e) => tool_err(e.to_string()),
-                Ok(ow) => {
-                    // Mnemonic is printed to tty in the library; capture the addresses here.
+                Ok(mut ow) => {
+                    // Optionally persist to database when wallet_id is provided.
+                    #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+                    if let Some(ref wid) = wallet_id {
+                        let pwd_secret = pwd.as_deref().map(|p| SecretString::new(p.into()));
+                        match ow.with_db(pwd_secret, Some(wid.clone())) {
+                            Err(e) => return tool_err(format!("DB setup failed: {e}")),
+                            Ok(persisted) => {
+                                if let Err(e) = persisted.save_order_wallet_to_db() {
+                                    return tool_err(format!("DB save failed: {e}"));
+                                }
+                                return tool_ok(serde_json::to_string_pretty(&json!({
+                                    "twilight_address": persisted.wallet.twilightaddress,
+                                    "btc_address": persisted.wallet.btc_address,
+                                    "wallet_id": wid,
+                                    "persisted": true,
+                                    "note": "The mnemonic was printed to the terminal that started this MCP server. \
+                                             Save it securely – it will not be shown again."
+                                })).unwrap());
+                            }
+                        }
+                    }
                     tool_ok(serde_json::to_string_pretty(&json!({
                         "twilight_address": ow.wallet.twilightaddress,
                         "btc_address": ow.wallet.btc_address,
+                        "persisted": false,
                         "note": "The mnemonic was printed to the terminal that started this MCP server. \
                                  Save it securely – it will not be shown again."
                     })).unwrap())
@@ -550,12 +770,35 @@ async fn call_tool(state: Arc<ServerState>, name: &str, args: &Value) -> Value {
             match arg_str(args, "mnemonic") {
                 None => tool_err("Missing required argument: mnemonic"),
                 Some(mnemonic) => {
+                    let wallet_id = arg_str(args, "wallet_id");
+                    let pwd = state.resolve_password(arg_str(args, "password")).await;
                     match OrderWallet::import_from_mnemonic(mnemonic.trim(), None) {
                         Err(e) => tool_err(e.to_string()),
-                        Ok(ow) => tool_ok(serde_json::to_string_pretty(&json!({
-                            "twilight_address": ow.wallet.twilightaddress,
-                            "btc_address": ow.wallet.btc_address,
-                        })).unwrap()),
+                        Ok(mut ow) => {
+                            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+                            if let Some(ref wid) = wallet_id {
+                                let pwd_secret = pwd.as_deref().map(|p| SecretString::new(p.into()));
+                                match ow.with_db(pwd_secret, Some(wid.clone())) {
+                                    Err(e) => return tool_err(format!("DB setup failed: {e}")),
+                                    Ok(persisted) => {
+                                        if let Err(e) = persisted.save_order_wallet_to_db() {
+                                            return tool_err(format!("DB save failed: {e}"));
+                                        }
+                                        return tool_ok(serde_json::to_string_pretty(&json!({
+                                            "twilight_address": persisted.wallet.twilightaddress,
+                                            "btc_address": persisted.wallet.btc_address,
+                                            "wallet_id": wid,
+                                            "persisted": true,
+                                        })).unwrap());
+                                    }
+                                }
+                            }
+                            tool_ok(serde_json::to_string_pretty(&json!({
+                                "twilight_address": ow.wallet.twilightaddress,
+                                "btc_address": ow.wallet.btc_address,
+                                "persisted": false,
+                            })).unwrap())
+                        }
                     }
                 }
             }
@@ -911,6 +1154,177 @@ async fn call_tool(state: Arc<ServerState>, name: &str, args: &Value) -> Value {
                     match ow.get_transfer_history(filter) {
                         Err(e) => tool_err(e.to_string()),
                         Ok(entries) => tool_json(&entries),
+                    }
+                }
+            }
+        }
+
+        // ── Extended market analytics ────────────────────────────────────────
+        "market_stats" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            match c.get_market_stats().await {
+                Ok(s) => tool_json(&s),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        "market_open_interest" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            match c.open_interest().await {
+                Ok(oi) => tool_json(&oi),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        "market_server_time" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            match c.server_time().await {
+                Ok(t) => tool_ok(t.to_rfc3339()),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        "market_candles" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            let interval_str = arg_str(args, "interval").unwrap_or_else(|| "ONE_HOUR".to_string());
+            let interval = match parse_interval(&interval_str) {
+                Err(e) => return tool_err(e),
+                Ok(i) => i,
+            };
+            let since = arg_datetime(args, "since", || Utc::now() - Duration::hours(24));
+            let limit  = arg_u64(args, "limit").unwrap_or(100) as i64;
+            let offset = arg_u64(args, "offset").unwrap_or(0) as i64;
+            let params = Candles { interval, since, limit, offset };
+            match c.candle_data(params).await {
+                Ok(candles) => tool_json(&candles),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        "market_historical_price" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            let from   = arg_datetime(args, "from", || Utc::now() - Duration::hours(24));
+            let to     = arg_datetime(args, "to",   || Utc::now());
+            let limit  = arg_u64(args, "limit").unwrap_or(100) as i64;
+            let offset = arg_u64(args, "offset").unwrap_or(0) as i64;
+            let params = HistoricalPriceArgs { from, to, limit, offset };
+            match c.historical_price(params).await {
+                Ok(prices) => tool_json(&prices),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        "market_historical_funding" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            let from   = arg_datetime(args, "from", || Utc::now() - Duration::hours(24));
+            let to     = arg_datetime(args, "to",   || Utc::now());
+            let limit  = arg_u64(args, "limit").unwrap_or(100) as i64;
+            let offset = arg_u64(args, "offset").unwrap_or(0) as i64;
+            let params = HistoricalFundingArgs { from, to, limit, offset };
+            match c.historical_funding_rate(params).await {
+                Ok(entries) => tool_json(&entries),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        "market_pool_share" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            match c.pool_share_value().await {
+                Ok(v) => tool_ok(serde_json::to_string_pretty(&json!({ "pool_share_value_sats": v })).unwrap()),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        "market_apy" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            match c.last_day_apy().await {
+                Ok(apy) => tool_ok(serde_json::to_string_pretty(&json!({ "apy_24h": apy })).unwrap()),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        "market_apy_chart" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            let range    = arg_str(args, "range").unwrap_or_else(|| "7d".to_string());
+            let step     = arg_str(args, "step");
+            let lookback = arg_str(args, "lookback");
+            let params = ApyChartArgs { range, step, lookback };
+            match c.apy_chart(params).await {
+                Ok(points) => tool_json(&points),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        "market_account_summary" => {
+            let c = match relayer_client() { Err(e) => return tool_err(e), Ok(c) => c };
+            // Resolve address: explicit arg wins, then look it up from wallet.
+            let t_address = if let Some(addr) = arg_str(args, "twilight_address") {
+                addr
+            } else {
+                let pwd = state.resolve_password(arg_str(args, "password")).await;
+                match load_wallet(arg_str(args, "wallet_id"), pwd).await {
+                    Err(e) => return tool_err(e),
+                    Ok(ow) => ow.wallet.twilightaddress.clone(),
+                }
+            };
+            let params = AccountSummaryArgs { t_address, from: None, to: None, since: None };
+            match c.account_summary_by_twilight_address(params).await {
+                Ok(summary) => tool_json(&summary),
+                Err(e) => tool_err(e.to_string()),
+            }
+        }
+
+        // ── Extended order / account operations ─────────────────────────────
+        "order_transfer" => {
+            let account_index = match arg_u64(args, "account_index") {
+                None => return tool_err("Missing required argument: account_index"),
+                Some(i) => i,
+            };
+            let pwd = state.resolve_password(arg_str(args, "password")).await;
+            match load_wallet(arg_str(args, "wallet_id"), pwd).await {
+                Err(e) => tool_err(e),
+                Ok(mut ow) => {
+                    match ow.trading_to_trading(account_index).await {
+                        Err(e) => tool_err(e.to_string()),
+                        Ok(new_index) => tool_ok(serde_json::to_string_pretty(&json!({
+                            "old_account_index": account_index,
+                            "new_account_index": new_index,
+                        })).unwrap()),
+                    }
+                }
+            }
+        }
+
+        // ── Extended portfolio queries ───────────────────────────────────────
+        "portfolio_position_pnl" => {
+            let account_index = match arg_u64(args, "account_index") {
+                None => return tool_err("Missing required argument: account_index"),
+                Some(i) => i,
+            };
+            let pwd = state.resolve_password(arg_str(args, "password")).await;
+            match load_wallet(arg_str(args, "wallet_id"), pwd).await {
+                Err(e) => tool_err(e),
+                Ok(mut ow) => {
+                    match ow.get_position_pnl(account_index).await {
+                        Err(e) => tool_err(e.to_string()),
+                        Ok(summary) => tool_json(&summary),
+                    }
+                }
+            }
+        }
+
+        "portfolio_lend_pnl" => {
+            let account_index = match arg_u64(args, "account_index") {
+                None => return tool_err("Missing required argument: account_index"),
+                Some(i) => i,
+            };
+            let pwd = state.resolve_password(arg_str(args, "password")).await;
+            match load_wallet(arg_str(args, "wallet_id"), pwd).await {
+                Err(e) => tool_err(e),
+                Ok(mut ow) => {
+                    match ow.get_lend_position_pnl(account_index).await {
+                        Err(e) => tool_err(e.to_string()),
+                        Ok(summary) => tool_json(&summary),
                     }
                 }
             }
