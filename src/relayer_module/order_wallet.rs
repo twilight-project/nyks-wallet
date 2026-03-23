@@ -677,10 +677,6 @@ impl OrderWallet {
         if updated_sender_balance > 0 {
             self.zk_accounts
                 .update_balance(&sender_account_index, updated_sender_balance)?;
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Ok(account) = self.zk_accounts.get_account(&sender_account_index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
             let utxo_detail = fetch_utxo_details_with_retry(
                 self.zk_accounts
                     .get_account_address(&sender_account_index)?,
@@ -692,6 +688,10 @@ impl OrderWallet {
             let account = utxo_detail.output.to_quisquis_account()?;
             self.zk_accounts
                 .update_qq_account(&sender_account_index, account)?;
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            if let Ok(account) = self.zk_accounts.get_account(&sender_account_index) {
+                let _ = self.update_zk_account_in_db(&account);
+            }
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             if let Err(e) = self.sync_utxo_detail_to_db(sender_account_index, &utxo_detail) {
                 error!("Failed to sync UTXO detail to database: {}", e);
@@ -1497,6 +1497,8 @@ impl OrderWallet {
         self.zk_accounts.update_balance(&index, balance)?;
         debug!("lend_order balance: {:?}", balance);
         self.zk_accounts.update_io_type(&index, IOType::Coin)?;
+        let account = utxo_detail.output.to_quisquis_account()?;
+        self.zk_accounts.update_qq_account(&index, account)?;
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         {

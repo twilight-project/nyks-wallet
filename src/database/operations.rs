@@ -13,8 +13,8 @@ use crate::wallet::Wallet;
 use crate::zkos_accounts::zkaccount::ZkAccount;
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use aes_gcm::{
-    Aes256Gcm, Key, Nonce,
     aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
 };
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use diesel::prelude::*;
@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use crate::database::connection::{DbPool, get_conn};
+use crate::database::connection::{get_conn, DbPool};
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use chrono::NaiveDateTime;
@@ -78,6 +78,9 @@ impl DatabaseManager {
                 zk_accounts::io_type_value.eq(new_account.io_type_value),
                 zk_accounts::on_chain.eq(new_account.on_chain),
                 zk_accounts::updated_at.eq(new_account.updated_at),
+                zk_accounts::scalar.eq(zk_account.scalar.clone()),
+                zk_accounts::account.eq(zk_account.account.clone()),
+                zk_accounts::qq_address.eq(zk_account.qq_address.clone()),
             ))
             .execute(&mut conn)
             .map_err(|e| format!("Failed to save zk_account: {}", e))?;
@@ -103,6 +106,9 @@ impl DatabaseManager {
             zk_accounts::io_type_value.eq(zk_account.io_type.clone() as i32),
             zk_accounts::on_chain.eq(zk_account.on_chain),
             zk_accounts::updated_at.eq(now),
+            zk_accounts::scalar.eq(zk_account.scalar.clone()),
+            zk_accounts::account.eq(zk_account.account.clone()),
+            zk_accounts::qq_address.eq(zk_account.qq_address.clone()),
         ))
         .execute(&mut conn)
         .map_err(|e| format!("Failed to update zk_account: {}", e))?;
