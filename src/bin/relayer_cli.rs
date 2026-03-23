@@ -1326,7 +1326,7 @@ async fn main() {
         Commands::Zkaccount(cmd) => handle_zkaccount(cmd).await,
         Commands::Order(cmd) => handle_order(cmd, json_output).await,
         Commands::Market(cmd) => handle_market(cmd, json_output).await,
-        Commands::History(cmd) => handle_history(cmd).await,
+        Commands::History(cmd) => handle_history(cmd, json_output).await,
         Commands::Portfolio(cmd) => handle_portfolio(cmd, json_output).await,
         Commands::Help { command } => {
             match command {
@@ -1338,8 +1338,8 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        error!("{}", e);
-        // eprintln!("Error: {e}");
+        // error!("{}", e);
+        eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
@@ -1437,7 +1437,7 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             println!("Note: If the BTC address above is not the one you use, update it with:");
             println!("  relayer-cli wallet update-btc-address --btc-address <your-bc1-address> --wallet-id <your_wallet_id>");
             println!();
-            println!("Tip: To avoid typing --password on every command, cache it for this terminal session:");
+            println!("Tip: To avoid typing --wallet-id and --password on every command, run:");
             println!("  relayer-cli wallet unlock");
             Ok(())
         }
@@ -2014,14 +2014,20 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            println!(
-                "Opening {side} {order_type} order on account {account_index} (price={entry_price}, leverage={leverage}x)..."
-            );
+            if !json_output {
+                println!(
+                    "Opening {side} {order_type} order on account {account_index} (price={entry_price}, leverage={leverage}x)..."
+                );
+            }
             let request_id = ow
                 .open_trader_order(account_index, ot, ps, entry_price, leverage)
                 .await?;
-            println!("Order submitted successfully");
-            println!("  Request ID: {request_id}");
+            if json_output {
+                println!("{}", serde_json::json!({"request_id": request_id}));
+            } else {
+                println!("Order submitted successfully");
+                println!("  Request ID: {request_id}");
+            }
             Ok(())
         }
 
@@ -2039,7 +2045,9 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            println!("Closing trader order on account {account_index}...");
+            if !json_output {
+                println!("Closing trader order on account {account_index}...");
+            }
 
             let request_id = if stop_loss.is_some() || take_profit.is_some() {
                 let ot = parse_order_type("SLTP")?;
@@ -2057,8 +2065,12 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
                     .await?
             };
 
-            println!("Order closed successfully");
-            println!("  Request ID: {request_id}");
+            if json_output {
+                println!("{}", serde_json::json!({"request_id": request_id}));
+            } else {
+                println!("Order closed successfully");
+                println!("  Request ID: {request_id}");
+            }
             Ok(())
         }
 
@@ -2072,10 +2084,16 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            println!("Cancelling trader order on account {account_index}...");
+            if !json_output {
+                println!("Cancelling trader order on account {account_index}...");
+            }
             let request_id = ow.cancel_trader_order(account_index).await?;
-            println!("Order cancelled successfully");
-            println!("  Request ID: {request_id}");
+            if json_output {
+                println!("{}", serde_json::json!({"request_id": request_id}));
+            } else {
+                println!("Order cancelled successfully");
+                println!("  Request ID: {request_id}");
+            }
             Ok(())
         }
 
@@ -2090,11 +2108,18 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
             let order = ow.query_trader_order_v1(account_index).await?;
-            println!("Trader Order (account {account_index})");
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&order).unwrap_or_else(|_| format!("{:?}", order))
-            );
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&order).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("Trader Order (account {account_index})");
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&order).unwrap_or_else(|_| format!("{:?}", order))
+                );
+            }
             Ok(())
         }
 
@@ -2108,10 +2133,16 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            println!("Opening lend order on account {account_index}...");
+            if !json_output {
+                println!("Opening lend order on account {account_index}...");
+            }
             let request_id = ow.open_lend_order(account_index).await?;
-            println!("Lend order submitted successfully");
-            println!("  Request ID: {request_id}");
+            if json_output {
+                println!("{}", serde_json::json!({"request_id": request_id}));
+            } else {
+                println!("Lend order submitted successfully");
+                println!("  Request ID: {request_id}");
+            }
             Ok(())
         }
 
@@ -2125,10 +2156,16 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            println!("Closing lend order on account {account_index}...");
+            if !json_output {
+                println!("Closing lend order on account {account_index}...");
+            }
             let request_id = ow.close_lend_order(account_index).await?;
-            println!("Lend order closed successfully");
-            println!("  Request ID: {request_id}");
+            if json_output {
+                println!("{}", serde_json::json!({"request_id": request_id}));
+            } else {
+                println!("Lend order closed successfully");
+                println!("  Request ID: {request_id}");
+            }
             Ok(())
         }
 
@@ -2143,18 +2180,25 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
             let status = ow.unlock_settled_order(account_index).await?;
-            match status {
-                OrderStatus::SETTLED => {
-                    println!(
-                        "Account {} unlocked successfully (order settled).",
-                        account_index
-                    );
-                }
-                _ => {
-                    println!(
-                        "Account {} not yet settled (current status: {:?}). No changes made.",
-                        account_index, status
-                    );
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::json!({"account_index": account_index, "status": format!("{:?}", status)})
+                );
+            } else {
+                match status {
+                    OrderStatus::SETTLED => {
+                        println!(
+                            "Account {} unlocked successfully (order settled).",
+                            account_index
+                        );
+                    }
+                    _ => {
+                        println!(
+                            "Account {} not yet settled (current status: {:?}). No changes made.",
+                            account_index, status
+                        );
+                    }
                 }
             }
             Ok(())
@@ -2171,11 +2215,18 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
             let order = ow.query_lend_order_v1(account_index).await?;
-            println!("Lend Order (account {account_index})");
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&order).unwrap_or_else(|_| format!("{:?}", order))
-            );
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&order).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("Lend Order (account {account_index})");
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&order).unwrap_or_else(|_| format!("{:?}", order))
+                );
+            }
             Ok(())
         }
 
@@ -2442,10 +2493,10 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
 // History handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
+async fn handle_history(cmd: HistoryCmd, json_output: bool) -> Result<(), String> {
     #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
     {
-        let _ = cmd;
+        let _ = (cmd, json_output);
         return Err(
             "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
                 .to_string(),
@@ -2470,6 +2521,14 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
                 offset: Some(offset),
             };
             let entries = ow.get_order_history(filter)?;
+
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
 
             if entries.is_empty() {
                 println!("No order history found");
@@ -2514,6 +2573,14 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
             };
             let entries = ow.get_transfer_history(filter)?;
 
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
+
             if entries.is_empty() {
                 println!("No transfer history found");
             } else {
@@ -2548,7 +2615,7 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
 // Portfolio handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_portfolio(cmd: PortfolioCmd, _json_output: bool) -> Result<(), String> {
+async fn handle_portfolio(cmd: PortfolioCmd, json_output: bool) -> Result<(), String> {
     match cmd {
         PortfolioCmd::Summary {
             wallet_id,
@@ -2560,6 +2627,14 @@ async fn handle_portfolio(cmd: PortfolioCmd, _json_output: bool) -> Result<(), S
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
             let portfolio = ow.get_portfolio_summary().await?;
+
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&portfolio).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
 
             // Extract mark price from the first trader position (same for all).
             let mark_price = portfolio.trader_positions.first().map(|p| p.current_price);
@@ -2763,13 +2838,22 @@ async fn handle_portfolio(cmd: PortfolioCmd, _json_output: bool) -> Result<(), S
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
+            let balances = ow.get_account_balances();
+
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&balances).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
+
             let (unit_label, divisor): (&str, f64) = match unit.to_lowercase().as_str() {
                 "mbtc" => ("mBTC", 100_000.0),
                 "btc" => ("BTC", 100_000_000.0),
                 _ => ("sats", 1.0),
             };
 
-            let balances = ow.get_account_balances();
             if balances.is_empty() {
                 println!("No ZkOS accounts found");
             } else {
@@ -2831,6 +2915,15 @@ async fn handle_portfolio(cmd: PortfolioCmd, _json_output: bool) -> Result<(), S
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
             let risks = ow.get_liquidation_risks().await?;
+
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&risks).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
+
             if risks.is_empty() {
                 println!("No open positions with liquidation risk");
             } else {
@@ -2877,9 +2970,16 @@ async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> 
     match cmd {
         MarketCmd::Price => {
             let price = client.btc_usd_price().await.map_err(|e| e.to_string())?;
-            println!("BTC/USD Price");
-            println!("  Price:     ${:.2}", price.price);
-            println!("  Timestamp: {}", price.timestamp);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&price).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("BTC/USD Price");
+                println!("  Price:     ${:.2}", price.price);
+                println!("  Timestamp: {}", price.timestamp);
+            }
         }
 
         MarketCmd::Orderbook => {
@@ -2887,35 +2987,56 @@ async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> 
                 .open_limit_orders()
                 .await
                 .map_err(|e| e.to_string())?;
-            println!("Order Book");
-            println!("\n  BIDS (buy):");
-            println!("  {:<16} {:<16}", "PRICE", "SIZE");
-            for bid in &book.bid {
-                println!("  {:<16.2} {:<16.4}", bid.price, bid.positionsize);
-            }
-            println!("\n  ASKS (sell):");
-            println!("  {:<16} {:<16}", "PRICE", "SIZE");
-            for ask in &book.ask {
-                println!("  {:<16.2} {:<16.4}", ask.price, ask.positionsize);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&book).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("Order Book");
+                println!("\n  BIDS (buy):");
+                println!("  {:<16} {:<16}", "PRICE", "SIZE");
+                for bid in &book.bid {
+                    println!("  {:<16.2} {:<16.4}", bid.price, bid.positionsize);
+                }
+                println!("\n  ASKS (sell):");
+                println!("  {:<16} {:<16}", "PRICE", "SIZE");
+                for ask in &book.ask {
+                    println!("  {:<16.2} {:<16.4}", ask.price, ask.positionsize);
+                }
             }
         }
 
         MarketCmd::FundingRate => {
             let rate = client.get_funding_rate().await.map_err(|e| e.to_string())?;
-            println!("Funding Rate");
-            println!("  Rate:      {:.6}%", rate.rate);
-            println!("  BTC price: ${:.2}", rate.btc_price);
-            println!("  Timestamp: {}", rate.timestamp);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&rate).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("Funding Rate");
+                println!("  Rate:      {:.6}%", rate.rate);
+                println!("  BTC price: ${:.2}", rate.btc_price);
+                println!("  Timestamp: {}", rate.timestamp);
+            }
         }
 
         MarketCmd::FeeRate => {
             let fee = client.get_fee_rate().await.map_err(|e| e.to_string())?;
-            println!("Fee Rate");
-            println!("  Market fill: {:.6}", fee.order_filled_on_market);
-            println!("  Limit fill:  {:.6}", fee.order_filled_on_limit);
-            println!("  Market settle: {:.6}", fee.order_settled_on_market);
-            println!("  Limit settle:  {:.6}", fee.order_settled_on_limit);
-            println!("  Timestamp:   {}", fee.timestamp);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&fee).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("Fee Rate");
+                println!("  Market fill: {:.6}", fee.order_filled_on_market);
+                println!("  Limit fill:  {:.6}", fee.order_filled_on_limit);
+                println!("  Market settle: {:.6}", fee.order_settled_on_market);
+                println!("  Limit settle:  {:.6}", fee.order_settled_on_limit);
+                println!("  Timestamp:   {}", fee.timestamp);
+            }
         }
 
         MarketCmd::RecentTrades => {
@@ -2923,67 +3044,110 @@ async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> 
                 .recent_trade_orders()
                 .await
                 .map_err(|e| e.to_string())?;
-            println!("Recent Trades");
-            println!(
-                "  {:<38} {:<8} {:<14} {:<12}",
-                "ORDER ID", "SIDE", "PRICE", "SIZE"
-            );
-            println!("  {}", "-".repeat(76));
-            for t in &trades.orders {
+            if json_output {
                 println!(
-                    "  {:<38} {:<8} {:<14.2} {:<12.4}",
-                    t.order_id,
-                    format!("{:?}", t.side),
-                    t.price,
-                    t.positionsize,
+                    "{}",
+                    serde_json::to_string_pretty(&trades).map_err(|e| e.to_string())?
                 );
+            } else {
+                println!("Recent Trades");
+                println!(
+                    "  {:<38} {:<8} {:<14} {:<12}",
+                    "ORDER ID", "SIDE", "PRICE", "SIZE"
+                );
+                println!("  {}", "-".repeat(76));
+                for t in &trades.orders {
+                    println!(
+                        "  {:<38} {:<8} {:<14.2} {:<12.4}",
+                        t.order_id,
+                        format!("{:?}", t.side),
+                        t.price,
+                        t.positionsize,
+                    );
+                }
             }
         }
 
         MarketCmd::PositionSize => {
             let ps = client.position_size().await.map_err(|e| e.to_string())?;
-            println!("Position Size");
-            println!("  Total long:  {:.4}", ps.total_long_position_size);
-            println!("  Total short: {:.4}", ps.total_short_position_size);
-            println!("  Total:       {:.4}", ps.total_position_size);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&ps).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("Position Size");
+                println!("  Total long:  {:.4}", ps.total_long_position_size);
+                println!("  Total short: {:.4}", ps.total_short_position_size);
+                println!("  Total:       {:.4}", ps.total_position_size);
+            }
         }
 
         MarketCmd::LendPool => {
             let info = client.lend_pool_info().await.map_err(|e| e.to_string())?;
-            println!("Lend Pool Info");
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info))
-            );
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&info).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("Lend Pool Info");
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&info).unwrap_or_else(|_| format!("{:?}", info))
+                );
+            }
         }
 
         MarketCmd::PoolShareValue => {
             let value = client.pool_share_value().await.map_err(|e| e.to_string())?;
-            println!("Pool Share Value");
-            println!("  Value: {:.8}", value);
+            if json_output {
+                println!("{}", serde_json::json!({"value": value}));
+            } else {
+                println!("Pool Share Value");
+                println!("  Value: {:.8}", value);
+            }
         }
 
         MarketCmd::LastDayApy => {
             let apy = client.last_day_apy().await.map_err(|e| e.to_string())?;
-            println!("Last 24h APY");
-            match apy {
-                Some(v) => println!("  APY: {:.4}%", v),
-                None => println!("  APY: not available"),
+            if json_output {
+                println!("{}", serde_json::json!({"apy": apy}));
+            } else {
+                println!("Last 24h APY");
+                match apy {
+                    Some(v) => println!("  APY: {:.4}%", v),
+                    None => println!("  APY: not available"),
+                }
             }
         }
 
         MarketCmd::OpenInterest => {
             let oi = client.open_interest().await.map_err(|e| e.to_string())?;
-            println!("Open Interest");
-            println!("  Long exposure:  {:.4} SATS", oi.long_exposure);
-            println!("  Short exposure: {:.4} SATS", oi.short_exposure);
-            if let Some(ts) = &oi.last_order_timestamp {
-                println!("  Last order:     {}", ts);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&oi).map_err(|e| e.to_string())?
+                );
+            } else {
+                println!("Open Interest");
+                println!("  Long exposure:  {:.4} SATS", oi.long_exposure);
+                println!("  Short exposure: {:.4} SATS", oi.short_exposure);
+                if let Some(ts) = &oi.last_order_timestamp {
+                    println!("  Last order:     {}", ts);
+                }
             }
         }
 
         MarketCmd::MarketStats => {
             let stats = client.get_market_stats().await.map_err(|e| e.to_string())?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&stats).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
             println!("Market Statistics");
             println!("{}", "=".repeat(45));
             println!("  Pool equity:       {:.4} SATS", stats.pool_equity_btc);
@@ -3026,8 +3190,12 @@ async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> 
 
         MarketCmd::ServerTime => {
             let time = client.server_time().await.map_err(|e| e.to_string())?;
-            println!("Server Time");
-            println!("  UTC: {}", time);
+            if json_output {
+                println!("{}", serde_json::json!({"utc": time.to_string()}));
+            } else {
+                println!("Server Time");
+                println!("  UTC: {}", time);
+            }
         }
 
         MarketCmd::HistoryPrice {

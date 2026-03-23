@@ -93,12 +93,22 @@ relayer-cli [--json] <COMMAND>
 
 ### Command Groups
 
-- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address
+- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce
 - `zkaccount` — fund, withdraw, transfer, and split ZkOS trading accounts
-- `order` — open/close/cancel/query trader and lend orders, history, funding, account summary, tx lookups
+- `order` — open/close/cancel/query trader and lend orders, unlock-trade, history-trade, history-lend, funding-history, account-summary, tx-hashes
 - `market` — query prices, orderbook, rates, historical data, candles, APY charts
 - `history` — view order and transfer history (requires DB)
 - `portfolio` — portfolio summary, balances (with unit conversion), liquidation risks
+- `help` — show help for the CLI or a specific command group
+
+### Built-in Help
+
+```bash
+relayer-cli help                # global overview
+relayer-cli help wallet         # wallet subcommands and examples
+relayer-cli help order          # order subcommands and examples
+relayer-cli help market         # market subcommands and examples
+```
 
 ---
 
@@ -299,7 +309,7 @@ relayer-cli wallet change-password --wallet-id my-wallet
 | ------------------ | --------------------------------------------------- |
 | `--wallet-id <ID>` | Wallet to change password for (falls back to `NYKS_WALLET_ID`) |
 
-If a session password cache exists, it is updated with the new password automatically.
+If a session cache exists, it is updated with the new password automatically.
 
 ### `wallet info`
 
