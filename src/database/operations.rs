@@ -246,7 +246,7 @@ impl DatabaseManager {
                 Ok(wallet)
             }
             None => Err(format!(
-                "No encrypted wallet found for wallet_id: {}",
+                "No encrypted wallet/password found for wallet_id: {}",
                 self.wallet_id
             )),
         }

@@ -195,11 +195,14 @@ enum WalletCmd {
         password: Option<String>,
     },
 
-    /// Unlock: prompt for password once and cache it for this terminal session.
-    /// Subsequent commands will use the cached password automatically.
+    /// Unlock: prompt for wallet ID and password, then cache both for this terminal session.
+    /// Subsequent commands will use the cached values automatically.
     /// The cache is invalidated when the terminal (shell) is closed.
     Unlock {
-        /// Overwrite an existing session password without error
+        /// Wallet ID to cache (prompts interactively if omitted)
+        #[arg(long)]
+        wallet_id: Option<String>,
+        /// Overwrite an existing session without error
         #[arg(long, default_value_t = false)]
         force: bool,
     },
@@ -947,9 +950,9 @@ fn session_file_path(ppid: u32) -> Option<std::path::PathBuf> {
     Some(session_dir()?.join(format!("session-{ppid}.lock")))
 }
 
-/// Save password to session cache, bound to the current shell (PPID).
+/// Save wallet_id and password to session cache, bound to the current shell (PPID).
 #[cfg(unix)]
-fn session_save(password: &str) -> Result<(), String> {
+fn session_save(wallet_id: &str, password: &str) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
@@ -961,7 +964,7 @@ fn session_save(password: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let path = session_file_path(ppid).ok_or("cannot build session file path")?;
-    let content = format!("{ppid}\n{password}");
+    let content = format!("{ppid}\n{wallet_id}\n{password}");
     // Create with 0o600 atomically to avoid a TOCTOU window where the file
     // is briefly world-readable under the default umask.
     let mut file = std::fs::OpenOptions::new()
@@ -977,9 +980,9 @@ fn session_save(password: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Load password from session cache; returns None if shell is gone or cache is missing.
+/// Load wallet_id and password from session cache; returns None if shell is gone or cache is missing.
 #[cfg(unix)]
-fn session_load() -> Option<String> {
+fn session_load() -> Option<(String, String)> {
     let ppid = get_ppid()?;
     if !is_process_alive(ppid) {
         session_clear_for(ppid); // clean up stale file
@@ -987,11 +990,26 @@ fn session_load() -> Option<String> {
     }
     let path = session_file_path(ppid)?;
     let content = std::fs::read_to_string(&path).ok()?;
-    let (stored, password) = content.split_once('\n')?;
+    let mut lines = content.splitn(3, '\n');
+    let stored = lines.next()?;
     if stored.trim().parse::<u32>().ok()? != ppid {
         return None; // sanity-check: file belongs to this shell
     }
-    Some(password.to_string())
+    let wallet_id = lines.next()?.to_string();
+    let password = lines.next()?.to_string();
+    Some((wallet_id, password))
+}
+
+/// Load only the password from session cache.
+#[cfg(unix)]
+fn session_load_password() -> Option<String> {
+    session_load().map(|(_, p)| p)
+}
+
+/// Load only the wallet_id from session cache.
+#[cfg(unix)]
+fn session_load_wallet_id() -> Option<String> {
+    session_load().map(|(w, _)| w)
 }
 
 /// Zeroize and delete the session file for the current shell.
@@ -1016,11 +1034,19 @@ fn session_clear_for(ppid: u32) {
 
 // Non-Unix stubs (Windows / wasm – session cache is a no-op there).
 #[cfg(not(unix))]
-fn session_save(_password: &str) -> Result<(), String> {
+fn session_save(_wallet_id: &str, _password: &str) -> Result<(), String> {
     Err("session cache is only supported on Unix".to_string())
 }
 #[cfg(not(unix))]
-fn session_load() -> Option<String> {
+fn session_load() -> Option<(String, String)> {
+    None
+}
+#[cfg(not(unix))]
+fn session_load_password() -> Option<String> {
+    None
+}
+#[cfg(not(unix))]
+fn session_load_wallet_id() -> Option<String> {
     None
 }
 #[cfg(not(unix))]
@@ -1030,16 +1056,18 @@ fn session_clear() {}
 // Password / wallet-ID resolution helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve password: CLI arg → `NYKS_WALLET_PASSPHRASE` env var → session cache → None.
+/// Resolve password: CLI flag → session cache → `NYKS_WALLET_PASSPHRASE` env var → None.
 fn resolve_password(password: Option<String>) -> Option<String> {
     password
+        .or_else(session_load_password)
         .or_else(|| std::env::var("NYKS_WALLET_PASSPHRASE").ok())
-        .or_else(session_load)
 }
 
-/// Resolve wallet_id: CLI arg → `NYKS_WALLET_ID` env var → None.
+/// Resolve wallet_id: CLI flag → session cache → `NYKS_WALLET_ID` env var → None.
 fn resolve_wallet_id(wallet_id: Option<String>) -> Option<String> {
-    wallet_id.or_else(|| std::env::var("NYKS_WALLET_ID").ok())
+    wallet_id
+        .or_else(session_load_wallet_id)
+        .or_else(|| std::env::var("NYKS_WALLET_ID").ok())
 }
 
 /// Resolve an `OrderWallet` – load from DB using wallet_id (arg or env).
@@ -1389,21 +1417,67 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             Ok(())
         }
 
-        WalletCmd::Unlock { force } => {
+        WalletCmd::Unlock { wallet_id, force } => {
             // If a session is already active, error unless --force.
             if session_load().is_some() && !force {
                 eprintln!(
-                    "A session password is already cached. Run `wallet lock` first or use `wallet unlock --force`."
+                    "A session is already cached. Run `wallet lock` first or use `wallet unlock --force`."
                 );
                 return Err("session already active".to_string());
             }
+
+            // Resolve wallet_id: flag → env → interactive prompt
+            let wid = if let Some(id) = wallet_id {
+                id
+            } else if let Ok(id) = std::env::var("NYKS_WALLET_ID") {
+                println!("Using wallet from NYKS_WALLET_ID: {}", id);
+                id
+            } else {
+                // List available wallets before prompting
+                #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+                {
+                    match OrderWallet::get_wallet_list_from_db(None) {
+                        Ok(wallets) if !wallets.is_empty() => {
+                            println!("Available wallets:");
+                            println!("{:<40} {:<20}", "WALLET ID", "CREATED AT");
+                            println!("{}", "-".repeat(60));
+                            for w in &wallets {
+                                println!("{:<40} {:<20}", w.wallet_id, w.created_at);
+                            }
+                            println!();
+                        }
+                        _ => {
+                            println!("No wallets found in database.\n");
+                        }
+                    }
+                }
+                let mut input = String::new();
+                eprint!("Wallet ID: ");
+                std::io::stdin()
+                    .read_line(&mut input)
+                    .map_err(|e| e.to_string())?;
+                let input = input.trim().to_string();
+                if input.is_empty() {
+                    return Err("wallet_id must not be empty".to_string());
+                }
+                input
+            };
+
             let password =
                 rpassword::prompt_password("Wallet password: ").map_err(|e| e.to_string())?;
             if password.is_empty() {
                 return Err("password must not be empty".to_string());
             }
-            session_save(&password)?;
-            println!("Password cached for this terminal session.");
+
+            // Verify the wallet_id + password combination before caching
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            {
+                load_order_wallet_from_db(&wid, Some(password.clone()), None)
+                    .map_err(|e| format!("Failed to unlock wallet '{}': {}", wid, e))?;
+            }
+
+            session_save(&wid, &password)?;
+            println!("Session cached for wallet '{}' in this terminal.", wid);
             println!("Run `wallet lock` to clear it, or just close the terminal.");
             Ok(())
         }
@@ -1448,7 +1522,7 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
             // Update session cache if one exists
             if session_load().is_some() {
-                session_save(new_secret.expose_secret())?;
+                session_save(&wid, new_secret.expose_secret())?;
             }
 
             println!("Password changed successfully for wallet '{}'.", wid);

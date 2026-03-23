@@ -75,9 +75,9 @@ Required for persisting wallets, ZkOS accounts, UTXOs, and order history.
 
 Most commands accept `--wallet-id` and `--password` flags. When omitted, the CLI resolves them through a fallback chain:
 
-**Wallet ID:** `--wallet-id` flag → `NYKS_WALLET_ID` env var → error.
+**Wallet ID:** `--wallet-id` flag → session cache (see `wallet unlock`) → `NYKS_WALLET_ID` env var → error.
 
-**Password:** `--password` flag → `NYKS_WALLET_PASSPHRASE` env var → session cache (see `wallet unlock`) → none.
+**Password:** `--password` flag → session cache (see `wallet unlock`) → `NYKS_WALLET_PASSPHRASE` env var → none.
 
 ## Usage
 
@@ -254,26 +254,34 @@ Output shows the next sequence number, cached account number, and count of relea
 
 ### `wallet unlock`
 
-Prompt for the database password once and cache it for the current terminal session. Subsequent commands in the same shell will use the cached password automatically, so you don't need to pass `--password` each time.
+Prompt for wallet ID and password, then cache both for the current terminal session. Subsequent commands in the same shell will use the cached values automatically, so you don't need to pass `--wallet-id` or `--password` each time.
 
-The cache is scoped to the parent shell process — closing the terminal invalidates it. Only one session password can be active at a time; use `--force` to overwrite an existing cached password, or run `wallet lock` first.
+Before prompting for the wallet ID, the CLI lists all available wallets in the database (similar to `wallet list`). You can also pass `--wallet-id` on the command line to skip the interactive prompt.
+
+The cache is scoped to the parent shell process — closing the terminal invalidates it. Only one session can be active at a time; use `--force` to overwrite an existing cached session, or run `wallet lock` first.
+
+Resolution priority for both wallet ID and password: `--flag` > session cache > environment variable.
 
 ```bash
 relayer-cli wallet unlock
-# Enter password at the secure prompt, then:
-relayer-cli wallet balance --wallet-id my-wallet   # no --password needed
+# Lists available wallets, prompts for wallet ID and password, then:
+relayer-cli wallet balance   # no --wallet-id or --password needed
 
-# Overwrite an existing session password
+# Pass wallet ID directly (skip interactive prompt)
+relayer-cli wallet unlock --wallet-id my-wallet
+
+# Overwrite an existing session
 relayer-cli wallet unlock --force
 ```
 
-| Flag      | Description                                          |
-| --------- | ---------------------------------------------------- |
-| `--force` | Overwrite an existing session password without error |
+| Flag          | Description                                        |
+| ------------- | -------------------------------------------------- |
+| `--wallet-id` | Wallet ID to cache (prompts interactively if omitted) |
+| `--force`     | Overwrite an existing session without error        |
 
 ### `wallet lock`
 
-Clear the cached session password immediately.
+Clear the cached session (wallet ID and password) immediately.
 
 ```bash
 relayer-cli wallet lock
@@ -327,7 +335,7 @@ relayer-cli wallet update-btc-address --btc-address bc1q... --wallet-id my-walle
 
 Manage ZkOS trading accounts — fund from on-chain, withdraw back, transfer between accounts, or split into multiple accounts.
 
-All zkaccount commands require `--wallet-id` (or the `NYKS_WALLET_ID` env var) to identify which wallet to use. `--password` falls back to `NYKS_WALLET_PASSPHRASE` env var or the session cache set by `wallet unlock`.
+All zkaccount commands require a wallet ID and password. Resolution priority: `--flag` > session cache (`wallet unlock`) > env var (`NYKS_WALLET_ID` / `NYKS_WALLET_PASSPHRASE`).
 
 ### `zkaccount fund`
 
@@ -406,7 +414,7 @@ At least one balance flag is required. All values are converted to satoshis inte
 
 ## Order Commands
 
-Trading and lending order commands. All order commands require `--wallet-id` (or the `NYKS_WALLET_ID` env var) to identify which wallet to use. `--password` falls back to `NYKS_WALLET_PASSPHRASE` env var or the session cache set by `wallet unlock`.
+Trading and lending order commands. All order commands require a wallet ID and password. Resolution priority: `--flag` > session cache (`wallet unlock`) > env var (`NYKS_WALLET_ID` / `NYKS_WALLET_PASSPHRASE`).
 
 ### `order open-trade`
 
