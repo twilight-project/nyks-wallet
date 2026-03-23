@@ -45,6 +45,12 @@ enum Commands {
     /// Portfolio and position tracking
     #[command(subcommand)]
     Portfolio(PortfolioCmd),
+
+    /// Show help for a command group (e.g. `help wallet`)
+    Help {
+        /// Command group to get help for (wallet, zkaccount, order, market, history, portfolio)
+        command: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -845,9 +851,7 @@ fn parse_datetime(s: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
     }
     // Try YYYY-MM-DD
     if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return Ok(
-            Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).ok_or("invalid date")?)
-        );
+        return Ok(Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).ok_or("invalid date")?));
     }
     Err(format!(
         "Invalid date '{}'. Use RFC3339 (2024-01-15T00:00:00Z) or YYYY-MM-DD (2024-01-15)",
@@ -856,9 +860,7 @@ fn parse_datetime(s: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
 }
 
 /// Parse a candle interval string into the Interval enum.
-fn parse_interval(
-    s: &str,
-) -> Result<nyks_wallet::relayer_module::relayer_types::Interval, String> {
+fn parse_interval(s: &str) -> Result<nyks_wallet::relayer_module::relayer_types::Interval, String> {
     use nyks_wallet::relayer_module::relayer_types::Interval;
     match s.to_lowercase().as_str() {
         "1m" | "1min" => Ok(Interval::ONE_MINUTE),
@@ -1080,9 +1082,230 @@ async fn resolve_order_wallet(
     password: Option<String>,
 ) -> Result<OrderWallet, String> {
     let wid = resolve_wallet_id(wallet_id)
-        .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID env var)")?;
+        .ok_or("wallet_id is required (pass --wallet-id, set NYKS_WALLET_ID env var, or run `wallet unlock`)")?;
     let pwd = resolve_password(password);
     load_order_wallet_from_db(&wid, pwd, None)
+}
+
+// ---------------------------------------------------------------------------
+// Help
+// ---------------------------------------------------------------------------
+
+fn print_global_help() {
+    println!(
+        r#"Twilight Relayer CLI — manage wallets and orders from the command line.
+
+USAGE:
+    relayer-cli [--json] <COMMAND>
+
+COMMANDS:
+    wallet      Wallet management (create, import, load, list, balance, accounts,
+                export, backup, restore, unlock/lock, change-password, info,
+                update-btc-address, sync-nonce)
+    zkaccount   ZkOS account operations (fund, withdraw, transfer, split)
+    order       Trading and lending orders (open/close/cancel/query trade & lend,
+                unlock-trade, history-trade, history-lend, funding-history,
+                account-summary, tx-hashes)
+    market      Market data (price, orderbook, funding-rate, fee-rate, recent-trades,
+                position-size, lend-pool, pool-share-value, last-day-apy,
+                open-interest, market-stats, server-time, history-price,
+                candles, history-funding, history-fees, apy-chart)
+    history     Local DB history (orders, transfers)
+    portfolio   Portfolio tracking (summary, balances, risks)
+
+GLOBAL FLAGS:
+    --json      Output results as JSON (for scripting)
+
+RESOLUTION PRIORITY (wallet-id & password):
+    --flag  >  session cache (wallet unlock)  >  env var
+
+ENVIRONMENT:
+    NYKS_WALLET_ID          Default wallet ID
+    NYKS_WALLET_PASSPHRASE  Default password
+
+Run `relayer-cli help <COMMAND>` for details on a specific command group."#
+    );
+}
+
+fn print_wallet_help() {
+    println!(
+        r#"Wallet management commands.
+
+USAGE:
+    relayer-cli wallet <SUBCOMMAND>
+
+SUBCOMMANDS:
+    create              Create a new wallet (persisted to DB)
+    import              Import wallet from BIP-39 mnemonic
+    load                Load a wallet from the database
+    list                List all wallets in the database
+    balance             Show wallet balance (on-chain query)
+    info                Show wallet info (no chain calls)
+    accounts            List all ZkOS accounts for a wallet
+    export              Export wallet to a JSON file
+    backup              Full database backup to JSON
+    restore             Restore wallet from backup JSON
+    unlock              Cache wallet-id + password for this terminal session
+    lock                Clear cached session
+    change-password     Change the DB encryption password
+    update-btc-address  Update the BTC deposit address
+    sync-nonce          Sync nonce/sequence from chain state
+
+EXAMPLES:
+    relayer-cli wallet create --btc-address bc1q...
+    relayer-cli wallet unlock                         # interactive prompt
+    relayer-cli wallet balance                        # uses session cache
+    relayer-cli wallet accounts --on-chain-only"#
+    );
+}
+
+fn print_zkaccount_help() {
+    println!(
+        r#"ZkOS account operations — fund, withdraw, transfer, and split trading accounts.
+
+USAGE:
+    relayer-cli zkaccount <SUBCOMMAND>
+
+SUBCOMMANDS:
+    fund        Fund a new ZkOS trading account from on-chain wallet
+    withdraw    Withdraw from ZkOS account back to on-chain wallet
+    transfer    Transfer balance between ZkOS trading accounts
+    split       Split one account into multiple new accounts
+
+AMOUNTS:
+    fund/split accept amounts in multiple units (pick one):
+        --amount <sats>           Satoshis
+        --amount-mbtc <mbtc>      Milli-BTC (1 mBTC = 100,000 sats)
+        --amount-btc <btc>        BTC (1 BTC = 100,000,000 sats)
+
+EXAMPLES:
+    relayer-cli zkaccount fund --amount 50000
+    relayer-cli zkaccount withdraw --account-index 1
+    relayer-cli zkaccount transfer --from 1
+    relayer-cli zkaccount split --from 0 --balances "10000,20000,30000""#
+    );
+}
+
+fn print_order_help() {
+    println!(
+        r#"Trading and lending order commands.
+
+USAGE:
+    relayer-cli order <SUBCOMMAND>
+
+TRADING:
+    open-trade          Open a leveraged position (MARKET/LIMIT)
+    close-trade         Close a position (MARKET/LIMIT/SLTP)
+    cancel-trade        Cancel a pending order
+    query-trade         Query current order status
+    unlock-trade        Reclaim account after SLTP settlement
+
+LENDING:
+    open-lend           Open a lend order
+    close-lend          Close a lend order
+    query-lend          Query lend order status
+
+HISTORY & ANALYTICS (from relayer):
+    history-trade       Historical trader orders for an account
+    history-lend        Historical lend orders for an account
+    funding-history     Funding payment history for a position
+    account-summary     Trading activity summary (fills, settles, liquidations)
+    tx-hashes           Look up on-chain tx hashes by request/account ID
+
+EXAMPLES:
+    relayer-cli order open-trade --account-index 1 --side LONG --entry-price 65000 --leverage 5
+    relayer-cli order close-trade --account-index 1
+    relayer-cli order query-trade --account-index 1
+    relayer-cli order history-trade --account-index 1
+    relayer-cli order account-summary --from 2024-01-01 --to 2024-12-31"#
+    );
+}
+
+fn print_market_help() {
+    println!(
+        r#"Market data queries (no wallet required).
+
+USAGE:
+    relayer-cli market <SUBCOMMAND>
+
+LIVE DATA:
+    price               Current BTC/USD price
+    orderbook           Open limit orders
+    funding-rate        Current funding rate
+    fee-rate            Current fee rate
+    recent-trades       Recent trade orders
+    position-size       Position size summary
+    lend-pool           Lend pool info
+    pool-share-value    Current pool share value
+    last-day-apy        Last 24h annualized yield
+    open-interest       Long/short exposure
+    market-stats        Comprehensive risk statistics
+    server-time         Relayer server time
+
+HISTORICAL DATA:
+    history-price       Historical prices over a date range
+    candles             OHLCV candlestick data
+    history-funding     Historical funding rates
+    history-fees        Historical fee rates
+    apy-chart           APY chart data for lend pool
+
+EXAMPLES:
+    relayer-cli market price
+    relayer-cli market candles --interval 1h --since 2024-01-01
+    relayer-cli market history-price --from 2024-01-01 --to 2024-01-31
+    relayer-cli market apy-chart --range 30d --step 1d"#
+    );
+}
+
+fn print_history_help() {
+    println!(
+        r#"Local database history queries (requires DB feature).
+
+USAGE:
+    relayer-cli history <SUBCOMMAND>
+
+SUBCOMMANDS:
+    orders      Show order history (open, close, cancel events)
+    transfers   Show transfer history (fund, withdraw, transfer events)
+
+EXAMPLES:
+    relayer-cli history orders --limit 20
+    relayer-cli history transfers --limit 10"#
+    );
+}
+
+fn print_portfolio_help() {
+    println!(
+        r#"Portfolio and position tracking.
+
+USAGE:
+    relayer-cli portfolio <SUBCOMMAND>
+
+SUBCOMMANDS:
+    summary     Full portfolio summary (balances, positions, PnL)
+    balances    Per-account balance breakdown (--unit sats|mbtc|btc)
+    risks       Liquidation risk for open positions
+
+EXAMPLES:
+    relayer-cli portfolio summary
+    relayer-cli portfolio balances --unit btc
+    relayer-cli portfolio risks"#
+    );
+}
+
+fn print_subcommand_help(group: &str) {
+    match group.to_lowercase().as_str() {
+        "wallet" => print_wallet_help(),
+        "zkaccount" => print_zkaccount_help(),
+        "order" => print_order_help(),
+        "market" => print_market_help(),
+        "history" => print_history_help(),
+        "portfolio" => print_portfolio_help(),
+        _ => {
+            eprintln!("Unknown command group: '{}'\n", group);
+            print_global_help();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1105,11 +1328,18 @@ async fn main() {
         Commands::Market(cmd) => handle_market(cmd, json_output).await,
         Commands::History(cmd) => handle_history(cmd).await,
         Commands::Portfolio(cmd) => handle_portfolio(cmd, json_output).await,
+        Commands::Help { command } => {
+            match command {
+                Some(group) => print_subcommand_help(&group),
+                None => print_global_help(),
+            }
+            Ok(())
+        }
     };
 
     if let Err(e) = result {
         error!("{}", e);
-        eprintln!("Error: {e}");
+        // eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
@@ -1491,7 +1721,7 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         WalletCmd::ChangePassword { wallet_id } => {
             let wid = resolve_wallet_id(wallet_id)
-                .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID env var)")?;
+                .ok_or("wallet_id is required (pass --wallet-id, set NYKS_WALLET_ID env var, or run `wallet unlock`)")?;
 
             // Always prompt via TTY — ignore session cache and env var
             let old_password =
@@ -1585,19 +1815,21 @@ async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
             wallet_id,
             password,
         } => {
-            let provided = [amount.is_some(), amount_mbtc.is_some(), amount_btc.is_some()]
-                .iter()
-                .filter(|&&v| v)
-                .count();
+            let provided = [
+                amount.is_some(),
+                amount_mbtc.is_some(),
+                amount_btc.is_some(),
+            ]
+            .iter()
+            .filter(|&&v| v)
+            .count();
 
             if provided == 0 {
-                return Err(
-                    "No amount specified. Provide one of:\n  \
+                return Err("No amount specified. Provide one of:\n  \
                      --amount <sats>        Amount in satoshis\n  \
                      --amount-mbtc <mbtc>   Amount in milli-BTC (1 mBTC = 100,000 sats)\n  \
                      --amount-btc <btc>     Amount in BTC (1 BTC = 100,000,000 sats)"
-                        .to_string(),
-                );
+                    .to_string());
             }
             if provided > 1 {
                 eprintln!(
@@ -2072,7 +2304,11 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
                         e.order_id,
                     );
                 }
-                println!("\n  Total funding: {:.6} over {} entries", total_payment, entries.len());
+                println!(
+                    "\n  Total funding: {:.6} over {} entries",
+                    total_payment,
+                    entries.len()
+                );
             }
             Ok(())
         }
@@ -2116,7 +2352,10 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
                 println!("  Settled count:      {}", summary.settled_count);
                 println!("  Settled size:       {:.4}", summary.settled_positionsize);
                 println!("  Liquidated count:   {}", summary.liquidated_count);
-                println!("  Liquidated size:    {:.4}", summary.liquidated_positionsize);
+                println!(
+                    "  Liquidated size:    {:.4}",
+                    summary.liquidated_positionsize
+                );
             }
             Ok(())
         }
@@ -2223,7 +2462,7 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
             offset,
         } => {
             let wallet_id = resolve_wallet_id(wallet_id)
-                .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID)")?;
+                .ok_or("wallet_id is required (pass --wallet-id, set NYKS_WALLET_ID env var, or run `wallet unlock`)")?;
             let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
             let filter = nyks_wallet::relayer_module::transaction_history::OrderHistoryFilter {
                 account_index,
@@ -2267,7 +2506,7 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
             offset,
         } => {
             let wallet_id = resolve_wallet_id(wallet_id)
-                .ok_or("wallet_id is required (pass --wallet-id or set NYKS_WALLET_ID)")?;
+                .ok_or("wallet_id is required (pass --wallet-id, set NYKS_WALLET_ID env var, or run `wallet unlock`)")?;
             let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
             let filter = nyks_wallet::relayer_module::transaction_history::TransferHistoryFilter {
                 limit: Some(limit),
@@ -2862,7 +3101,8 @@ async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> 
                 for c in &candles {
                     println!(
                         "  {:<24} {:>12.2} {:>12.2} {:>12.2} {:>12.2} {:>10.6} {:>6}",
-                        &format!("{}", c.started_at)[..std::cmp::min(24, format!("{}", c.started_at).len())],
+                        &format!("{}", c.started_at)
+                            [..std::cmp::min(24, format!("{}", c.started_at).len())],
                         c.open,
                         c.high,
                         c.low,
@@ -2895,8 +3135,7 @@ async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> 
             if json_output {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&rates)
-                        .unwrap_or_else(|_| format!("{:?}", rates))
+                    serde_json::to_string_pretty(&rates).unwrap_or_else(|_| format!("{:?}", rates))
                 );
             } else if rates.is_empty() {
                 println!("No funding rate data for the given range");
@@ -2905,10 +3144,7 @@ async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> 
                 println!("{}", "-".repeat(60));
                 println!("  {:>12} {:>14} {:<30}", "RATE %", "BTC PRICE", "TIMESTAMP");
                 for r in &rates {
-                    println!(
-                        "  {:>12.6}% ${:<13.2} {}",
-                        r.rate, r.btc_price, r.timestamp
-                    );
+                    println!("  {:>12.6}% ${:<13.2} {}", r.rate, r.btc_price, r.timestamp);
                 }
                 println!("\n  {} entries", rates.len());
             }
@@ -2934,8 +3170,7 @@ async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> 
             if json_output {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&fees)
-                        .unwrap_or_else(|_| format!("{:?}", fees))
+                    serde_json::to_string_pretty(&fees).unwrap_or_else(|_| format!("{:?}", fees))
                 );
             } else if fees.is_empty() {
                 println!("No fee rate data for the given range");
@@ -2971,10 +3206,7 @@ async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> 
                 step,
                 lookback,
             };
-            let points = client
-                .apy_chart(params)
-                .await
-                .map_err(|e| e.to_string())?;
+            let points = client.apy_chart(params).await.map_err(|e| e.to_string())?;
             if json_output {
                 println!(
                     "{}",
