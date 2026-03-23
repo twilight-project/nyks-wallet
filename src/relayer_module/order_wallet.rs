@@ -1187,6 +1187,66 @@ impl OrderWallet {
         Ok(response)
     }
 
+    /// Query historical trader orders for an account.
+    pub async fn historical_trader_order(
+        &mut self,
+        index: AccountIndex,
+    ) -> Result<Vec<TraderOrder>, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let query_order = query_trader_order_zkos(
+            account_address.clone(),
+            &secret_key,
+            account_address.clone(),
+            "PENDING".to_string(),
+        );
+        let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
+        self.relayer_api_client
+            .historical_trader_order_info(query_order_zkos)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Query historical lend orders for an account.
+    pub async fn historical_lend_order(
+        &mut self,
+        index: AccountIndex,
+    ) -> Result<Vec<LendOrder>, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let query_order = query_lend_order_zkos(
+            account_address.clone(),
+            &secret_key,
+            account_address.clone(),
+            OrderStatus::LENDED.to_str(),
+        );
+        let query_order_zkos = QueryLendOrderZkos::decode_from_hex_string(query_order)?;
+        self.relayer_api_client
+            .historical_lend_order_info(query_order_zkos)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Query funding payment history for a trader order on an account.
+    pub async fn order_funding_history(
+        &mut self,
+        index: AccountIndex,
+    ) -> Result<Vec<super::relayer_types::FundingHistoryEntry>, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let query_order = query_trader_order_zkos(
+            account_address.clone(),
+            &secret_key,
+            account_address.clone(),
+            "PENDING".to_string(),
+        );
+        let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
+        self.relayer_api_client
+            .order_funding_history(query_order_zkos)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     pub async fn cancel_trader_order(&mut self, index: AccountIndex) -> Result<String, String> {
         self.validate_market_not_halted().await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;

@@ -82,17 +82,23 @@ Most commands accept `--wallet-id` and `--password` flags. When omitted, the CLI
 ## Usage
 
 ```
-relayer-cli <COMMAND>
+relayer-cli [--json] <COMMAND>
 ```
 
-Six top-level command groups:
+### Global Flags
 
-- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, change-password, update-btc-address
+| Flag     | Description                                                     |
+| -------- | --------------------------------------------------------------- |
+| `--json` | Output results as JSON instead of formatted tables (for scripting) |
+
+### Command Groups
+
+- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address
 - `zkaccount` — fund, withdraw, transfer, and split ZkOS trading accounts
-- `order` — open/close/cancel/query trader and lend orders
-- `market` — query prices, orderbook, rates
+- `order` — open/close/cancel/query trader and lend orders, history, funding, account summary, tx lookups
+- `market` — query prices, orderbook, rates, historical data, candles, APY charts
 - `history` — view order and transfer history (requires DB)
-- `portfolio` — portfolio summary, balances, liquidation risks
+- `portfolio` — portfolio summary, balances (with unit conversion), liquidation risks
 
 ---
 
@@ -250,13 +256,20 @@ Output shows the next sequence number, cached account number, and count of relea
 
 Prompt for the database password once and cache it for the current terminal session. Subsequent commands in the same shell will use the cached password automatically, so you don't need to pass `--password` each time.
 
-The cache is scoped to the parent shell process — closing the terminal invalidates it. Only one session password can be active at a time; run `wallet lock` first to replace it.
+The cache is scoped to the parent shell process — closing the terminal invalidates it. Only one session password can be active at a time; use `--force` to overwrite an existing cached password, or run `wallet lock` first.
 
 ```bash
 relayer-cli wallet unlock
 # Enter password at the secure prompt, then:
 relayer-cli wallet balance --wallet-id my-wallet   # no --password needed
+
+# Overwrite an existing session password
+relayer-cli wallet unlock --force
 ```
+
+| Flag      | Description                                          |
+| --------- | ---------------------------------------------------- |
+| `--force` | Overwrite an existing session password without error |
 
 ### `wallet lock`
 
@@ -279,6 +292,20 @@ relayer-cli wallet change-password --wallet-id my-wallet
 | `--wallet-id <ID>` | Wallet to change password for (falls back to `NYKS_WALLET_ID`) |
 
 If a session password cache exists, it is updated with the new password automatically.
+
+### `wallet info`
+
+Show wallet info without making any chain calls. Displays address, BTC address, chain ID, account count, and nonce state. Requires DB.
+
+```bash
+relayer-cli wallet info
+relayer-cli wallet info --wallet-id my-wallet --password s3cret
+```
+
+| Flag                | Description                      |
+| ------------------- | -------------------------------- |
+| `--wallet-id <ID>`  | Load wallet from DB              |
+| `--password <PASS>` | DB encryption password           |
 
 ### `wallet update-btc-address`
 
@@ -476,6 +503,95 @@ Query the status of a lending order. Outputs JSON.
 relayer-cli order query-lend --account-index 0
 ```
 
+### `order history-trade`
+
+Query historical trader orders for an account from the relayer (not local DB). Requires wallet access for signing.
+
+```bash
+relayer-cli order history-trade --account-index 0
+relayer-cli --json order history-trade --account-index 0
+```
+
+| Flag                  | Description                      |
+| --------------------- | -------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index |
+
+Output columns: `UUID`, `STATUS`, `TYPE`, `SIDE`, `ENTRY`, `SIZE`, `LEV`, `MARGIN`, `PnL`.
+
+### `order history-lend`
+
+Query historical lend orders for an account from the relayer (not local DB). Requires wallet access for signing.
+
+```bash
+relayer-cli order history-lend --account-index 0
+relayer-cli --json order history-lend --account-index 0
+```
+
+| Flag                  | Description                      |
+| --------------------- | -------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index |
+
+Output columns: `UUID`, `STATUS`, `DEPOSIT`, `BALANCE`, `SHARES`, `PAYMENT`.
+
+### `order funding-history`
+
+Query funding payment history for a position. Shows each funding interval's payment, rate, and order ID.
+
+```bash
+relayer-cli order funding-history --account-index 0
+relayer-cli --json order funding-history --account-index 0
+```
+
+| Flag                  | Description                      |
+| --------------------- | -------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index |
+
+Output columns: `TIME`, `SIDE`, `PAYMENT`, `RATE`, `ORDER ID`, plus total funding sum.
+
+### `order account-summary`
+
+Query your wallet's trading activity summary from the relayer — filled, settled, and liquidated counts and position sizes.
+
+```bash
+relayer-cli order account-summary
+relayer-cli order account-summary --from 2024-01-01 --to 2024-12-31
+relayer-cli --json order account-summary
+```
+
+| Flag            | Description                                           |
+| --------------- | ----------------------------------------------------- |
+| `--from <DATE>` | Start date filter (RFC3339 or YYYY-MM-DD)             |
+| `--to <DATE>`   | End date filter (RFC3339 or YYYY-MM-DD)               |
+| `--since <DATE>`| Alternative date filter (RFC3339 or YYYY-MM-DD)       |
+
+### `order tx-hashes`
+
+Look up on-chain transaction hashes by request ID, account address, or tx ID.
+
+```bash
+# By request ID (default)
+relayer-cli order tx-hashes --id REQID9804F25B...
+
+# By account address
+relayer-cli order tx-hashes --by account --id <account_address>
+
+# By tx ID
+relayer-cli order tx-hashes --by tx --id <tx_id>
+
+# Filter by status
+relayer-cli order tx-hashes --id REQID... --status FILLED
+```
+
+| Flag              | Description                                          |
+| ----------------- | ---------------------------------------------------- |
+| `--by <MODE>`     | Lookup mode: `request` (default), `account`, or `tx` |
+| `--id <ID>`       | **Required.** The ID to look up                      |
+| `--status <S>`    | Filter by order status (PENDING, FILLED, SETTLED, etc.) |
+| `--limit <N>`     | Max results                                          |
+| `--offset <N>`    | Pagination offset                                    |
+
+Output columns: `ORDER ID`, `STATUS`, `TYPE`, `TX HASH`, `DATE`.
+
 ---
 
 ## History Commands
@@ -555,12 +671,18 @@ Settled and liquidated accounts are automatically unlocked (restored to Coin sta
 
 ### `portfolio balances`
 
-Show a per-account balance breakdown for all ZkOS accounts.
+Show a per-account balance breakdown for all ZkOS accounts. Supports display in different units.
 
 ```bash
 relayer-cli portfolio balances
+relayer-cli portfolio balances --unit mbtc
+relayer-cli portfolio balances --unit btc
 relayer-cli portfolio balances --wallet-id my-wallet --password s3cret
 ```
+
+| Flag          | Description                                |
+| ------------- | ------------------------------------------ |
+| `--unit <U>`  | Display unit: `sats` (default), `mbtc`, `btc` |
 
 Output columns: `INDEX`, `BALANCE`, `IO-TYPE`, `ON-CHAIN`, plus a total.
 
@@ -679,6 +801,94 @@ Get the relayer server's current UTC time.
 ```bash
 relayer-cli market server-time
 ```
+
+### `market history-price`
+
+Query historical BTC/USD prices over a date range.
+
+```bash
+relayer-cli market history-price --from 2024-01-01 --to 2024-01-31
+relayer-cli market history-price --from 2024-01-01T00:00:00Z --to 2024-01-31T23:59:59Z --limit 100
+relayer-cli --json market history-price --from 2024-01-01 --to 2024-01-31
+```
+
+| Flag              | Description                                     |
+| ----------------- | ----------------------------------------------- |
+| `--from <DATE>`   | **Required.** Start date (RFC3339 or YYYY-MM-DD)|
+| `--to <DATE>`     | **Required.** End date (RFC3339 or YYYY-MM-DD)  |
+| `--limit <N>`     | Max results (default: `50`)                     |
+| `--offset <N>`    | Pagination offset (default: `0`)                |
+
+### `market candles`
+
+Query OHLCV candlestick data.
+
+```bash
+relayer-cli market candles --since 2024-01-01 --interval 1h
+relayer-cli market candles --since 2024-01-01 --interval 1d --limit 30
+relayer-cli --json market candles --since 2024-01-01 --interval 5m
+```
+
+| Flag              | Description                                         |
+| ----------------- | --------------------------------------------------- |
+| `--since <DATE>`  | **Required.** Start date (RFC3339 or YYYY-MM-DD)    |
+| `--interval <I>`  | Candle interval: `1m`, `5m`, `15m`, `30m`, `1h` (default), `4h`, `8h`, `12h`, `1d` |
+| `--limit <N>`     | Max results (default: `50`)                         |
+| `--offset <N>`    | Pagination offset (default: `0`)                    |
+
+Output columns: `START`, `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VOLUME`, `TRADES`.
+
+### `market history-funding`
+
+Query historical funding rates over a date range.
+
+```bash
+relayer-cli market history-funding --from 2024-01-01 --to 2024-01-31
+relayer-cli --json market history-funding --from 2024-01-01 --to 2024-01-31
+```
+
+| Flag              | Description                                     |
+| ----------------- | ----------------------------------------------- |
+| `--from <DATE>`   | **Required.** Start date (RFC3339 or YYYY-MM-DD)|
+| `--to <DATE>`     | **Required.** End date (RFC3339 or YYYY-MM-DD)  |
+| `--limit <N>`     | Max results (default: `50`)                     |
+| `--offset <N>`    | Pagination offset (default: `0`)                |
+
+### `market history-fees`
+
+Query historical fee rates over a date range.
+
+```bash
+relayer-cli market history-fees --from 2024-01-01 --to 2024-01-31
+relayer-cli --json market history-fees --from 2024-01-01 --to 2024-01-31
+```
+
+| Flag              | Description                                     |
+| ----------------- | ----------------------------------------------- |
+| `--from <DATE>`   | **Required.** Start date (RFC3339 or YYYY-MM-DD)|
+| `--to <DATE>`     | **Required.** End date (RFC3339 or YYYY-MM-DD)  |
+| `--limit <N>`     | Max results (default: `50`)                     |
+| `--offset <N>`    | Pagination offset (default: `0`)                |
+
+Output columns: `MKT FILL`, `LMT FILL`, `MKT SETTLE`, `LMT SETTLE`, `TIMESTAMP`.
+
+### `market apy-chart`
+
+Query APY chart data for the lend pool over time.
+
+```bash
+relayer-cli market apy-chart
+relayer-cli market apy-chart --range 30d --step 1d
+relayer-cli --json market apy-chart --range 7d
+```
+
+| Flag              | Description                                  |
+| ----------------- | -------------------------------------------- |
+| `--range <R>`     | Time range, e.g. `7d`, `30d`, `1y` (default: `7d`) |
+| `--step <S>`      | Step/granularity, e.g. `1h`, `1d`            |
+| `--lookback <L>`  | Lookback period for rolling average          |
+
+Output columns: `TIME`, `APY %`.
 
 ---
 

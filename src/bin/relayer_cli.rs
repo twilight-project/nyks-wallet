@@ -14,6 +14,10 @@ use secrecy::{ExposeSecret, SecretString};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Output results as JSON instead of formatted tables (useful for scripting)
+    #[arg(long, global = true, default_value_t = false)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -194,7 +198,11 @@ enum WalletCmd {
     /// Unlock: prompt for password once and cache it for this terminal session.
     /// Subsequent commands will use the cached password automatically.
     /// The cache is invalidated when the terminal (shell) is closed.
-    Unlock,
+    Unlock {
+        /// Overwrite an existing session password without error
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
 
     /// Lock: clear the cached session password immediately.
     Lock,
@@ -205,6 +213,17 @@ enum WalletCmd {
         /// Wallet ID to change password for
         #[arg(long)]
         wallet_id: Option<String>,
+    },
+
+    /// Show wallet info (address, BTC address, chain_id, accounts, nonce) without chain calls
+    Info {
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
     },
 
     /// Update the BTC deposit address for a wallet.
@@ -469,6 +488,97 @@ enum OrderCmd {
         #[arg(long)]
         password: Option<String>,
     },
+
+    /// Query historical trader orders for an account (from relayer, not local DB)
+    HistoryTrade {
+        /// ZkOS account index
+        #[arg(long)]
+        account_index: u64,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Query historical lend orders for an account (from relayer, not local DB)
+    HistoryLend {
+        /// ZkOS account index
+        #[arg(long)]
+        account_index: u64,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Query funding payment history for a position
+    FundingHistory {
+        /// ZkOS account index
+        #[arg(long)]
+        account_index: u64,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Query your trading activity summary (fills, settles, liquidations)
+    AccountSummary {
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+
+        /// Start date filter (RFC3339 or YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date filter (RFC3339 or YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Since date filter (RFC3339 or YYYY-MM-DD, alternative to from/to range)
+        #[arg(long)]
+        since: Option<String>,
+    },
+
+    /// Look up on-chain transaction hashes by request ID or account ID
+    TxHashes {
+        /// Lookup mode: "request" (by request ID) or "account" (by account address)
+        #[arg(long, default_value = "request")]
+        by: String,
+
+        /// The request ID or account address to look up
+        #[arg(long)]
+        id: String,
+
+        /// Filter by order status (e.g. FILLED, SETTLED, PENDING)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<i64>,
+
+        /// Offset for pagination
+        #[arg(long)]
+        offset: Option<i64>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -546,6 +656,10 @@ enum PortfolioCmd {
         /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
         #[arg(long)]
         password: Option<String>,
+
+        /// Display unit: sats (default), mbtc, or btc
+        #[arg(long, default_value = "sats")]
+        unit: String,
     },
 
     /// Show liquidation risk for open positions
@@ -601,6 +715,97 @@ enum MarketCmd {
 
     /// Get relayer server time
     ServerTime,
+
+    /// Query historical BTC/USD prices over a date range
+    HistoryPrice {
+        /// Start date (RFC3339 or YYYY-MM-DD)
+        #[arg(long)]
+        from: String,
+
+        /// End date (RFC3339 or YYYY-MM-DD)
+        #[arg(long)]
+        to: String,
+
+        /// Maximum number of results
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+
+        /// Offset for pagination
+        #[arg(long, default_value_t = 0)]
+        offset: i64,
+    },
+
+    /// Query OHLCV candlestick data
+    Candles {
+        /// Candle interval: 1m, 5m, 15m, 30m, 1h, 4h, 8h, 12h, 1d
+        #[arg(long, default_value = "1h")]
+        interval: String,
+
+        /// Start date (RFC3339 or YYYY-MM-DD)
+        #[arg(long)]
+        since: String,
+
+        /// Maximum number of results
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+
+        /// Offset for pagination
+        #[arg(long, default_value_t = 0)]
+        offset: i64,
+    },
+
+    /// Query historical funding rates
+    HistoryFunding {
+        /// Start date (RFC3339 or YYYY-MM-DD)
+        #[arg(long)]
+        from: String,
+
+        /// End date (RFC3339 or YYYY-MM-DD)
+        #[arg(long)]
+        to: String,
+
+        /// Maximum number of results
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+
+        /// Offset for pagination
+        #[arg(long, default_value_t = 0)]
+        offset: i64,
+    },
+
+    /// Query historical fee rates
+    HistoryFees {
+        /// Start date (RFC3339 or YYYY-MM-DD)
+        #[arg(long)]
+        from: String,
+
+        /// End date (RFC3339 or YYYY-MM-DD)
+        #[arg(long)]
+        to: String,
+
+        /// Maximum number of results
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+
+        /// Offset for pagination
+        #[arg(long, default_value_t = 0)]
+        offset: i64,
+    },
+
+    /// Query APY chart data for the lend pool
+    ApyChart {
+        /// Time range (e.g. "7d", "30d", "1y")
+        #[arg(long, default_value = "7d")]
+        range: String,
+
+        /// Step/granularity (e.g. "1h", "1d")
+        #[arg(long)]
+        step: Option<String>,
+
+        /// Lookback period for rolling average
+        #[arg(long)]
+        lookback: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -625,6 +830,63 @@ fn parse_position_type(
         "LONG" => Ok(twilight_client_sdk::relayer_types::PositionType::LONG),
         "SHORT" => Ok(twilight_client_sdk::relayer_types::PositionType::SHORT),
         other => Err(format!("Unknown position side: {other}. Use LONG or SHORT")),
+    }
+}
+
+/// Parse a date string (RFC3339 or YYYY-MM-DD) into a `DateTime<Utc>`.
+fn parse_datetime(s: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    use chrono::{NaiveDate, TimeZone, Utc};
+    // Try RFC3339 first
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    // Try YYYY-MM-DD
+    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Ok(
+            Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).ok_or("invalid date")?)
+        );
+    }
+    Err(format!(
+        "Invalid date '{}'. Use RFC3339 (2024-01-15T00:00:00Z) or YYYY-MM-DD (2024-01-15)",
+        s
+    ))
+}
+
+/// Parse a candle interval string into the Interval enum.
+fn parse_interval(
+    s: &str,
+) -> Result<nyks_wallet::relayer_module::relayer_types::Interval, String> {
+    use nyks_wallet::relayer_module::relayer_types::Interval;
+    match s.to_lowercase().as_str() {
+        "1m" | "1min" => Ok(Interval::ONE_MINUTE),
+        "5m" | "5min" => Ok(Interval::FIVE_MINUTE),
+        "15m" | "15min" => Ok(Interval::FIFTEEN_MINUTE),
+        "30m" | "30min" => Ok(Interval::THIRTY_MINUTE),
+        "1h" => Ok(Interval::ONE_HOUR),
+        "4h" => Ok(Interval::FOUR_HOUR),
+        "8h" => Ok(Interval::EIGHT_HOUR),
+        "12h" => Ok(Interval::TWELVE_HOUR),
+        "1d" => Ok(Interval::ONE_DAY),
+        other => Err(format!(
+            "Unknown interval: {}. Use: 1m, 5m, 15m, 30m, 1h, 4h, 8h, 12h, 1d",
+            other
+        )),
+    }
+}
+
+/// Parse an order status string into the OrderStatus enum.
+fn parse_order_status(s: &str) -> Result<OrderStatus, String> {
+    match s.to_uppercase().as_str() {
+        "PENDING" => Ok(OrderStatus::PENDING),
+        "FILLED" => Ok(OrderStatus::FILLED),
+        "SETTLED" => Ok(OrderStatus::SETTLED),
+        "CANCELLED" => Ok(OrderStatus::CANCELLED),
+        "LENDED" => Ok(OrderStatus::LENDED),
+        "LIQUIDATE" => Ok(OrderStatus::LIQUIDATE),
+        other => Err(format!(
+            "Unknown order status: {}. Use: PENDING, FILLED, SETTLED, CANCELLED, LENDED, LIQUIDATE",
+            other
+        )),
     }
 }
 
@@ -806,13 +1068,15 @@ async fn main() {
 
     let cli = Cli::parse();
 
+    let json_output = cli.json;
+
     let result = match cli.command {
         Commands::Wallet(cmd) => handle_wallet(cmd).await,
         Commands::Zkaccount(cmd) => handle_zkaccount(cmd).await,
-        Commands::Order(cmd) => handle_order(cmd).await,
-        Commands::Market(cmd) => handle_market(cmd).await,
+        Commands::Order(cmd) => handle_order(cmd, json_output).await,
+        Commands::Market(cmd) => handle_market(cmd, json_output).await,
         Commands::History(cmd) => handle_history(cmd).await,
-        Commands::Portfolio(cmd) => handle_portfolio(cmd).await,
+        Commands::Portfolio(cmd) => handle_portfolio(cmd, json_output).await,
     };
 
     if let Err(e) = result {
@@ -1040,6 +1304,29 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         }
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::Info {
+            wallet_id,
+            password,
+        } => {
+            let ow = resolve_order_wallet(wallet_id, password).await?;
+            println!("Wallet Info");
+            println!("  Address:         {}", ow.wallet.twilightaddress);
+            println!("  BTC address:     {}", ow.wallet.btc_address);
+            println!("  BTC registered:  {}", ow.wallet.btc_address_registered);
+            println!("  Chain ID:        {}", ow.chain_id);
+            println!("  ZkOS accounts:   {}", ow.zk_accounts.accounts.len());
+            println!("  Next nonce:      {}", ow.nonce_manager.peek_next());
+            println!("  Account number:  {}", ow.nonce_manager.account_number());
+            Ok(())
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::Info { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         WalletCmd::Backup {
             output,
             wallet_id,
@@ -1102,11 +1389,11 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             Ok(())
         }
 
-        WalletCmd::Unlock => {
-            // If a session is already active, ask before overwriting.
-            if session_load().is_some() {
+        WalletCmd::Unlock { force } => {
+            // If a session is already active, error unless --force.
+            if session_load().is_some() && !force {
                 eprintln!(
-                    "A session password is already cached. Run `wallet lock` first to clear it."
+                    "A session password is already cached. Run `wallet lock` first or use `wallet unlock --force`."
                 );
                 return Err("session already active".to_string());
             }
@@ -1402,7 +1689,7 @@ async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
 // Order handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
+async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
     match cmd {
         OrderCmd::OpenTrade {
             account_index,
@@ -1585,6 +1872,256 @@ async fn handle_order(cmd: OrderCmd) -> Result<(), String> {
             );
             Ok(())
         }
+
+        OrderCmd::HistoryTrade {
+            account_index,
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let orders = ow.historical_trader_order(account_index).await?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&orders)
+                        .unwrap_or_else(|_| format!("{:?}", orders))
+                );
+            } else if orders.is_empty() {
+                println!("No historical trader orders for account {account_index}");
+            } else {
+                println!("Historical Trader Orders (account {account_index})");
+                println!("{}", "-".repeat(130));
+                println!(
+                    "  {:<36} {:<10} {:<8} {:<10} {:>12} {:>12} {:>6} {:>12} {:>12}",
+                    "UUID", "STATUS", "TYPE", "SIDE", "ENTRY", "SIZE", "LEV", "MARGIN", "PnL"
+                );
+                for o in &orders {
+                    println!(
+                        "  {:<36} {:<10} {:<8} {:<10} {:>12.2} {:>12.2} {:>5.0}x {:>12.2} {:>12.2}",
+                        o.uuid,
+                        format!("{:?}", o.order_status),
+                        format!("{:?}", o.order_type),
+                        format!("{:?}", o.position_type),
+                        o.entryprice,
+                        o.positionsize,
+                        o.leverage,
+                        o.initial_margin,
+                        o.unrealized_pnl,
+                    );
+                }
+                println!("\nTotal: {} order(s)", orders.len());
+            }
+            Ok(())
+        }
+
+        OrderCmd::HistoryLend {
+            account_index,
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let orders = ow.historical_lend_order(account_index).await?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&orders)
+                        .unwrap_or_else(|_| format!("{:?}", orders))
+                );
+            } else if orders.is_empty() {
+                println!("No historical lend orders for account {account_index}");
+            } else {
+                println!("Historical Lend Orders (account {account_index})");
+                println!("{}", "-".repeat(100));
+                println!(
+                    "  {:<36} {:<10} {:>12} {:>12} {:>12} {:>12}",
+                    "UUID", "STATUS", "DEPOSIT", "BALANCE", "SHARES", "PAYMENT"
+                );
+                for o in &orders {
+                    println!(
+                        "  {:<36} {:<10} {:>12.2} {:>12.2} {:>12.4} {:>12.4}",
+                        o.uuid,
+                        format!("{:?}", o.order_status),
+                        o.deposit,
+                        o.balance,
+                        o.npoolshare,
+                        o.payment,
+                    );
+                }
+                println!("\nTotal: {} order(s)", orders.len());
+            }
+            Ok(())
+        }
+
+        OrderCmd::FundingHistory {
+            account_index,
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let entries = ow.order_funding_history(account_index).await?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&entries)
+                        .unwrap_or_else(|_| format!("{:?}", entries))
+                );
+            } else if entries.is_empty() {
+                println!("No funding history for account {account_index}");
+            } else {
+                println!("Funding History (account {account_index})");
+                println!("{}", "-".repeat(80));
+                println!(
+                    "  {:<24} {:<8} {:>14} {:>14} {:<36}",
+                    "TIME", "SIDE", "PAYMENT", "RATE", "ORDER ID"
+                );
+                let mut total_payment = 0.0_f64;
+                for e in &entries {
+                    total_payment += e.payment;
+                    println!(
+                        "  {:<24} {:<8} {:>14.6} {:>14.8} {:<36}",
+                        &e.time[..std::cmp::min(24, e.time.len())],
+                        format!("{:?}", e.position_side),
+                        e.payment,
+                        e.funding_rate,
+                        e.order_id,
+                    );
+                }
+                println!("\n  Total funding: {:.6} over {} entries", total_payment, entries.len());
+            }
+            Ok(())
+        }
+
+        OrderCmd::AccountSummary {
+            wallet_id,
+            password,
+            from,
+            to,
+            since,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            use nyks_wallet::relayer_module::relayer_types::AccountSummaryArgs;
+            let params = AccountSummaryArgs {
+                t_address: ow.wallet.twilightaddress.clone(),
+                from: from.map(|s| parse_datetime(&s)).transpose()?,
+                to: to.map(|s| parse_datetime(&s)).transpose()?,
+                since: since.map(|s| parse_datetime(&s)).transpose()?,
+            };
+            let summary = ow
+                .relayer_api_client
+                .account_summary_by_twilight_address(params)
+                .await
+                .map_err(|e| e.to_string())?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&summary)
+                        .unwrap_or_else(|_| format!("{:?}", summary))
+                );
+            } else {
+                println!("Account Summary for {}", ow.wallet.twilightaddress);
+                println!("{}", "=".repeat(50));
+                println!("  Period: {} — {}", summary.from, summary.to);
+                println!("  Filled count:       {}", summary.filled_count);
+                println!("  Filled size:        {:.4}", summary.filled_positionsize);
+                println!("  Settled count:      {}", summary.settled_count);
+                println!("  Settled size:       {:.4}", summary.settled_positionsize);
+                println!("  Liquidated count:   {}", summary.liquidated_count);
+                println!("  Liquidated size:    {:.4}", summary.liquidated_positionsize);
+            }
+            Ok(())
+        }
+
+        OrderCmd::TxHashes {
+            by,
+            id,
+            status,
+            limit,
+            offset,
+        } => {
+            use nyks_wallet::relayer_module::relayer_api::RelayerJsonRpcClient;
+            use nyks_wallet::relayer_module::relayer_types::TransactionHashArgs;
+
+            let endpoint = std::env::var("RELAYER_API_RPC_SERVER_URL")
+                .unwrap_or_else(|_| "http://0.0.0.0:8088/api".to_string());
+            let client = RelayerJsonRpcClient::new(&endpoint).map_err(|e| e.to_string())?;
+
+            let status = status.map(|s| parse_order_status(&s)).transpose()?;
+            let params = match by.to_lowercase().as_str() {
+                "request" => TransactionHashArgs::RequestId {
+                    id,
+                    status,
+                    limit,
+                    offset,
+                },
+                "account" => TransactionHashArgs::AccountId {
+                    id,
+                    status,
+                    limit,
+                    offset,
+                },
+                "tx" => TransactionHashArgs::TxId {
+                    id,
+                    status,
+                    limit,
+                    offset,
+                },
+                other => {
+                    return Err(format!(
+                        "Unknown lookup mode: '{}'. Use: request, account, or tx",
+                        other
+                    ))
+                }
+            };
+
+            let hashes = client
+                .transaction_hashes(params)
+                .await
+                .map_err(|e| e.to_string())?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&hashes)
+                        .unwrap_or_else(|_| format!("{:?}", hashes))
+                );
+            } else if hashes.is_empty() {
+                println!("No transaction hashes found");
+            } else {
+                println!("Transaction Hashes");
+                println!("{}", "-".repeat(120));
+                println!(
+                    "  {:<36} {:<10} {:<10} {:<64} {:<20}",
+                    "ORDER ID", "STATUS", "TYPE", "TX HASH", "DATE"
+                );
+                for h in &hashes {
+                    println!(
+                        "  {:<36} {:<10} {:<10} {:<64} {:<20}",
+                        h.order_id,
+                        format!("{:?}", h.order_status),
+                        format!("{:?}", h.order_type),
+                        h.tx_hash,
+                        &h.datetime[..std::cmp::min(20, h.datetime.len())],
+                    );
+                }
+                println!("\nTotal: {} hash(es)", hashes.len());
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1698,7 +2235,7 @@ async fn handle_history(cmd: HistoryCmd) -> Result<(), String> {
 // Portfolio handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
+async fn handle_portfolio(cmd: PortfolioCmd, _json_output: bool) -> Result<(), String> {
     match cmd {
         PortfolioCmd::Summary {
             wallet_id,
@@ -1906,11 +2443,18 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
         PortfolioCmd::Balances {
             wallet_id,
             password,
+            unit,
         } => {
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             let ow = resolve_order_wallet(wallet_id, password).await?;
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let (unit_label, divisor): (&str, f64) = match unit.to_lowercase().as_str() {
+                "mbtc" => ("mBTC", 100_000.0),
+                "btc" => ("BTC", 100_000_000.0),
+                _ => ("sats", 1.0),
+            };
 
             let balances = ow.get_account_balances();
             if balances.is_empty() {
@@ -1923,17 +2467,43 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
                 println!("{}", "-".repeat(46));
                 let mut total: u64 = 0;
                 for b in &balances {
-                    println!(
-                        "{:<8} {:<14} {:<10} {:<10}",
-                        b.account_index,
-                        b.balance,
-                        format!("{:?}", b.io_type),
-                        b.on_chain,
-                    );
+                    let display_bal = b.balance as f64 / divisor;
+                    if divisor == 1.0 {
+                        println!(
+                            "{:<8} {:<14} {:<10} {:<10}",
+                            b.account_index,
+                            b.balance,
+                            format!("{:?}", b.io_type),
+                            b.on_chain,
+                        );
+                    } else {
+                        println!(
+                            "{:<8} {:<14.8} {:<10} {:<10}",
+                            b.account_index,
+                            display_bal,
+                            format!("{:?}", b.io_type),
+                            b.on_chain,
+                        );
+                    }
                     total += b.balance;
                 }
                 println!("{}", "-".repeat(46));
-                println!("Total: {} sats across {} accounts", total, balances.len());
+                let display_total = total as f64 / divisor;
+                if divisor == 1.0 {
+                    println!(
+                        "Total: {} {} across {} accounts",
+                        total,
+                        unit_label,
+                        balances.len()
+                    );
+                } else {
+                    println!(
+                        "Total: {:.8} {} across {} accounts",
+                        display_total,
+                        unit_label,
+                        balances.len()
+                    );
+                }
             }
             Ok(())
         }
@@ -1984,7 +2554,7 @@ async fn handle_portfolio(cmd: PortfolioCmd) -> Result<(), String> {
 // Market handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_market(cmd: MarketCmd) -> Result<(), String> {
+async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(), String> {
     use nyks_wallet::relayer_module::relayer_api::RelayerJsonRpcClient;
 
     let endpoint = std::env::var("RELAYER_API_RPC_SERVER_URL")
@@ -2145,6 +2715,213 @@ async fn handle_market(cmd: MarketCmd) -> Result<(), String> {
             let time = client.server_time().await.map_err(|e| e.to_string())?;
             println!("Server Time");
             println!("  UTC: {}", time);
+        }
+
+        MarketCmd::HistoryPrice {
+            from,
+            to,
+            limit,
+            offset,
+        } => {
+            use nyks_wallet::relayer_module::relayer_types::HistoricalPriceArgs;
+            let params = HistoricalPriceArgs {
+                from: parse_datetime(&from)?,
+                to: parse_datetime(&to)?,
+                limit,
+                offset,
+            };
+            let prices = client
+                .historical_price(params)
+                .await
+                .map_err(|e| e.to_string())?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&prices)
+                        .unwrap_or_else(|_| format!("{:?}", prices))
+                );
+            } else if prices.is_empty() {
+                println!("No price data for the given range");
+            } else {
+                println!("Historical BTC/USD Prices");
+                println!("{}", "-".repeat(50));
+                println!("  {:<14} {:<30}", "PRICE", "TIMESTAMP");
+                for p in &prices {
+                    println!("  ${:<13.2} {}", p.price, p.timestamp);
+                }
+                println!("\n  {} entries", prices.len());
+            }
+        }
+
+        MarketCmd::Candles {
+            interval,
+            since,
+            limit,
+            offset,
+        } => {
+            use nyks_wallet::relayer_module::relayer_types::Candles;
+            let params = Candles {
+                interval: parse_interval(&interval)?,
+                since: parse_datetime(&since)?,
+                limit,
+                offset,
+            };
+            let candles = client
+                .candle_data(params)
+                .await
+                .map_err(|e| e.to_string())?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&candles)
+                        .unwrap_or_else(|_| format!("{:?}", candles))
+                );
+            } else if candles.is_empty() {
+                println!("No candle data for the given range");
+            } else {
+                println!("OHLCV Candles ({interval})");
+                println!("{}", "-".repeat(100));
+                println!(
+                    "  {:<24} {:>12} {:>12} {:>12} {:>12} {:>10} {:>6}",
+                    "START", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "TRADES"
+                );
+                for c in &candles {
+                    println!(
+                        "  {:<24} {:>12.2} {:>12.2} {:>12.2} {:>12.2} {:>10.6} {:>6}",
+                        &format!("{}", c.started_at)[..std::cmp::min(24, format!("{}", c.started_at).len())],
+                        c.open,
+                        c.high,
+                        c.low,
+                        c.close,
+                        c.btc_volume,
+                        c.trades,
+                    );
+                }
+                println!("\n  {} candle(s)", candles.len());
+            }
+        }
+
+        MarketCmd::HistoryFunding {
+            from,
+            to,
+            limit,
+            offset,
+        } => {
+            use nyks_wallet::relayer_module::relayer_types::HistoricalFundingArgs;
+            let params = HistoricalFundingArgs {
+                from: parse_datetime(&from)?,
+                to: parse_datetime(&to)?,
+                limit,
+                offset,
+            };
+            let rates = client
+                .historical_funding_rate(params)
+                .await
+                .map_err(|e| e.to_string())?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&rates)
+                        .unwrap_or_else(|_| format!("{:?}", rates))
+                );
+            } else if rates.is_empty() {
+                println!("No funding rate data for the given range");
+            } else {
+                println!("Historical Funding Rates");
+                println!("{}", "-".repeat(60));
+                println!("  {:>12} {:>14} {:<30}", "RATE %", "BTC PRICE", "TIMESTAMP");
+                for r in &rates {
+                    println!(
+                        "  {:>12.6}% ${:<13.2} {}",
+                        r.rate, r.btc_price, r.timestamp
+                    );
+                }
+                println!("\n  {} entries", rates.len());
+            }
+        }
+
+        MarketCmd::HistoryFees {
+            from,
+            to,
+            limit,
+            offset,
+        } => {
+            use nyks_wallet::relayer_module::relayer_types::HistoricalFeeArgs;
+            let params = HistoricalFeeArgs {
+                from: parse_datetime(&from)?,
+                to: parse_datetime(&to)?,
+                limit,
+                offset,
+            };
+            let fees = client
+                .historical_fee_rate(params)
+                .await
+                .map_err(|e| e.to_string())?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&fees)
+                        .unwrap_or_else(|_| format!("{:?}", fees))
+                );
+            } else if fees.is_empty() {
+                println!("No fee rate data for the given range");
+            } else {
+                println!("Historical Fee Rates");
+                println!("{}", "-".repeat(80));
+                println!(
+                    "  {:>12} {:>12} {:>14} {:>14} {:<24}",
+                    "MKT FILL", "LMT FILL", "MKT SETTLE", "LMT SETTLE", "TIMESTAMP"
+                );
+                for f in &fees {
+                    println!(
+                        "  {:>12.6} {:>12.6} {:>14.6} {:>14.6} {}",
+                        f.order_filled_on_market,
+                        f.order_filled_on_limit,
+                        f.order_settled_on_market,
+                        f.order_settled_on_limit,
+                        f.timestamp,
+                    );
+                }
+                println!("\n  {} entries", fees.len());
+            }
+        }
+
+        MarketCmd::ApyChart {
+            range,
+            step,
+            lookback,
+        } => {
+            use nyks_wallet::relayer_module::relayer_types::ApyChartArgs;
+            let params = ApyChartArgs {
+                range,
+                step,
+                lookback,
+            };
+            let points = client
+                .apy_chart(params)
+                .await
+                .map_err(|e| e.to_string())?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&points)
+                        .unwrap_or_else(|_| format!("{:?}", points))
+                );
+            } else if points.is_empty() {
+                println!("No APY data available");
+            } else {
+                println!("Lend Pool APY Chart");
+                println!("{}", "-".repeat(50));
+                println!("  {:<24} {:>12}", "TIME", "APY %");
+                for p in &points {
+                    println!(
+                        "  {:<24} {:>12.4}%",
+                        &p.bucket_ts[..std::cmp::min(24, p.bucket_ts.len())],
+                        p.apy,
+                    );
+                }
+                println!("\n  {} data point(s)", points.len());
+            }
         }
     }
     Ok(())
