@@ -962,15 +962,7 @@ impl OrderWallet {
             info!("Limit order is settled on Market Price due to mark price hit limit price");
         }
 
-        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
-        self.utxo_details.insert(index, utxo_detail.clone());
-
-        // Sync to database
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
-            error!("Failed to sync UTXO detail to database: {}", e);
-        }
-
+        // Query final order state (fast — hits relayer API, no chain indexing needed)
         let trader_order = self.query_trader_order(index).await?;
         info!(
             "PnL: {:?}, Net PnL: {:?}",
@@ -984,6 +976,18 @@ impl OrderWallet {
             trader_order.available_margin as u64
         );
         self.zk_accounts.update_io_type(&index, IOType::Coin)?;
+
+        // UTXO fetch — needed for account state but may take time waiting for chain indexing.
+        // This runs with the fast retry config so it polls frequently.
+        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
+        self.utxo_details.insert(index, utxo_detail.clone());
+
+        // Sync to database
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
+            error!("Failed to sync UTXO detail to database: {}", e);
+        }
+
         let account = utxo_detail.output.to_quisquis_account()?;
         self.zk_accounts.update_qq_account(&index, account)?;
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
