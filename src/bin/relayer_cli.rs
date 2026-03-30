@@ -368,6 +368,10 @@ enum OrderCmd {
         #[arg(long)]
         leverage: u64,
 
+        /// Return immediately after relayer accepts the order, skip chain confirmation
+        #[arg(long)]
+        no_wait: bool,
+
         /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
         wallet_id: Option<String>,
@@ -398,6 +402,10 @@ enum OrderCmd {
         /// Take-profit price (optional, enables SLTP close)
         #[arg(long)]
         take_profit: Option<f64>,
+
+        /// Return immediately after relayer confirms settlement, skip chain sync
+        #[arg(long)]
+        no_wait: bool,
 
         /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
@@ -2003,6 +2011,7 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             side,
             entry_price,
             leverage,
+            no_wait,
             wallet_id,
             password,
         } => {
@@ -2020,13 +2029,16 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
                 );
             }
             let request_id = ow
-                .open_trader_order(account_index, ot, ps, entry_price, leverage)
+                .open_trader_order_opts(account_index, ot, ps, entry_price, leverage, no_wait)
                 .await?;
             if json_output {
-                println!("{}", serde_json::json!({"request_id": request_id}));
+                println!("{}", serde_json::json!({"request_id": request_id, "no_wait": no_wait}));
             } else {
                 println!("Order submitted successfully");
                 println!("  Request ID: {request_id}");
+                if no_wait {
+                    println!("  (chain sync deferred — use `order query-trade` to check status)");
+                }
             }
             Ok(())
         }
@@ -2037,6 +2049,7 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
             execution_price,
             stop_loss,
             take_profit,
+            no_wait,
             wallet_id,
             password,
         } => {
@@ -2061,15 +2074,18 @@ async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
                 .await?
             } else {
                 let ot = parse_order_type(&order_type)?;
-                ow.close_trader_order(account_index, ot, execution_price)
+                ow.close_trader_order_opts(account_index, ot, execution_price, no_wait)
                     .await?
             };
 
             if json_output {
-                println!("{}", serde_json::json!({"request_id": request_id}));
+                println!("{}", serde_json::json!({"request_id": request_id, "no_wait": no_wait}));
             } else {
                 println!("Order closed successfully");
                 println!("  Request ID: {request_id}");
+                if no_wait {
+                    println!("  (chain sync deferred — account will sync on next use)");
+                }
             }
             Ok(())
         }

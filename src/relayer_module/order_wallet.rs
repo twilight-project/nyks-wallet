@@ -77,6 +77,9 @@ pub struct OrderWallet {
     pub relayer_endpoint_config: RelayerEndPointConfig,
     #[serde(skip)]
     pub nonce_manager: Arc<NonceManager>,
+    /// Accounts that were modified but not yet synced with on-chain UTXO state.
+    #[serde(skip)]
+    pub pending_sync: std::collections::HashSet<AccountIndex>,
     #[cfg(any(feature = "sqlite", feature = "postgresql"))]
     #[serde(skip)]
     db_manager: Option<DatabaseManager>,
@@ -111,6 +114,7 @@ impl OrderWallet {
             relayer_api_client,
             relayer_endpoint_config,
             nonce_manager: Arc::new(NonceManager::new()),
+            pending_sync: std::collections::HashSet::new(),
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             db_manager: None,
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -157,6 +161,7 @@ impl OrderWallet {
             relayer_api_client,
             relayer_endpoint_config,
             nonce_manager: Arc::new(NonceManager::new()),
+            pending_sync: std::collections::HashSet::new(),
             db_manager: None,
             wallet_password: None,
         })
@@ -288,6 +293,46 @@ impl OrderWallet {
             .map_err(|e| e.to_string())?;
         if !a.on_chain || a.io_type != IOType::Coin || a.balance == 0 {
             return Err(format!("Account is not on chain or not a coin account"));
+        }
+        Ok(())
+    }
+
+    /// Sync an account's on-chain UTXO state. Call this to complete a deferred
+    /// sync after a `--no-wait` open or close operation.
+    pub async fn sync_account_state(&mut self, index: AccountIndex) -> Result<(), String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let io_type = self.zk_accounts.get_account(&index)?.io_type;
+        let utxo_detail =
+            fetch_utxo_details_with_retry(account_address, io_type).await?;
+        self.utxo_details.insert(index, utxo_detail.clone());
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
+            error!("Failed to sync UTXO detail to database: {}", e);
+        }
+
+        let account = utxo_detail.output.to_quisquis_account()?;
+        self.zk_accounts.update_qq_account(&index, account)?;
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        {
+            if let Ok(account) = self.zk_accounts.get_account(&index) {
+                let _ = self.update_zk_account_in_db(&account);
+            }
+        }
+
+        self.pending_sync.remove(&index);
+        info!("Account {} synced with on-chain state", index);
+        Ok(())
+    }
+
+    /// Sync all accounts that have pending state changes.
+    pub async fn sync_all_pending(&mut self) -> Result<(), String> {
+        let pending: Vec<AccountIndex> = self.pending_sync.iter().cloned().collect();
+        for index in pending {
+            if let Err(e) = self.sync_account_state(index).await {
+                error!("Failed to sync account {}: {}", index, e);
+            }
         }
         Ok(())
     }
@@ -827,6 +872,19 @@ impl OrderWallet {
         entry_price: u64,
         leverage: u64,
     ) -> Result<String, String> {
+        self.open_trader_order_opts(index, order_type, order_side, entry_price, leverage, false)
+            .await
+    }
+
+    pub async fn open_trader_order_opts(
+        &mut self,
+        index: AccountIndex,
+        order_type: OrderType,
+        order_side: PositionType,
+        entry_price: u64,
+        leverage: u64,
+        no_wait: bool,
+    ) -> Result<String, String> {
         self.ensure_coin_onchain(index)?;
         if leverage == 0 {
             return Err("Leverage must be greater than 0".to_string());
@@ -881,26 +939,10 @@ impl OrderWallet {
             error!("Failed to sync request ID to database: {}", e);
         }
 
-        if order_type == OrderType::LIMIT {
-        } else {
-            let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Memo).await?;
-
-            self.utxo_details.insert(index, utxo_detail.clone());
-
-            // Sync to database
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
-                error!("Failed to sync UTXO detail to database: {}", e);
-            }
-        }
-
         self.zk_accounts.update_io_type(&index, IOType::Memo)?;
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         {
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
             self.log_order_history(
                 index,
                 &request_id,
@@ -916,6 +958,12 @@ impl OrderWallet {
             );
         }
 
+        if no_wait || order_type == OrderType::LIMIT {
+            self.pending_sync.insert(index);
+        } else {
+            self.sync_account_state(index).await?;
+        }
+
         Ok(request_id)
     }
 
@@ -924,6 +972,16 @@ impl OrderWallet {
         index: AccountIndex,
         order_type: OrderType,
         execution_price: f64,
+    ) -> Result<String, String> {
+        self.close_trader_order_opts(index, order_type, execution_price, false).await
+    }
+
+    pub async fn close_trader_order_opts(
+        &mut self,
+        index: AccountIndex,
+        order_type: OrderType,
+        execution_price: f64,
+        no_wait: bool,
     ) -> Result<String, String> {
         self.validate_market_not_halted().await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
@@ -962,15 +1020,7 @@ impl OrderWallet {
             info!("Limit order is settled on Market Price due to mark price hit limit price");
         }
 
-        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
-        self.utxo_details.insert(index, utxo_detail.clone());
-
-        // Sync to database
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
-            error!("Failed to sync UTXO detail to database: {}", e);
-        }
-
+        // Query PnL immediately (fast — hits relayer API, no chain wait)
         let trader_order = self.query_trader_order(index).await?;
         info!(
             "PnL: {:?}, Net PnL: {:?}",
@@ -984,13 +1034,9 @@ impl OrderWallet {
             trader_order.available_margin as u64
         );
         self.zk_accounts.update_io_type(&index, IOType::Coin)?;
-        let account = utxo_detail.output.to_quisquis_account()?;
-        self.zk_accounts.update_qq_account(&index, account)?;
+
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         {
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
             self.log_order_history(
                 index,
                 &request_id,
@@ -1005,6 +1051,14 @@ impl OrderWallet {
                 None,
             );
         }
+
+        if no_wait {
+            self.pending_sync.insert(index);
+        } else {
+            // UTXO fetch waits for chain indexing (~5-6s)
+            self.sync_account_state(index).await?;
+        }
+
         Ok(request_id)
     }
 
