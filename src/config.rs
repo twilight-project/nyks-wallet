@@ -4,17 +4,17 @@ use std::sync::LazyLock;
 pub static FAUCET_BASE_URL: LazyLock<String> =
     LazyLock::new(|| std::env::var("FAUCET_BASE_URL").unwrap_or("http://0.0.0.0:6969".to_string()));
 pub static NYKS_LCD_BASE_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("NYKS_LCD_BASE_URL").unwrap_or("http://0.0.0.0:1317".to_string()));
+    LazyLock::new(|| std::env::var("NYKS_LCD_BASE_URL").unwrap_or("https://lcd.twilight.org".to_string()));
 pub static NYKS_RPC_BASE_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("NYKS_RPC_BASE_URL").unwrap_or("http://0.0.0.0:26657".to_string()));
+    LazyLock::new(|| std::env::var("NYKS_RPC_BASE_URL").unwrap_or("https://rpc.twilight.org".to_string()));
 pub static VALIDATOR_WALLET_PATH: LazyLock<String> =
     LazyLock::new(|| std::env::var("VALIDATOR_WALLET_PATH").unwrap_or("validator.mnemonic".to_string()));
 pub static RELAYER_PROGRAM_JSON_PATH: LazyLock<String> =
     LazyLock::new(|| std::env::var("RELAYER_PROGRAM_JSON_PATH").unwrap_or_else(|_| "./relayerprogram.json".to_string()));
 pub static ZKOS_SERVER_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("ZKOS_SERVER_URL").unwrap_or("http://0.0.0.0:3030".to_string()));
+    LazyLock::new(|| std::env::var("ZKOS_SERVER_URL").unwrap_or("https://zkserver.twilight.org".to_string()));
 pub static RELAYER_API_RPC_SERVER_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("RELAYER_API_RPC_SERVER_URL").unwrap_or("http://0.0.0.0:8088/api".to_string()));
+    LazyLock::new(|| std::env::var("RELAYER_API_RPC_SERVER_URL").unwrap_or("https://api.ephemeral.fi/api".to_string()));
 pub static CHAIN_ID: LazyLock<String> =
     LazyLock::new(|| std::env::var("CHAIN_ID").unwrap_or("nyks".to_string()));
 /// Network type: "testnet" or "mainnet". Controls BIP-44 coin type (1 vs 118).
