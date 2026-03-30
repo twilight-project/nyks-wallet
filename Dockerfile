@@ -39,12 +39,21 @@ WORKDIR /home/relayer
 COPY --from=builder /workspace/target/release/relayer-init /usr/local/bin/relayer-init
 COPY --from=builder /workspace/target/release/relayer-cli /usr/local/bin/relayer-cli
 
+# Copy the relayer program JSON and env example for reference
+COPY --from=builder /workspace/relayerprogram.json /home/relayer/relayerprogram.json
+COPY --from=builder /workspace/.env.example /home/relayer/.env.example
+
 # Switch to the non-root user
 USER relayer
 
-# The program expects several environment variables.
-# You can provide them at `docker run` time.
-# Example:
-#   docker run -e ZKOS_SERVER_URL=https://zkos-rpc.twilight.rest ... relayer-init
+# Default environment for testnet
+ENV NYKS_LCD_BASE_URL=https://lcd.twilight.rest \
+    NYKS_RPC_BASE_URL=https://rpc.twilight.rest \
+    FAUCET_BASE_URL=https://faucet-rpc.twilight.rest \
+    ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos \
+    RELAYER_API_RPC_SERVER_URL=https://relayer.twilight.rest/api \
+    RELAYER_PROGRAM_JSON_PATH=./relayerprogram.json \
+    RUST_LOG=info
 
-ENTRYPOINT ["relayer-init"] 
+# Default to the CLI; override with `docker run <image> relayer-init` if needed
+ENTRYPOINT ["relayer-cli"]
