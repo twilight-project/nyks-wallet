@@ -18,18 +18,18 @@ use twilight_client_sdk::{
 };
 
 // Retry configuration constants
-const DEFAULT_UTXO_ATTEMPTS: u32 = 15;
-const TXHASH_ATTEMPTS: u32 = 50;
-const INITIAL_RETRY_DELAY_MS: u64 = 500;
-const MAX_RETRY_DELAY_MS: u64 = 10_000;
-const BACKOFF_FACTOR: f64 = 1.5;
+const DEFAULT_UTXO_ATTEMPTS: u32 = 30;
+const TXHASH_ATTEMPTS: u32 = 60;
+const INITIAL_RETRY_DELAY_MS: u64 = 50;
+const MAX_RETRY_DELAY_MS: u64 = 1_000;
+const BACKOFF_FACTOR: f64 = 1.2;
 
 /// Calculate retry delay with exponential backoff and jitter.
 fn retry_delay(attempt: u32) -> Duration {
     let base = INITIAL_RETRY_DELAY_MS as f64 * BACKOFF_FACTOR.powi(attempt as i32);
     let capped = base.min(MAX_RETRY_DELAY_MS as f64);
-    // Add ~30% jitter to avoid thundering herd
-    let jitter = fastrand::f64() * capped * 0.3;
+    // Add ~10% jitter to avoid thundering herd
+    let jitter = fastrand::f64() * capped * 0.1;
     Duration::from_millis((capped + jitter) as u64)
 }
 
