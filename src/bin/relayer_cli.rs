@@ -249,6 +249,29 @@ enum WalletCmd {
         #[arg(long)]
         password: Option<String>,
     },
+
+    /// Send tokens (nyks or sats) to another Twilight address
+    Send {
+        /// Recipient Twilight address
+        #[arg(long)]
+        to: String,
+
+        /// Amount to send
+        #[arg(long)]
+        amount: u64,
+
+        /// Token denomination (nyks or sats)
+        #[arg(long, default_value = "sats")]
+        denom: String,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1796,6 +1819,111 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
         #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
         WalletCmd::UpdateBtcAddress { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::Send {
+            to,
+            amount,
+            denom,
+            wallet_id,
+            password,
+        } => {
+            if denom != "nyks" && denom != "sats" {
+                return Err("Denom must be 'nyks' or 'sats'".to_string());
+            }
+
+            let ow = resolve_order_wallet(wallet_id, password).await?;
+            let from_addr = ow.wallet.twilightaddress.clone();
+
+            println!("Sending {amount} {denom}");
+            println!("  From: {from_addr}");
+            println!("  To:   {to}");
+
+            // Build the Cosmos bank MsgSend as a prost message
+            #[derive(prost::Message)]
+            struct Coin {
+                #[prost(string, tag = "1")]
+                denom: String,
+                #[prost(string, tag = "2")]
+                amount: String,
+            }
+
+            #[derive(prost::Message)]
+            struct CosmosMsgSend {
+                #[prost(string, tag = "1")]
+                from_address: String,
+                #[prost(string, tag = "2")]
+                to_address: String,
+                #[prost(message, repeated, tag = "3")]
+                amount: Vec<Coin>,
+            }
+
+            let msg = CosmosMsgSend {
+                from_address: from_addr.clone(),
+                to_address: to.clone(),
+                amount: vec![Coin {
+                    denom: denom.clone(),
+                    amount: amount.to_string(),
+                }],
+            };
+
+            use nyks_wallet::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
+            use nyks_wallet::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+            use nyks_wallet::nyks_rpc::rpcclient::txresult::parse_tx_response;
+
+            let method_type = MethodTypeURL::MsgSend;
+            let any_msg = method_type.type_url(msg);
+
+            let sk = ow.wallet.signing_key().map_err(|e| e.to_string())?;
+            let pk = ow.wallet.public_key().map_err(|e| e.to_string())?;
+
+            let account_details = nyks_wallet::wallet::faucet::fetch_account_details(
+                &from_addr,
+                &ow.wallet.chain_config.lcd_endpoint,
+            )
+            .await
+            .map_err(|e| format!("Failed to get account info: {e}"))?;
+            let account_number = account_details.account.account_number;
+            let sequence = account_details.account.sequence;
+
+            let signed_tx = method_type
+                .sign_msg::<CosmosMsgSend>(any_msg, pk, sequence, account_number, sk)
+                .map_err(|e| e.to_string())?;
+
+            let method = Method::broadcast_tx_sync;
+            let (tx_send, _): (RpcBody<TxParams>, String) =
+                RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
+
+            let rpc_endpoint = ow.wallet.chain_config.rpc_endpoint.clone();
+            let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
+                .await
+                .map_err(|e| format!("RPC send failed: {e}"))?;
+
+            match response {
+                Ok(rpc_response) => {
+                    let result = parse_tx_response(&method, rpc_response)
+                        .map_err(|e| format!("Failed to parse response: {e}"))?;
+                    let tx_hash = result.get_tx_hash();
+                    let code = result.get_code();
+                    if code == 0 {
+                        println!("Transaction successful");
+                        println!("  TX Hash: {tx_hash}");
+                    } else {
+                        println!("Transaction failed (code {code})");
+                        println!("  TX Hash: {tx_hash}");
+                    }
+                }
+                Err(e) => return Err(format!("RPC error: {e}")),
+            }
+
+            Ok(())
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::Send { .. } => Err(
             "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
                 .to_string(),
         ),
