@@ -1,25 +1,61 @@
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
-pub static FAUCET_BASE_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("FAUCET_BASE_URL").unwrap_or("http://0.0.0.0:6969".to_string()));
-pub static NYKS_LCD_BASE_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("NYKS_LCD_BASE_URL").unwrap_or("http://0.0.0.0:1317".to_string()));
-pub static NYKS_RPC_BASE_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("NYKS_RPC_BASE_URL").unwrap_or("http://0.0.0.0:26657".to_string()));
+/// Network type: "testnet" or "mainnet". Controls BIP-44 coin type (1 vs 118)
+/// and default endpoint URLs.
+pub static NETWORK_TYPE: LazyLock<String> =
+    LazyLock::new(|| std::env::var("NETWORK_TYPE").unwrap_or("mainnet".to_string()));
+
+fn is_mainnet() -> bool {
+    *NETWORK_TYPE == "mainnet"
+}
+
+pub static FAUCET_BASE_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "".to_string()
+    } else {
+        "https://faucet-rpc.twilight.rest".to_string()
+    };
+    std::env::var("FAUCET_BASE_URL").unwrap_or(default)
+});
+pub static NYKS_LCD_BASE_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://lcd.twilight.org".to_string()
+    } else {
+        "https://lcd.twilight.rest".to_string()
+    };
+    std::env::var("NYKS_LCD_BASE_URL").unwrap_or(default)
+});
+pub static NYKS_RPC_BASE_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://rpc.twilight.org".to_string()
+    } else {
+        "https://rpc.twilight.rest".to_string()
+    };
+    std::env::var("NYKS_RPC_BASE_URL").unwrap_or(default)
+});
 pub static VALIDATOR_WALLET_PATH: LazyLock<String> =
     LazyLock::new(|| std::env::var("VALIDATOR_WALLET_PATH").unwrap_or("validator.mnemonic".to_string()));
 pub static RELAYER_PROGRAM_JSON_PATH: LazyLock<String> =
     LazyLock::new(|| std::env::var("RELAYER_PROGRAM_JSON_PATH").unwrap_or_else(|_| "./relayerprogram.json".to_string()));
-pub static ZKOS_SERVER_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("ZKOS_SERVER_URL").unwrap_or("http://0.0.0.0:3030".to_string()));
-pub static RELAYER_API_RPC_SERVER_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("RELAYER_API_RPC_SERVER_URL").unwrap_or("http://0.0.0.0:8088/api".to_string()));
+pub static ZKOS_SERVER_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://zkserver.twilight.org".to_string()
+    } else {
+        "https://nykschain.twilight.rest/zkos".to_string()
+    };
+    std::env::var("ZKOS_SERVER_URL").unwrap_or(default)
+});
+pub static RELAYER_API_RPC_SERVER_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://api.ephemeral.fi/api".to_string()
+    } else {
+        "https://relayer.twilight.rest/api".to_string()
+    };
+    std::env::var("RELAYER_API_RPC_SERVER_URL").unwrap_or(default)
+});
 pub static CHAIN_ID: LazyLock<String> =
     LazyLock::new(|| std::env::var("CHAIN_ID").unwrap_or("nyks".to_string()));
-/// Network type: "testnet" or "mainnet". Controls BIP-44 coin type (1 vs 118).
-pub static NETWORK_TYPE: LazyLock<String> =
-    LazyLock::new(|| std::env::var("NETWORK_TYPE").unwrap_or("mainnet".to_string()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EndpointConfig {

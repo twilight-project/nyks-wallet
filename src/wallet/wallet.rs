@@ -27,7 +27,7 @@ fn coin_type() -> u32 {
     use crate::config::NETWORK_TYPE;
     match NETWORK_TYPE.as_str() {
         "mainnet" => 118,
-        _ => 1,
+        _ => 118,
     }
 }
 
