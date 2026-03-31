@@ -249,6 +249,29 @@ enum WalletCmd {
         #[arg(long)]
         password: Option<String>,
     },
+
+    /// Send tokens (nyks or sats) to another Twilight address
+    Send {
+        /// Recipient Twilight address
+        #[arg(long)]
+        to: String,
+
+        /// Amount to send
+        #[arg(long)]
+        amount: u64,
+
+        /// Token denomination (nyks or sats)
+        #[arg(long, default_value = "nyks")]
+        denom: String,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1796,6 +1819,37 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
         #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
         WalletCmd::UpdateBtcAddress { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::Send {
+            to,
+            amount,
+            denom,
+            wallet_id,
+            password,
+        } => {
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let from_addr = ow.wallet.twilightaddress.clone();
+
+            println!("Sending {amount} {denom}");
+            println!("  From: {from_addr}");
+            println!("  To:   {to}");
+
+            match ow.wallet.send_tokens(&to, amount, &denom).await {
+                Ok(tx_hash) => {
+                    println!("Transaction successful");
+                    println!("  TX Hash: {tx_hash}");
+                    Ok(())
+                }
+                Err(e) => Err(format!("Send failed: {e}")),
+            }
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::Send { .. } => Err(
             "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
                 .to_string(),
         ),

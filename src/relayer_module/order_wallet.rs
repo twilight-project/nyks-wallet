@@ -201,7 +201,7 @@ impl OrderWallet {
 
         let db_manager = DatabaseManager::new(wallet_id, pool);
         let secure_password;
-        let wallet = match password {
+        let mut wallet = match password {
             Some(pwd) => {
                 secure_password = pwd.clone();
                 db_manager.load_encrypted_wallet(&pwd)?
@@ -215,7 +215,7 @@ impl OrderWallet {
                 db_manager.load_encrypted_wallet(&pwd)?
             }
         };
-
+        wallet.chain_config = EndpointConfig::default().to_wallet_endpoint_config();
         // Load zk accounts
         let zk_accounts = db_manager.load_all_zk_accounts()?;
         let max_account_index = db_manager.get_max_account_index()?;

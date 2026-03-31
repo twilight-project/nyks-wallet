@@ -93,7 +93,7 @@ relayer-cli [--json] <COMMAND>
 
 ### Command Groups
 
-- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce
+- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send
 - `zkaccount` — fund, withdraw, transfer, and split ZkOS trading accounts
 - `order` — open/close/cancel/query trader and lend orders, unlock-trade, history-trade, history-lend, funding-history, account-summary, tx-hashes
 - `market` — query prices, orderbook, rates, historical data, candles, APY charts
@@ -338,6 +338,28 @@ relayer-cli wallet update-btc-address --btc-address bc1q... --wallet-id my-walle
 | `--btc-address <ADDR>`  | **Required.** New BTC address                        |
 | `--wallet-id <ID>`      | Wallet ID (falls back to `NYKS_WALLET_ID`)           |
 | `--password <PASS>`     | DB encryption password                               |
+
+### `wallet send`
+
+Send tokens (nyks or sats) to another Twilight address. Requires DB.
+
+```bash
+# Send 1000 nyks (default denom)
+relayer-cli wallet send --to twilight1abc... --amount 1000
+
+# Send 500 sats
+relayer-cli wallet send --to twilight1abc... --amount 500 --denom sats
+
+relayer-cli wallet send --to twilight1abc... --amount 1000 --wallet-id my-wallet --password s3cret
+```
+
+| Flag                | Description                                             |
+| ------------------- | ------------------------------------------------------- |
+| `--to <ADDR>`       | **Required.** Recipient Twilight address                |
+| `--amount <N>`      | **Required.** Amount to send                            |
+| `--denom <DENOM>`   | Token denomination: `nyks` (default) or `sats`          |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)              |
+| `--password <PASS>` | DB encryption password                                  |
 
 ---
 

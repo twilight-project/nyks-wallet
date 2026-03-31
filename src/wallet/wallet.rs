@@ -564,6 +564,88 @@ impl Wallet {
         Ok(wallet)
     }
 
+    /// Send tokens (nyks or sats) to another Twilight address.
+    /// Returns the transaction hash on success.
+    pub async fn send_tokens(
+        &mut self,
+        to_address: &str,
+        amount: u64,
+        denom: &str,
+    ) -> anyhow::Result<String> {
+        use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
+        use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+        use crate::nyks_rpc::rpcclient::txresult::parse_tx_response;
+
+        if denom != "nyks" && denom != "sats" {
+            return Err(anyhow!("denom must be 'nyks' or 'sats'"));
+        }
+
+        #[derive(prost::Message)]
+        struct Coin {
+            #[prost(string, tag = "1")]
+            denom: String,
+            #[prost(string, tag = "2")]
+            amount: String,
+        }
+
+        #[derive(prost::Message)]
+        struct CosmosMsgSend {
+            #[prost(string, tag = "1")]
+            from_address: String,
+            #[prost(string, tag = "2")]
+            to_address: String,
+            #[prost(message, repeated, tag = "3")]
+            amount: Vec<Coin>,
+        }
+
+        let msg = CosmosMsgSend {
+            from_address: self.twilightaddress.clone(),
+            to_address: to_address.to_string(),
+            amount: vec![Coin {
+                denom: denom.to_string(),
+                amount: amount.to_string(),
+            }],
+        };
+
+        let method_type = MethodTypeURL::MsgSend;
+        let any_msg = method_type.type_url(msg);
+
+        let sk = self.signing_key()?;
+        let pk = self.public_key()?;
+
+        let account_details =
+            crate::faucet::fetch_account_details(&self.twilightaddress, &self.chain_config.lcd_endpoint)
+                .await?;
+        let account_number = account_details.account.account_number;
+        let sequence = account_details.account.sequence;
+
+        let signed_tx = method_type
+            .sign_msg::<CosmosMsgSend>(any_msg, pk, sequence, account_number, sk)?;
+
+        let method = Method::broadcast_tx_sync;
+        let (tx_send, _): (RpcBody<TxParams>, String) =
+            RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
+
+        let rpc_endpoint = self.chain_config.rpc_endpoint.clone();
+        let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
+            .await
+            .map_err(|e| anyhow!("RPC send failed: {e}"))?;
+
+        match response {
+            Ok(rpc_response) => {
+                let result = parse_tx_response(&method, rpc_response)?;
+                let tx_hash = result.get_tx_hash();
+                let code = result.get_code();
+                if code == 0 {
+                    Ok(tx_hash)
+                } else {
+                    Err(anyhow!("Transaction failed (code {code}), TX Hash: {tx_hash}"))
+                }
+            }
+            Err(e) => Err(anyhow!("RPC error: {e}")),
+        }
+    }
+
     pub fn get_zk_account_seed(
         &self,
         chain_id: &str,
