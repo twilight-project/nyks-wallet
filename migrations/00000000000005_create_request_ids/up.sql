@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS request_ids (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet_id TEXT NOT NULL,
+    account_index INTEGER NOT NULL,
+    request_id TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(wallet_id, account_index)
+);

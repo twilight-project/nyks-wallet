@@ -345,6 +345,78 @@ impl DbUtxoDetail {
     }
 }
 
+// Order history model
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = order_history)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct DbOrderHistory {
+    pub id: Option<i32>,
+    pub wallet_id: String,
+    pub account_index: i64,
+    pub request_id: String,
+    pub action: String,
+    pub order_type: String,
+    pub position_type: Option<String>,
+    pub amount: i64,
+    pub price: Option<f64>,
+    pub leverage: Option<i64>,
+    pub pnl: Option<f64>,
+    pub status: String,
+    pub tx_hash: Option<String>,
+    pub created_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = order_history)]
+pub struct NewDbOrderHistory {
+    pub wallet_id: String,
+    pub account_index: i64,
+    pub request_id: String,
+    pub action: String,
+    pub order_type: String,
+    pub position_type: Option<String>,
+    pub amount: i64,
+    pub price: Option<f64>,
+    pub leverage: Option<i64>,
+    pub pnl: Option<f64>,
+    pub status: String,
+    pub tx_hash: Option<String>,
+    pub created_at: NaiveDateTime,
+}
+
+// Transfer history model
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = transfer_history)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct DbTransferHistory {
+    pub id: Option<i32>,
+    pub wallet_id: String,
+    pub direction: String,
+    pub from_index: Option<i64>,
+    pub to_index: Option<i64>,
+    pub amount: i64,
+    pub tx_hash: Option<String>,
+    pub created_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = transfer_history)]
+pub struct NewDbTransferHistory {
+    pub wallet_id: String,
+    pub direction: String,
+    pub from_index: Option<i64>,
+    pub to_index: Option<i64>,
+    pub amount: i64,
+    pub tx_hash: Option<String>,
+    pub created_at: NaiveDateTime,
+}
+
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 impl DbRequestId {
     pub fn new(wallet_id: String, account_index: u64, request_id: String) -> NewDbRequestId {

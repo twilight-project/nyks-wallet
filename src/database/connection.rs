@@ -1,7 +1,7 @@
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use diesel::prelude::*;
-#[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use diesel::r2d2::ConnectionManager;
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use log::debug;
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use r2d2::{Pool, PooledConnection};
@@ -9,6 +9,9 @@ use r2d2::{Pool, PooledConnection};
 use std::sync::{Once, OnceLock};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use std::{env, time::Duration};
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 #[cfg(feature = "sqlite")]
 pub type DbConnection = diesel::SqliteConnection;
@@ -103,8 +106,8 @@ pub fn init_pool(db_url: Option<String>) -> Result<DbPool, String> {
         use sqlite_tuning::SqlitePragmas;
         debug!("Using SQLite database URL: {}", url);
         return Pool::builder()
-            .max_size(15)
-            .min_idle(Some(2))
+            .max_size(4)
+            .min_idle(Some(1))
             .connection_timeout(Duration::from_secs(8))
             .connection_customizer(Box::new(SqlitePragmas))
             .build(manager)
@@ -148,195 +151,11 @@ pub fn run_migrations_once(pool: &DbPool) -> Result<(), String> {
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 pub fn run_migrations(conn: &mut DbConnection) -> Result<(), String> {
+    conn.run_pending_migrations(MIGRATIONS)
+        .map_err(|e| format!("Failed to run migrations: {}", e))?;
+
     #[cfg(feature = "sqlite")]
-    {
-        use sqlite_tuning::set_persistent_sqlite_pragmas;
-        // SQLite migrations
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS zk_accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                wallet_id TEXT NOT NULL,
-                account_index INTEGER NOT NULL,
-                qq_address TEXT NOT NULL,
-                balance INTEGER NOT NULL,
-                account TEXT NOT NULL,
-                scalar TEXT NOT NULL,
-                io_type_value INTEGER NOT NULL,
-                on_chain BOOLEAN NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(wallet_id, account_index)
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create zk_accounts table: {}", e))?;
-
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS encrypted_wallets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                wallet_id TEXT UNIQUE NOT NULL,
-                encrypted_data BLOB NOT NULL,
-                salt BLOB NOT NULL,
-                nonce BLOB NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create encrypted_wallets table: {}", e))?;
-
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS order_wallets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                wallet_id TEXT UNIQUE NOT NULL,
-                chain_id TEXT NOT NULL,
-                seed_encrypted BLOB NOT NULL,
-                seed_salt BLOB NOT NULL,
-                seed_nonce BLOB NOT NULL,
-                relayer_api_endpoint TEXT NOT NULL,
-                zkos_server_endpoint TEXT NOT NULL,
-                relayer_program_json_path TEXT NOT NULL,
-                is_active BOOLEAN NOT NULL DEFAULT 1,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create order_wallets table: {}", e))?;
-
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS utxo_details (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                wallet_id TEXT NOT NULL,
-                account_index INTEGER NOT NULL,
-                utxo_data TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(wallet_id, account_index)
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create utxo_details table: {}", e))?;
-
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS request_ids (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                wallet_id TEXT NOT NULL,
-                account_index INTEGER NOT NULL,
-                request_id TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(wallet_id, account_index)
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create request_ids table: {}", e))?;
-        set_persistent_sqlite_pragmas(conn)?;
-    }
-
-    #[cfg(all(feature = "postgresql", not(feature = "sqlite")))]
-    {
-        // PostgreSQL migrations
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS zk_accounts (
-                id SERIAL PRIMARY KEY,
-                wallet_id VARCHAR NOT NULL,
-                account_index BIGINT NOT NULL,
-                qq_address VARCHAR NOT NULL,
-                balance BIGINT NOT NULL,
-                account VARCHAR NOT NULL,
-                scalar VARCHAR NOT NULL,
-                io_type_value INTEGER NOT NULL,
-                on_chain BOOLEAN NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                UNIQUE(wallet_id, account_index)
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create zk_accounts table: {}", e))?;
-
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS encrypted_wallets (
-                id SERIAL PRIMARY KEY,
-                wallet_id VARCHAR UNIQUE NOT NULL,
-                encrypted_data BYTEA NOT NULL,
-                salt BYTEA NOT NULL,
-                nonce BYTEA NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create encrypted_wallets table: {}", e))?;
-
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS order_wallets (
-                id SERIAL PRIMARY KEY,
-                wallet_id VARCHAR UNIQUE NOT NULL,
-                chain_id VARCHAR NOT NULL,
-                seed_encrypted BYTEA NOT NULL,
-                seed_salt BYTEA NOT NULL,
-                seed_nonce BYTEA NOT NULL,
-                relayer_api_endpoint VARCHAR NOT NULL,
-                zkos_server_endpoint VARCHAR NOT NULL,
-                relayer_program_json_path VARCHAR NOT NULL,
-                is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create order_wallets table: {}", e))?;
-
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS utxo_details (
-                id SERIAL PRIMARY KEY,
-                wallet_id VARCHAR NOT NULL,
-                account_index BIGINT NOT NULL,
-                utxo_data TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                UNIQUE(wallet_id, account_index)
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create utxo_details table: {}", e))?;
-
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS request_ids (
-                id SERIAL PRIMARY KEY,
-                wallet_id VARCHAR NOT NULL,
-                account_index BIGINT NOT NULL,
-                request_id VARCHAR NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                UNIQUE(wallet_id, account_index)
-            );
-            "#,
-        )
-        .execute(conn)
-        .map_err(|e| format!("Failed to create request_ids table: {}", e))?;
-    }
+    sqlite_tuning::set_persistent_sqlite_pragmas(conn)?;
 
     Ok(())
 }

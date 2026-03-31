@@ -10,15 +10,29 @@ use crate::{
 };
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 use twilight_client_sdk::{
-    relayer_rpcclient::method::UtxoDetailResponse, relayer_types::TxHash, zkvm::IOType,
+    relayer_rpcclient::method::UtxoDetailResponse,
+    relayer_types::{OrderStatus, TxHash},
+    zkvm::IOType,
 };
+
 // Retry configuration constants
-const DEFAULT_UTXO_ATTEMPTS: u32 = 30;
-// const LONG_UTXO_ATTEMPTS: u32 = 60;
+const DEFAULT_UTXO_ATTEMPTS: u32 = 15;
 const TXHASH_ATTEMPTS: u32 = 50;
-const RETRY_DELAY_MS: u64 = 1000;
+const INITIAL_RETRY_DELAY_MS: u64 = 500;
+const MAX_RETRY_DELAY_MS: u64 = 10_000;
+const BACKOFF_FACTOR: f64 = 1.5;
+
+/// Calculate retry delay with exponential backoff and jitter.
+fn retry_delay(attempt: u32) -> Duration {
+    let base = INITIAL_RETRY_DELAY_MS as f64 * BACKOFF_FACTOR.powi(attempt as i32);
+    let capped = base.min(MAX_RETRY_DELAY_MS as f64);
+    // Add ~30% jitter to avoid thundering herd
+    let jitter = fastrand::f64() * capped * 0.3;
+    Duration::from_millis((capped + jitter) as u64)
+}
+
 /// Constructs a `MsgMintBurnTradingBtc` for the given wallet/zk account, then signs it and
 /// returns the base64-encoded transaction ready for broadcast.
 pub fn build_and_sign_msg_mint_burn_trading_btc(
@@ -70,7 +84,6 @@ pub async fn send_tx_to_chain(signed_tx: String, rpc_endpoint: &str) -> Result<T
     let (tx_send, _): (RpcBody<TxParams>, String) =
         RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
 
-    // RPC endpoint URL (consider moving to an env var later)
     let rpc_endpoint = rpc_endpoint.to_string();
 
     // Execute the blocking HTTP request on a separate thread
@@ -84,7 +97,6 @@ pub async fn send_tx_to_chain(signed_tx: String, rpc_endpoint: &str) -> Result<T
             return Err(format!("Failed to get tx result: {}", e));
         }
     };
-    // let result = parse_tx_response(tx_send.get_method(), response);
     match result {
         Ok(result) => {
             let tx_hash = result.get_tx_hash();
@@ -92,16 +104,14 @@ pub async fn send_tx_to_chain(signed_tx: String, rpc_endpoint: &str) -> Result<T
             info!("tx hash: {} with code: {}", tx_hash, code);
             Ok(TxResult { tx_hash, code })
         }
-        Err(e) => {
-            return Err(format!("Failed to get tx result: {}", e));
-        }
+        Err(e) => Err(format!("Failed to get tx result: {}", e)),
     }
 }
 
 /// Repeatedly queries the chain for UTXO details until success or `max_attempts` reached.
+/// Uses exponential backoff with jitter between attempts.
 pub async fn fetch_utxo_details_with_retry(
     account_id: String,
-
     io_type: IOType,
 ) -> Result<UtxoDetailResponse, String> {
     let mut attempts = 0;
@@ -143,13 +153,12 @@ pub async fn fetch_utxo_details_with_retry(
                 }
             }
         }
-        sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+        sleep(retry_delay(attempts)).await;
     }
 }
 
 pub async fn fetch_tx_hash_with_retry(
     request_id: &str,
-
     relayer_api_client: &RelayerJsonRpcClient,
 ) -> Result<TxHash, String> {
     let mut attempts = 0;
@@ -158,10 +167,12 @@ pub async fn fetch_tx_hash_with_retry(
             .transaction_hashes(TransactionHashArgs::RequestId {
                 id: request_id.to_string(),
                 status: None,
+                limit: None,
+                offset: None,
             })
             .await
             .map_err(|e| e.to_string())?;
-        if response.len() == 0 {
+        if response.is_empty() {
             attempts += 1;
             if attempts >= TXHASH_ATTEMPTS {
                 return Err(format!(
@@ -169,16 +180,43 @@ pub async fn fetch_tx_hash_with_retry(
                     TXHASH_ATTEMPTS
                 ));
             }
-            sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+            sleep(retry_delay(attempts)).await;
         } else {
-            // Find TxHash with latest datetime
-            // let latest_tx = response
-            //     .iter()
-            //     .max_by_key(|tx| tx.datetime.clone())
-            //     .unwrap_or(&response[0]);
-            // // return Ok(response[0].clone());
-            // return Ok(latest_tx.clone());
+            let latest_tx = response
+                .iter()
+                .max_by_key(|tx| (tx.datetime.trim().parse::<i64>().unwrap_or(i64::MIN), tx.id))
+                .unwrap_or(&response[0]);
 
+            return Ok(latest_tx.clone());
+        }
+    }
+}
+pub async fn fetch_tx_hash_with_account_address_retry(
+    account_address: &str,
+    order_status: Option<OrderStatus>,
+    relayer_api_client: &RelayerJsonRpcClient,
+) -> Result<TxHash, String> {
+    let mut attempts = 0;
+    loop {
+        let response = relayer_api_client
+            .transaction_hashes(TransactionHashArgs::AccountId {
+                id: account_address.to_string(),
+                status: order_status.clone(),
+                limit: None,
+                offset: None,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        if response.is_empty() {
+            attempts += 1;
+            if attempts >= TXHASH_ATTEMPTS {
+                return Err(format!(
+                    "Failed to get tx hash after {} attempts",
+                    TXHASH_ATTEMPTS
+                ));
+            }
+            sleep(retry_delay(attempts)).await;
+        } else {
             let latest_tx = response
                 .iter()
                 .max_by_key(|tx| (tx.datetime.trim().parse::<i64>().unwrap_or(i64::MIN), tx.id))
@@ -190,19 +228,23 @@ pub async fn fetch_tx_hash_with_retry(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[must_use]
 pub struct TxResult {
     pub tx_hash: String,
     pub code: u32,
 }
 
-/// Repeatedly queries the chain for UTXO details until success or `max_attempts` reached.
+/// Repeatedly queries the chain for UTXO details until the UTXO is removed (not found)
+/// or `max_attempts` reached. Uses exponential backoff with jitter.
 pub async fn fetch_removed_utxo_details_with_retry(
     account_id: String,
-
     io_type: IOType,
 ) -> Result<(), String> {
     let mut attempts = 0;
-    info!("fetch_utxo_details_with_retry: account_id: {}", account_id);
+    info!(
+        "fetch_removed_utxo_details_with_retry: account_id: {}",
+        account_id
+    );
     loop {
         let account_id_clone = account_id.clone();
         match tokio::task::spawn_blocking(move || {
@@ -239,6 +281,6 @@ pub async fn fetch_removed_utxo_details_with_retry(
                 }
             }
         }
-        sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+        sleep(retry_delay(attempts)).await;
     }
 }

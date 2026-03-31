@@ -74,10 +74,46 @@ diesel::table! {
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+diesel::table! {
+    order_history (id) {
+        id -> Nullable<Integer>,
+        wallet_id -> Text,
+        account_index -> BigInt,
+        request_id -> Text,
+        action -> Text,
+        order_type -> Text,
+        position_type -> Nullable<Text>,
+        amount -> BigInt,
+        price -> Nullable<Double>,
+        leverage -> Nullable<BigInt>,
+        pnl -> Nullable<Double>,
+        status -> Text,
+        tx_hash -> Nullable<Text>,
+        created_at -> Timestamp,
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+diesel::table! {
+    transfer_history (id) {
+        id -> Nullable<Integer>,
+        wallet_id -> Text,
+        direction -> Text,
+        from_index -> Nullable<BigInt>,
+        to_index -> Nullable<BigInt>,
+        amount -> BigInt,
+        tx_hash -> Nullable<Text>,
+        created_at -> Timestamp,
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
 diesel::allow_tables_to_appear_in_same_query!(
     zk_accounts,
     encrypted_wallets,
     order_wallets,
     utxo_details,
     request_ids,
+    order_history,
+    transfer_history,
 );

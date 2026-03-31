@@ -7,6 +7,8 @@ pub enum WalletError {
     InsufficientBalance,
     #[error("account {0} not on-chain or wrong IO type")]
     BadAccountState(u64),
+    #[error("account not found: index {0}")]
+    AccountNotFound(u64),
     #[error("order status {0} not acceptable for this operation")]
     InvalidOrderStatus(String),
     #[error("missing request id for account {0}")]
@@ -52,9 +54,21 @@ pub enum WalletError {
     PasswordPrompt(String),
     #[error("serialization error: {0}")]
     Serialization(String),
+    #[error("key derivation failed: {0}")]
+    KeyDerivation(String),
+    #[error("encryption error: {0}")]
+    Encryption(String),
+    #[error("decryption error: {0}")]
+    Decryption(String),
+    #[error("signing key error: {0}")]
+    SigningKey(String),
+    #[error("transfer transaction failed: {0}")]
+    Transfer(String),
+    #[error("import failed: {0}")]
+    Import(String),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
-    #[error("zk account seed not found")]
+    #[error("zk account seed not found: {0}")]
     ZkAccountSeedNotFound(String),
 }
 

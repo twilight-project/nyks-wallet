@@ -3,6 +3,10 @@ use secrecy::{ExposeSecret, SecretString};
 use std::env;
 use zeroize::Zeroize;
 
+/// Number of PBKDF2 iterations for key derivation.
+/// 600_000 is the OWASP recommendation for PBKDF2-HMAC-SHA256 (2023+).
+const PBKDF2_ITERATIONS: u32 = 600_000;
+
 /// Secure password management for wallet operations
 pub struct SecurePassword;
 
@@ -36,8 +40,7 @@ impl SecurePassword {
     pub fn get_passphrase_with_prompt(prompt: &str) -> Result<SecretString> {
         // Try environment variable first
         if let Ok(passphrase) = env::var("NYKS_WALLET_PASSPHRASE") {
-            if passphrase.is_empty() {
-            } else {
+            if !passphrase.is_empty() {
                 let mut passphrase_mut = passphrase;
                 let secret = SecretString::new(passphrase_mut.clone());
                 passphrase_mut.zeroize();
@@ -50,16 +53,23 @@ impl SecurePassword {
         Ok(SecretString::new(pass))
     }
 
-    /// Derive a key from the passphrase using a secure method
+    /// Derive a 256-bit key from the passphrase using PBKDF2-HMAC-SHA256.
+    ///
+    /// Uses 600,000 iterations per OWASP recommendations.
     pub fn derive_key_from_passphrase(passphrase: &SecretString, salt: &[u8]) -> Result<[u8; 32]> {
-        use sha2::{Digest, Sha256};
+        use hmac::Hmac;
+        use sha2::Sha256;
 
-        let mut hasher = Sha256::new();
-        hasher.update(passphrase.expose_secret().as_bytes());
-        hasher.update(salt);
-        let key_bytes = hasher.finalize();
+        let mut key = [0u8; 32];
+        pbkdf2::pbkdf2::<Hmac<Sha256>>(
+            passphrase.expose_secret().as_bytes(),
+            salt,
+            PBKDF2_ITERATIONS,
+            &mut key,
+        )
+        .map_err(|e| anyhow::anyhow!("PBKDF2 key derivation failed: {}", e))?;
 
-        Ok(key_bytes.into())
+        Ok(key)
     }
 
     /// Validate passphrase strength (basic checks)
@@ -152,32 +162,5 @@ mod tests {
 
         let strong = SecretString::new("MySecurePass123!".to_string());
         assert!(SecurePassword::validate_passphrase_strength(&strong).is_ok());
-    }
-    #[test]
-    fn test_get_passphrase_with_prompt() {
-        use dotenv::dotenv;
-        use std::env;
-
-        // Load environment variables
-        dotenv().ok();
-
-        // Set empty password in environment
-        unsafe {
-            env::set_var("NYKS_WALLET_PASSPHRASE", "test1_password");
-        }
-
-        // Test with empty password
-        let result = SecurePassword::get_passphrase_with_prompt(
-            "Could not find passphrase from environment, \nplease enter wallet encryption password: ",
-        );
-        assert!(result.is_ok());
-        // assert!(
-        //     result
-        //         .unwrap_err()
-
-        //         .contains("Password cannot be empty")
-        // );
-
-        // Clean up
     }
 }

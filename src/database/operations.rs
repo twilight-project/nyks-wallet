@@ -13,8 +13,8 @@ use crate::wallet::Wallet;
 use crate::zkos_accounts::zkaccount::ZkAccount;
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use aes_gcm::{
-    Aes256Gcm, Key, Nonce,
     aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
 };
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use diesel::prelude::*;
@@ -24,14 +24,12 @@ use rand_core::RngCore;
 use secrecy::{ExposeSecret, SecretString};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use serde::{Deserialize, Serialize};
-#[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use sha2::{Digest, Sha256};
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use std::{collections::HashMap, sync::Arc};
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use crate::database::connection::{DbPool, get_conn};
+use crate::database::connection::{get_conn, DbPool};
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use chrono::NaiveDateTime;
@@ -80,6 +78,9 @@ impl DatabaseManager {
                 zk_accounts::io_type_value.eq(new_account.io_type_value),
                 zk_accounts::on_chain.eq(new_account.on_chain),
                 zk_accounts::updated_at.eq(new_account.updated_at),
+                zk_accounts::scalar.eq(zk_account.scalar.clone()),
+                zk_accounts::account.eq(zk_account.account.clone()),
+                zk_accounts::qq_address.eq(zk_account.qq_address.clone()),
             ))
             .execute(&mut conn)
             .map_err(|e| format!("Failed to save zk_account: {}", e))?;
@@ -105,6 +106,9 @@ impl DatabaseManager {
             zk_accounts::io_type_value.eq(zk_account.io_type.clone() as i32),
             zk_accounts::on_chain.eq(zk_account.on_chain),
             zk_accounts::updated_at.eq(now),
+            zk_accounts::scalar.eq(zk_account.scalar.clone()),
+            zk_accounts::account.eq(zk_account.account.clone()),
+            zk_accounts::qq_address.eq(zk_account.qq_address.clone()),
         ))
         .execute(&mut conn)
         .map_err(|e| format!("Failed to update zk_account: {}", e))?;
@@ -242,7 +246,7 @@ impl DatabaseManager {
                 Ok(wallet)
             }
             None => Err(format!(
-                "No encrypted wallet found for wallet_id: {}",
+                "No encrypted wallet/password found for wallet_id: {}",
                 self.wallet_id
             )),
         }
@@ -473,6 +477,96 @@ impl DatabaseManager {
         );
         Ok(())
     }
+
+    // -------------------------
+    // Order History operations
+    // -------------------------
+
+    pub fn save_order_history(
+        &self,
+        entry: crate::database::models::NewDbOrderHistory,
+    ) -> Result<(), String> {
+        use crate::database::schema::order_history;
+        let mut conn = get_conn(self.pool())?;
+        diesel::insert_into(order_history::table)
+            .values(&entry)
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to save order history: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load_order_history(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::database::models::DbOrderHistory>, String> {
+        use crate::database::schema::order_history;
+        let mut conn = get_conn(self.pool())?;
+        let rows = order_history::table
+            .filter(order_history::wallet_id.eq(&self.wallet_id))
+            .order(order_history::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load::<crate::database::models::DbOrderHistory>(&mut conn)
+            .map_err(|e| format!("Failed to load order history: {}", e))?;
+        Ok(rows)
+    }
+
+    pub fn load_order_history_by_account(
+        &self,
+        account_index: u64,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::database::models::DbOrderHistory>, String> {
+        use crate::database::schema::order_history;
+        let mut conn = get_conn(self.pool())?;
+        let rows = order_history::table
+            .filter(
+                order_history::wallet_id
+                    .eq(&self.wallet_id)
+                    .and(order_history::account_index.eq(account_index as i64)),
+            )
+            .order(order_history::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load::<crate::database::models::DbOrderHistory>(&mut conn)
+            .map_err(|e| format!("Failed to load order history by account: {}", e))?;
+        Ok(rows)
+    }
+
+    // -------------------------
+    // Transfer History operations
+    // -------------------------
+
+    pub fn save_transfer_history(
+        &self,
+        entry: crate::database::models::NewDbTransferHistory,
+    ) -> Result<(), String> {
+        use crate::database::schema::transfer_history;
+        let mut conn = get_conn(self.pool())?;
+        diesel::insert_into(transfer_history::table)
+            .values(&entry)
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to save transfer history: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load_transfer_history(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::database::models::DbTransferHistory>, String> {
+        use crate::database::schema::transfer_history;
+        let mut conn = get_conn(self.pool())?;
+        let rows = transfer_history::table
+            .filter(transfer_history::wallet_id.eq(&self.wallet_id))
+            .order(transfer_history::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load::<crate::database::models::DbTransferHistory>(&mut conn)
+            .map_err(|e| format!("Failed to load transfer history: {}", e))?;
+        Ok(rows)
+    }
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -487,7 +581,7 @@ fn encrypt_wallet(
     OsRng.fill_bytes(&mut nonce_bytes);
 
     // Derive key from password using PBKDF2
-    let key_bytes = derive_key(password, &salt);
+    let key_bytes = derive_key(password, &salt)?;
     let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -511,7 +605,7 @@ fn decrypt_wallet(
     nonce: &[u8],
     password: &SecretString,
 ) -> Result<Wallet, String> {
-    let key_bytes = derive_key(password, salt);
+    let key_bytes = derive_key(password, salt)?;
     let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
     let nonce = Nonce::from_slice(nonce);
@@ -527,17 +621,7 @@ fn decrypt_wallet(
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-fn derive_key(password: &SecretString, salt: &[u8]) -> [u8; 32] {
-    // Use secure password derivation
-    SecurePassword::derive_key_from_passphrase(password, salt).unwrap_or_else(|_| {
-        // Fallback to simple derivation if secure method fails
-
-        use log::info;
-        info!("Fallback to simple derivation");
-        let mut hasher = Sha256::default();
-        hasher.update(password.expose_secret().as_bytes());
-        hasher.update(salt);
-        let key_bytes = hasher.finalize();
-        key_bytes.into()
-    })
+fn derive_key(password: &SecretString, salt: &[u8]) -> Result<[u8; 32], String> {
+    SecurePassword::derive_key_from_passphrase(password, salt)
+        .map_err(|e| format!("Key derivation failed: {}", e))
 }

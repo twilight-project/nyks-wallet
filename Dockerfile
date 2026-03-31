@@ -17,8 +17,8 @@ WORKDIR /workspace
 # Copy source code
 COPY . .
 
-# Compile only the relayer_init binary in release mode
-RUN cargo build --release --bin relayer-init
+# Compile the relayer-init and relayer-cli binaries in release mode
+RUN cargo build --release --bin relayer-init --bin relayer-cli
 
 #############################
 # Runtime stage
@@ -35,8 +35,9 @@ RUN useradd -m relayer
 # Set work directory to user home; this is where the JSON will be written
 WORKDIR /home/relayer
 
-# Copy the built binary from the builder stage
+# Copy the built binaries from the builder stage
 COPY --from=builder /workspace/target/release/relayer-init /usr/local/bin/relayer-init
+COPY --from=builder /workspace/target/release/relayer-cli /usr/local/bin/relayer-cli
 
 # Switch to the non-root user
 USER relayer

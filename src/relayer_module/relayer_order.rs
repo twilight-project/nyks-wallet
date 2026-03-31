@@ -3,10 +3,14 @@ use twilight_client_sdk::{
     chain::get_transaction_coin_input_from_address_fast,
     programcontroller::ContractManager,
     quisquislib::RistrettoSecretKey,
-    relayer::{cancel_trader_order_zkos, create_lend_order_zkos, execute_order_zkos},
+    relayer::{
+        cancel_trader_order_zkos, create_lend_order_zkos, execute_order_zkos,
+        execute_order_zkos_sltp,
+    },
     relayer_types::{
         CancelTraderOrderZkos, CreateLendOrderZkos, CreateTraderOrderClientZkos,
-        ExecuteLendOrderZkos, ExecuteTraderOrderZkos, OrderStatus, OrderType, PositionType, TXType,
+        ExecuteLendOrderZkos, ExecuteTraderOrderZkos, ExecuteTraderOrderZkosSlTp, OrderStatus,
+        OrderType, PositionType, SlTpOrder, TXType,
     },
     util::create_output_memo_for_lender,
     zkvm::Output,
@@ -56,7 +60,7 @@ pub async fn create_trader_order(
     )
     .map_err(|e| e.to_string())?;
     let order_data = CreateTraderOrderClientZkos::decode_from_hex_string(order_tx_message.clone())?;
-
+    let _verified = order_data.tx.verify()?;
     let response = relayer_api_client
         .submit_trade_order(order_data)
         .await
@@ -64,7 +68,7 @@ pub async fn create_trader_order(
     Ok(response.id_key.to_string())
 }
 
-pub async fn close_trader_order(
+pub async fn close_trader_order_internal(
     output_memo: Output, // Provides the Prover Memo Output used to create the order. Input memo will be created by Exchange on behalf of the user
     secret_key: &RistrettoSecretKey,
     account_id: String,
@@ -90,6 +94,39 @@ pub async fn close_trader_order(
         )?)
         .await
         .map_err(|e| e.to_string())?;
+    Ok(response.id_key.to_string())
+}
+pub async fn close_trader_order_sltp_internal(
+    output_memo: Output, // Provides the Prover Memo Output used to create the order. Input memo will be created by Exchange on behalf of the user
+    secret_key: &RistrettoSecretKey,
+    account_id: String,
+    uuid: Uuid,
+    order_type: OrderType,
+    execution_price: f64,
+    stop_loss_price: Option<f64>,
+    take_profit_price: Option<f64>,
+    relayer_api_client: &RelayerJsonRpcClient,
+) -> Result<String, String> {
+    let request_msg = execute_order_zkos_sltp(
+        output_memo,
+        secret_key,
+        account_id,
+        uuid,
+        order_type.to_str(),
+        0.0,
+        OrderStatus::FILLED.to_str(),
+        execution_price,
+        TXType::ORDERTX,
+        Some(SlTpOrder::new(stop_loss_price, take_profit_price)),
+    );
+    let response = relayer_api_client
+        .settle_trade_order_sltp(ExecuteTraderOrderZkosSlTp::decode_from_hex_string(
+            request_msg.clone(),
+        )?)
+        .await
+        .map_err(|e| e.to_string())?;
+    // println!("request_msg: {}", request_msg);
+    // Ok("".to_string())
     Ok(response.id_key.to_string())
 }
 

@@ -183,7 +183,7 @@ mod tests {
     #[tokio::test]
     async fn test_seed_signer() -> anyhow::Result<()> {
         let wallet = Wallet::import_from_json("test.json")?;
-        let private_key = wallet.private_key.clone();
+        let private_key = wallet.private_key_bytes().to_vec();
         let twilight_address = wallet.twilightaddress.clone();
         let sign_mgs = "This signature is for deriving the master Twilight ZkOS Ristretto key. Version: 1. Do not share this signature.";
         let chain_id = "nyks";

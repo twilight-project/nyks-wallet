@@ -31,7 +31,7 @@ mod tests {
     async fn global_setup() {
         INIT_ASYNC
             .get_or_init(|| async {
-                match create_and_export_randmon_wallet_account("test").await {
+                match create_and_export_random_wallet_account("test").await {
                     Ok(_) => println!("wallet created successfully"),
                     Err(_) => warn!(
                         "error: {:?}",
@@ -49,7 +49,7 @@ mod tests {
     async fn test_create_wallet() {
         init_logger();
         dotenv::dotenv().ok();
-        match create_and_export_randmon_wallet_account("test1").await {
+        match create_and_export_random_wallet_account("test1").await {
             Ok(_) => println!("wallet created successfully"),
             Err(_) => println!(
                 "error: {:?}",
@@ -75,6 +75,7 @@ mod tests {
     // This test creates a new wallet, gets test tokens, updates the balance and account info,
     // and exports the wallet to a JSON file.
     // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_complete_flow --exact --show-output
+    // cargo test --manifest-path /home/ubuntu/Relayer-dev/SLTP/nyks-wallet/Cargo.toml --lib --all-features -- test::tests::test_wallet_complete_flow --exact --nocapture
     #[tokio::test]
     #[serial]
     async fn test_wallet_complete_flow() -> anyhow::Result<()> {
@@ -255,7 +256,7 @@ mod tests {
         init_logger();
         global_setup().await;
         let wallet = Wallet::import_from_json("test.json")?;
-        let private_key = wallet.private_key.clone();
+        let private_key = wallet.private_key_bytes().to_vec();
         let twilight_address = wallet.twilightaddress.clone();
         let sign_mgs = "hello";
         let chain_id = "nyks";
@@ -274,7 +275,7 @@ mod tests {
         global_setup().await;
         // Create a mock 64-byte signature/seed
         let wallet = Wallet::import_from_json("test.json").unwrap();
-        let private_key = wallet.private_key.clone();
+        let private_key = wallet.private_key_bytes().to_vec();
         let twilight_address = wallet.twilightaddress.clone();
         let chain_id = "nyks";
 

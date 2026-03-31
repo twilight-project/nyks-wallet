@@ -170,8 +170,6 @@ pub use wallet::*;
 pub mod config;
 pub mod error;
 pub mod test;
-#[macro_use]
-extern crate lazy_static;
 // ----------------------------------------------------------------------------
 // Generated protobuf module (prost-build)
 // ----------------------------------------------------------------------------
