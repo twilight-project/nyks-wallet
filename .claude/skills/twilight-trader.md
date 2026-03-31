@@ -21,8 +21,8 @@ It reads `.env` for endpoint configuration. Ensure it exists before running comm
 
 ```
 NYKS_LCD_BASE_URL=https://lcd.twilight.org
-NYKS_RPC_BASE_URL=https://rpc.twilight.rest
-ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
+NYKS_RPC_BASE_URL=https://rpc.twilight.org
+ZKOS_SERVER_URL=https://zkserver.twilight.org
 RELAYER_API_RPC_SERVER_URL=https://api.ephemeral.fi/api
 RELAYER_PROGRAM_JSON_PATH=./relayerprogram.json
 CHAIN_ID=nyks
