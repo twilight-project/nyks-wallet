@@ -34,6 +34,12 @@ use crate::database::connection::{get_conn, DbPool};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use chrono::NaiveDateTime;
 use log::debug;
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+fn current_network_type() -> String {
+    crate::config::NETWORK_TYPE.to_string()
+}
+
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 #[derive(Debug, Clone, Serialize)]
 pub struct DatabaseManager {
@@ -71,7 +77,7 @@ impl DatabaseManager {
         let mut conn = get_conn(self.pool())?;
         let n = diesel::insert_into(zk_accounts::table)
             .values(&new_account)
-            .on_conflict((zk_accounts::wallet_id, zk_accounts::account_index))
+            .on_conflict((zk_accounts::wallet_id, zk_accounts::network_type, zk_accounts::account_index))
             .do_update()
             .set((
                 zk_accounts::balance.eq(new_account.balance),
@@ -93,11 +99,13 @@ impl DatabaseManager {
 
     pub fn update_zk_account(&self, zk_account: &ZkAccount) -> Result<(), String> {
         let now = chrono::Utc::now().naive_utc();
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let n = diesel::update(
             zk_accounts::table.filter(
                 zk_accounts::wallet_id
                     .eq(&self.wallet_id)
+                    .and(zk_accounts::network_type.eq(&net))
                     .and(zk_accounts::account_index.eq(zk_account.index as i64)),
             ),
         )
@@ -120,11 +128,13 @@ impl DatabaseManager {
     }
 
     pub fn remove_zk_account(&self, account_index: u64) -> Result<(), String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let n = diesel::delete(
             zk_accounts::table.filter(
                 zk_accounts::wallet_id
                     .eq(&self.wallet_id)
+                    .and(zk_accounts::network_type.eq(&net))
                     .and(zk_accounts::account_index.eq(account_index as i64)),
             ),
         )
@@ -138,9 +148,11 @@ impl DatabaseManager {
     }
 
     pub fn load_all_zk_accounts(&self) -> Result<HashMap<u64, ZkAccount>, String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let db_accounts: Vec<DbZkAccount> = zk_accounts::table
             .filter(zk_accounts::wallet_id.eq(&self.wallet_id))
+            .filter(zk_accounts::network_type.eq(&net))
             .load(&mut conn)
             .map_err(|e| format!("Failed to load zk_accounts: {}", e))?;
 
@@ -153,9 +165,11 @@ impl DatabaseManager {
         Ok(accounts)
     }
     pub fn get_max_account_index(&self) -> Result<u64, String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let max_index: Option<i64> = zk_accounts::table
             .filter(zk_accounts::wallet_id.eq(&self.wallet_id))
+            .filter(zk_accounts::network_type.eq(&net))
             .select(zk_accounts::account_index)
             .order(zk_accounts::account_index.desc())
             .first(&mut conn)
@@ -246,7 +260,7 @@ impl DatabaseManager {
                 Ok(wallet)
             }
             None => Err(format!(
-                "No encrypted wallet/password found for wallet_id: {}",
+                "No encrypted wallet found for wallet_id: {}",
                 self.wallet_id
             )),
         }
@@ -270,7 +284,7 @@ impl DatabaseManager {
         let mut conn = get_conn(self.pool())?;
         let n = diesel::insert_into(order_wallets::table)
             .values(&new_order_wallet)
-            .on_conflict(order_wallets::wallet_id)
+            .on_conflict((order_wallets::wallet_id, order_wallets::network_type))
             .do_update()
             .set((
                 order_wallets::chain_id.eq(&new_order_wallet.chain_id),
@@ -293,9 +307,11 @@ impl DatabaseManager {
         &self,
         password: &str,
     ) -> Result<Option<(String, String, crate::config::RelayerEndPointConfig)>, String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let db_order_wallet: Option<DbOrderWallet> = order_wallets::table
             .filter(order_wallets::wallet_id.eq(&self.wallet_id))
+            .filter(order_wallets::network_type.eq(&net))
             .filter(order_wallets::is_active.eq(true))
             .first(&mut conn)
             .optional()
@@ -312,14 +328,19 @@ impl DatabaseManager {
     }
 
     pub fn deactivate_order_wallet(&self) -> Result<(), String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
-        diesel::update(order_wallets::table.filter(order_wallets::wallet_id.eq(&self.wallet_id)))
-            .set((
-                order_wallets::is_active.eq(false),
-                order_wallets::updated_at.eq(chrono::Utc::now().naive_utc()),
-            ))
-            .execute(&mut conn)
-            .map_err(|e| format!("Failed to deactivate order wallet: {}", e))?;
+        diesel::update(
+            order_wallets::table
+                .filter(order_wallets::wallet_id.eq(&self.wallet_id))
+                .filter(order_wallets::network_type.eq(&net)),
+        )
+        .set((
+            order_wallets::is_active.eq(false),
+            order_wallets::updated_at.eq(chrono::Utc::now().naive_utc()),
+        ))
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to deactivate order wallet: {}", e))?;
 
         Ok(())
     }
@@ -335,7 +356,7 @@ impl DatabaseManager {
         let mut conn = get_conn(self.pool())?;
         let n = diesel::insert_into(utxo_details::table)
             .values(&new_utxo_detail)
-            .on_conflict((utxo_details::wallet_id, utxo_details::account_index))
+            .on_conflict((utxo_details::wallet_id, utxo_details::network_type, utxo_details::account_index))
             .do_update()
             .set((
                 utxo_details::utxo_data.eq(&new_utxo_detail.utxo_data),
@@ -355,9 +376,11 @@ impl DatabaseManager {
         account_index: u64,
     ) -> Result<Option<twilight_client_sdk::relayer_rpcclient::method::UtxoDetailResponse>, String>
     {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let db_utxo_detail: Option<DbUtxoDetail> = utxo_details::table
             .filter(utxo_details::wallet_id.eq(&self.wallet_id))
+            .filter(utxo_details::network_type.eq(&net))
             .filter(utxo_details::account_index.eq(account_index as i64))
             .first(&mut conn)
             .optional()
@@ -375,9 +398,11 @@ impl DatabaseManager {
         HashMap<u64, twilight_client_sdk::relayer_rpcclient::method::UtxoDetailResponse>,
         String,
     > {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let db_utxo_details: Vec<DbUtxoDetail> = utxo_details::table
             .filter(utxo_details::wallet_id.eq(&self.wallet_id))
+            .filter(utxo_details::network_type.eq(&net))
             .load(&mut conn)
             .map_err(|e| format!("Failed to load UTXO details: {}", e))?;
 
@@ -391,11 +416,13 @@ impl DatabaseManager {
     }
 
     pub fn remove_utxo_detail(&self, account_index: u64) -> Result<(), String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let n = diesel::delete(
             utxo_details::table.filter(
                 utxo_details::wallet_id
                     .eq(&self.wallet_id)
+                    .and(utxo_details::network_type.eq(&net))
                     .and(utxo_details::account_index.eq(account_index as i64)),
             ),
         )
@@ -418,7 +445,7 @@ impl DatabaseManager {
         let mut conn = get_conn(self.pool())?;
         let n = diesel::insert_into(request_ids::table)
             .values(&new_request_id)
-            .on_conflict((request_ids::wallet_id, request_ids::account_index))
+            .on_conflict((request_ids::wallet_id, request_ids::network_type, request_ids::account_index))
             .do_update()
             .set((
                 request_ids::request_id.eq(&new_request_id.request_id),
@@ -434,9 +461,11 @@ impl DatabaseManager {
     }
 
     pub fn load_request_id(&self, account_index: u64) -> Result<Option<String>, String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let db_request_id: Option<DbRequestId> = request_ids::table
             .filter(request_ids::wallet_id.eq(&self.wallet_id))
+            .filter(request_ids::network_type.eq(&net))
             .filter(request_ids::account_index.eq(account_index as i64))
             .first(&mut conn)
             .optional()
@@ -446,9 +475,11 @@ impl DatabaseManager {
     }
 
     pub fn load_all_request_ids(&self) -> Result<HashMap<u64, String>, String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let db_request_ids: Vec<DbRequestId> = request_ids::table
             .filter(request_ids::wallet_id.eq(&self.wallet_id))
+            .filter(request_ids::network_type.eq(&net))
             .load(&mut conn)
             .map_err(|e| format!("Failed to load request IDs: {}", e))?;
 
@@ -461,11 +492,13 @@ impl DatabaseManager {
     }
 
     pub fn remove_request_id(&self, account_index: u64) -> Result<(), String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let n = diesel::delete(
             request_ids::table.filter(
                 request_ids::wallet_id
                     .eq(&self.wallet_id)
+                    .and(request_ids::network_type.eq(&net))
                     .and(request_ids::account_index.eq(account_index as i64)),
             ),
         )
@@ -501,9 +534,11 @@ impl DatabaseManager {
         offset: i64,
     ) -> Result<Vec<crate::database::models::DbOrderHistory>, String> {
         use crate::database::schema::order_history;
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let rows = order_history::table
             .filter(order_history::wallet_id.eq(&self.wallet_id))
+            .filter(order_history::network_type.eq(&net))
             .order(order_history::created_at.desc())
             .limit(limit)
             .offset(offset)
@@ -519,11 +554,13 @@ impl DatabaseManager {
         offset: i64,
     ) -> Result<Vec<crate::database::models::DbOrderHistory>, String> {
         use crate::database::schema::order_history;
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let rows = order_history::table
             .filter(
                 order_history::wallet_id
                     .eq(&self.wallet_id)
+                    .and(order_history::network_type.eq(&net))
                     .and(order_history::account_index.eq(account_index as i64)),
             )
             .order(order_history::created_at.desc())
@@ -557,9 +594,11 @@ impl DatabaseManager {
         offset: i64,
     ) -> Result<Vec<crate::database::models::DbTransferHistory>, String> {
         use crate::database::schema::transfer_history;
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let rows = transfer_history::table
             .filter(transfer_history::wallet_id.eq(&self.wallet_id))
+            .filter(transfer_history::network_type.eq(&net))
             .order(transfer_history::created_at.desc())
             .limit(limit)
             .offset(offset)

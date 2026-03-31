@@ -17,6 +17,11 @@ use crate::security::SecurePassword;
 use twilight_client_sdk::{relayer_rpcclient::method::UtxoDetailResponse, zkvm::IOType};
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+fn current_network_type() -> String {
+    crate::config::NETWORK_TYPE.to_string()
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
 #[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone, Serialize, Deserialize)]
 #[diesel(table_name = zk_accounts)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
@@ -24,6 +29,7 @@ use twilight_client_sdk::{relayer_rpcclient::method::UtxoDetailResponse, zkvm::I
 pub struct DbZkAccount {
     pub id: Option<i32>,
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub qq_address: String,
     pub balance: i64,
@@ -40,6 +46,7 @@ pub struct DbZkAccount {
 #[diesel(table_name = zk_accounts)]
 pub struct NewDbZkAccount {
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub qq_address: String,
     pub balance: i64,
@@ -84,6 +91,7 @@ impl DbZkAccount {
         let now = chrono::Utc::now().naive_utc();
         NewDbZkAccount {
             wallet_id,
+            network_type: current_network_type(),
             account_index: zk_account.index as i64,
             qq_address: zk_account.qq_address.clone(),
             balance: zk_account.balance as i64,
@@ -131,6 +139,7 @@ impl DbZkAccount {
 pub struct DbOrderWallet {
     pub id: Option<i32>,
     pub wallet_id: String,
+    pub network_type: String,
     pub chain_id: String,
     pub seed_encrypted: Vec<u8>,
     pub seed_salt: Vec<u8>,
@@ -148,6 +157,7 @@ pub struct DbOrderWallet {
 #[diesel(table_name = order_wallets)]
 pub struct NewDbOrderWallet {
     pub wallet_id: String,
+    pub network_type: String,
     pub chain_id: String,
     pub seed_encrypted: Vec<u8>,
     pub seed_salt: Vec<u8>,
@@ -168,6 +178,7 @@ pub struct NewDbOrderWallet {
 pub struct DbUtxoDetail {
     pub id: Option<i32>,
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub utxo_data: String, // JSON serialized
     pub created_at: NaiveDateTime,
@@ -179,6 +190,7 @@ pub struct DbUtxoDetail {
 #[diesel(table_name = utxo_details)]
 pub struct NewDbUtxoDetail {
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub utxo_data: String,
     pub created_at: NaiveDateTime,
@@ -193,6 +205,7 @@ pub struct NewDbUtxoDetail {
 pub struct DbRequestId {
     pub id: Option<i32>,
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub request_id: String,
     pub created_at: NaiveDateTime,
@@ -204,6 +217,7 @@ pub struct DbRequestId {
 #[diesel(table_name = request_ids)]
 pub struct NewDbRequestId {
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub request_id: String,
     pub created_at: NaiveDateTime,
@@ -229,6 +243,7 @@ impl DbOrderWallet {
 
         Ok(NewDbOrderWallet {
             wallet_id,
+            network_type: current_network_type(),
             chain_id,
             seed_encrypted: encrypted_seed,
             seed_salt: salt,
@@ -332,6 +347,7 @@ impl DbUtxoDetail {
 
         Ok(NewDbUtxoDetail {
             wallet_id,
+            network_type: current_network_type(),
             account_index: account_index as i64,
             utxo_data,
             created_at: now,
@@ -366,6 +382,7 @@ pub struct DbOrderHistory {
     pub status: String,
     pub tx_hash: Option<String>,
     pub created_at: NaiveDateTime,
+    pub network_type: String,
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -385,6 +402,7 @@ pub struct NewDbOrderHistory {
     pub status: String,
     pub tx_hash: Option<String>,
     pub created_at: NaiveDateTime,
+    pub network_type: String,
 }
 
 // Transfer history model
@@ -402,6 +420,7 @@ pub struct DbTransferHistory {
     pub amount: i64,
     pub tx_hash: Option<String>,
     pub created_at: NaiveDateTime,
+    pub network_type: String,
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -415,6 +434,7 @@ pub struct NewDbTransferHistory {
     pub amount: i64,
     pub tx_hash: Option<String>,
     pub created_at: NaiveDateTime,
+    pub network_type: String,
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -424,6 +444,7 @@ impl DbRequestId {
 
         NewDbRequestId {
             wallet_id,
+            network_type: current_network_type(),
             account_index: account_index as i64,
             request_id,
             created_at: now,

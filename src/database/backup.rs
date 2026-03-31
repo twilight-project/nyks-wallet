@@ -20,7 +20,12 @@ use serde::{Deserialize, Serialize};
 
 /// Version of the backup format. Increment when the schema changes.
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-const BACKUP_FORMAT_VERSION: u32 = 1;
+const BACKUP_FORMAT_VERSION: u32 = 2;
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+fn current_network_type() -> String {
+    crate::config::NETWORK_TYPE.to_string()
+}
 
 /// A full, serializable snapshot of all database state for a single wallet.
 ///
@@ -31,6 +36,7 @@ const BACKUP_FORMAT_VERSION: u32 = 1;
 pub struct WalletBackup {
     pub format_version: u32,
     pub wallet_id: String,
+    pub network_type: String,
     pub created_at: String,
     pub zk_accounts: Vec<DbZkAccount>,
     pub encrypted_wallet: Option<EncryptedWallet>,
@@ -45,10 +51,12 @@ pub struct WalletBackup {
 impl DatabaseManager {
     /// Export all database state for this wallet into a serializable backup.
     pub fn export_backup(&self) -> Result<WalletBackup, String> {
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
 
         let zk_accts: Vec<DbZkAccount> = zk_accounts::table
             .filter(zk_accounts::wallet_id.eq(self.get_wallet_id()))
+            .filter(zk_accounts::network_type.eq(&net))
             .load(&mut conn)
             .map_err(|e| format!("Failed to export zk_accounts: {}", e))?;
 
@@ -60,28 +68,33 @@ impl DatabaseManager {
 
         let ord_wallet: Option<DbOrderWallet> = order_wallets::table
             .filter(order_wallets::wallet_id.eq(self.get_wallet_id()))
+            .filter(order_wallets::network_type.eq(&net))
             .first(&mut conn)
             .optional()
             .map_err(|e| format!("Failed to export order_wallet: {}", e))?;
 
         let utxos: Vec<DbUtxoDetail> = utxo_details::table
             .filter(utxo_details::wallet_id.eq(self.get_wallet_id()))
+            .filter(utxo_details::network_type.eq(&net))
             .load(&mut conn)
             .map_err(|e| format!("Failed to export utxo_details: {}", e))?;
 
         let req_ids: Vec<DbRequestId> = request_ids::table
             .filter(request_ids::wallet_id.eq(self.get_wallet_id()))
+            .filter(request_ids::network_type.eq(&net))
             .load(&mut conn)
             .map_err(|e| format!("Failed to export request_ids: {}", e))?;
 
         let ord_hist: Vec<DbOrderHistory> = order_history::table
             .filter(order_history::wallet_id.eq(self.get_wallet_id()))
+            .filter(order_history::network_type.eq(&net))
             .order(order_history::created_at.desc())
             .load(&mut conn)
             .map_err(|e| format!("Failed to export order_history: {}", e))?;
 
         let xfer_hist: Vec<DbTransferHistory> = transfer_history::table
             .filter(transfer_history::wallet_id.eq(self.get_wallet_id()))
+            .filter(transfer_history::network_type.eq(&net))
             .order(transfer_history::created_at.desc())
             .load(&mut conn)
             .map_err(|e| format!("Failed to export transfer_history: {}", e))?;
@@ -89,6 +102,7 @@ impl DatabaseManager {
         let backup = WalletBackup {
             format_version: BACKUP_FORMAT_VERSION,
             wallet_id: self.get_wallet_id().to_string(),
+            network_type: net,
             created_at: chrono::Utc::now().naive_utc().to_string(),
             zk_accounts: zk_accts,
             encrypted_wallet: enc_wallet,
@@ -118,14 +132,15 @@ impl DatabaseManager {
             .map_err(|e| format!("Failed to serialize backup: {}", e))
     }
 
-    /// Import a backup, replacing all existing data for this wallet.
+    /// Import a backup, replacing all existing data for this wallet on the current network.
     ///
     /// The backup's `wallet_id` must match this DatabaseManager's wallet_id
     /// (or `force` must be true to re-map data to the current wallet_id).
     pub fn import_backup(&self, backup: &WalletBackup, force: bool) -> Result<(), String> {
-        if backup.format_version != BACKUP_FORMAT_VERSION {
+        // Accept both v1 and v2 backups
+        if backup.format_version > BACKUP_FORMAT_VERSION {
             return Err(format!(
-                "Unsupported backup format version: {} (expected {})",
+                "Unsupported backup format version: {} (max supported: {})",
                 backup.format_version, BACKUP_FORMAT_VERSION
             ));
         }
@@ -137,46 +152,71 @@ impl DatabaseManager {
             ));
         }
 
+        let net = current_network_type();
         let mut conn = get_conn(self.pool())?;
         let wallet_id = self.get_wallet_id();
 
-        // Delete existing data for this wallet (in dependency order)
+        // Delete existing data for this wallet on this network (in dependency order)
         diesel::delete(
-            transfer_history::table.filter(transfer_history::wallet_id.eq(wallet_id)),
+            transfer_history::table
+                .filter(transfer_history::wallet_id.eq(wallet_id))
+                .filter(transfer_history::network_type.eq(&net)),
         )
         .execute(&mut conn)
         .map_err(|e| format!("Failed to clear transfer_history: {}", e))?;
 
-        diesel::delete(order_history::table.filter(order_history::wallet_id.eq(wallet_id)))
-            .execute(&mut conn)
-            .map_err(|e| format!("Failed to clear order_history: {}", e))?;
-
-        diesel::delete(request_ids::table.filter(request_ids::wallet_id.eq(wallet_id)))
-            .execute(&mut conn)
-            .map_err(|e| format!("Failed to clear request_ids: {}", e))?;
-
-        diesel::delete(utxo_details::table.filter(utxo_details::wallet_id.eq(wallet_id)))
-            .execute(&mut conn)
-            .map_err(|e| format!("Failed to clear utxo_details: {}", e))?;
-
-        diesel::delete(order_wallets::table.filter(order_wallets::wallet_id.eq(wallet_id)))
-            .execute(&mut conn)
-            .map_err(|e| format!("Failed to clear order_wallets: {}", e))?;
+        diesel::delete(
+            order_history::table
+                .filter(order_history::wallet_id.eq(wallet_id))
+                .filter(order_history::network_type.eq(&net)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to clear order_history: {}", e))?;
 
         diesel::delete(
-            encrypted_wallets::table.filter(encrypted_wallets::wallet_id.eq(wallet_id)),
+            request_ids::table
+                .filter(request_ids::wallet_id.eq(wallet_id))
+                .filter(request_ids::network_type.eq(&net)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to clear request_ids: {}", e))?;
+
+        diesel::delete(
+            utxo_details::table
+                .filter(utxo_details::wallet_id.eq(wallet_id))
+                .filter(utxo_details::network_type.eq(&net)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to clear utxo_details: {}", e))?;
+
+        diesel::delete(
+            order_wallets::table
+                .filter(order_wallets::wallet_id.eq(wallet_id))
+                .filter(order_wallets::network_type.eq(&net)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to clear order_wallets: {}", e))?;
+
+        diesel::delete(
+            encrypted_wallets::table
+                .filter(encrypted_wallets::wallet_id.eq(wallet_id)),
         )
         .execute(&mut conn)
         .map_err(|e| format!("Failed to clear encrypted_wallets: {}", e))?;
 
-        diesel::delete(zk_accounts::table.filter(zk_accounts::wallet_id.eq(wallet_id)))
-            .execute(&mut conn)
-            .map_err(|e| format!("Failed to clear zk_accounts: {}", e))?;
+        diesel::delete(
+            zk_accounts::table
+                .filter(zk_accounts::wallet_id.eq(wallet_id))
+                .filter(zk_accounts::network_type.eq(&net)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to clear zk_accounts: {}", e))?;
 
-        // Insert backup data (re-mapping wallet_id if force)
+        // Insert backup data (re-mapping wallet_id and network_type)
         for mut acct in backup.zk_accounts.clone() {
             acct.id = None;
             acct.wallet_id = wallet_id.to_string();
+            acct.network_type = net.clone();
             diesel::insert_into(zk_accounts::table)
                 .values(&acct)
                 .execute(&mut conn)
@@ -195,6 +235,7 @@ impl DatabaseManager {
         if let Some(mut ow) = backup.order_wallet.clone() {
             ow.id = None;
             ow.wallet_id = wallet_id.to_string();
+            ow.network_type = net.clone();
             diesel::insert_into(order_wallets::table)
                 .values(&ow)
                 .execute(&mut conn)
@@ -204,6 +245,7 @@ impl DatabaseManager {
         for mut utxo in backup.utxo_details.clone() {
             utxo.id = None;
             utxo.wallet_id = wallet_id.to_string();
+            utxo.network_type = net.clone();
             diesel::insert_into(utxo_details::table)
                 .values(&utxo)
                 .execute(&mut conn)
@@ -213,6 +255,7 @@ impl DatabaseManager {
         for mut rid in backup.request_ids.clone() {
             rid.id = None;
             rid.wallet_id = wallet_id.to_string();
+            rid.network_type = net.clone();
             diesel::insert_into(request_ids::table)
                 .values(&rid)
                 .execute(&mut conn)
@@ -222,6 +265,7 @@ impl DatabaseManager {
         for mut oh in backup.order_history.clone() {
             oh.id = None;
             oh.wallet_id = wallet_id.to_string();
+            oh.network_type = net.clone();
             diesel::insert_into(order_history::table)
                 .values(&oh)
                 .execute(&mut conn)
@@ -231,6 +275,7 @@ impl DatabaseManager {
         for mut th in backup.transfer_history.clone() {
             th.id = None;
             th.wallet_id = wallet_id.to_string();
+            th.network_type = net.clone();
             diesel::insert_into(transfer_history::table)
                 .values(&th)
                 .execute(&mut conn)

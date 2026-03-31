@@ -1735,6 +1735,7 @@ impl OrderWallet {
                 status: status.to_string(),
                 tx_hash: tx_hash.map(|s| s.to_string()),
                 created_at: chrono::Utc::now().naive_utc(),
+                network_type: crate::config::NETWORK_TYPE.to_string(),
             };
             if let Err(e) = db_manager.save_order_history(entry) {
                 error!("Failed to log order history: {}", e);
@@ -1761,6 +1762,7 @@ impl OrderWallet {
                 amount: amount as i64,
                 tx_hash: tx_hash.map(|s| s.to_string()),
                 created_at: chrono::Utc::now().naive_utc(),
+                network_type: crate::config::NETWORK_TYPE.to_string(),
             };
             if let Err(e) = db_manager.save_transfer_history(entry) {
                 error!("Failed to log transfer history: {}", e);

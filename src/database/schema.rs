@@ -6,6 +6,7 @@ diesel::table! {
     zk_accounts (id) {
         id -> Nullable<Integer>,
         wallet_id -> Text,
+        network_type -> Text,
         account_index -> BigInt,
         qq_address -> Text,
         balance -> BigInt,
@@ -36,6 +37,7 @@ diesel::table! {
     order_wallets (id) {
         id -> Nullable<Integer>,
         wallet_id -> Text,
+        network_type -> Text,
         chain_id -> Text,
         seed_encrypted -> Binary,
         seed_salt -> Binary,
@@ -54,6 +56,7 @@ diesel::table! {
     utxo_details (id) {
         id -> Nullable<Integer>,
         wallet_id -> Text,
+        network_type -> Text,
         account_index -> BigInt,
         utxo_data -> Text, // JSON serialized UtxoDetailResponse
         created_at -> Timestamp,
@@ -66,6 +69,7 @@ diesel::table! {
     request_ids (id) {
         id -> Nullable<Integer>,
         wallet_id -> Text,
+        network_type -> Text,
         account_index -> BigInt,
         request_id -> Text,
         created_at -> Timestamp,
@@ -90,6 +94,7 @@ diesel::table! {
         status -> Text,
         tx_hash -> Nullable<Text>,
         created_at -> Timestamp,
+        network_type -> Text,
     }
 }
 
@@ -104,6 +109,7 @@ diesel::table! {
         amount -> BigInt,
         tx_hash -> Nullable<Text>,
         created_at -> Timestamp,
+        network_type -> Text,
     }
 }
 
