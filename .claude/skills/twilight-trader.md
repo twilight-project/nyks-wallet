@@ -10,7 +10,8 @@ description: |
 # Twilight Trading Agent
 
 You are a trading assistant for Twilight Protocol's inverse perpetual exchange.
-Use the `relayer-cli` binary to execute all operations.
+Use the `relayer-cli` binary to execute all operations. Refer to `docs/relayer-cli.md`
+for the full CLI reference.
 
 ## Environment
 
@@ -48,157 +49,262 @@ RUST_LOG=info
 
 ```bash
 # Requires: rust, protoc, libpq
+# macOS (libpq from homebrew)
 RUSTFLAGS="-L /opt/homebrew/opt/libpq/lib" cargo build --release --bin relayer-cli
-```
 
-On Linux (no libpq workaround needed):
-```bash
+# Linux
 cargo build --release --bin relayer-cli
+
+# PostgreSQL backend instead of SQLite
+cargo build --release --bin relayer-cli --no-default-features --features postgresql
 ```
 
 ### TTY note
 
-The CLI tries to print mnemonics to `/dev/tty`. In headless environments (Docker,
-CI, piped output), this fails with "Device not configured (os error 6)". The fix
-in `src/security/secure_tty.rs` falls back to stderr.
+The CLI prints mnemonics to `/dev/tty`. In headless environments (Docker, CI),
+this falls back to stderr after the fix in `src/security/secure_tty.rs`.
 
-## CLI Reference
+## Password & Wallet ID Resolution
 
-All commands accept `--wallet-id <ID> --password <PASS>` or you can run
-`relayer-cli wallet unlock` once per terminal session.
+Most commands accept `--wallet-id` and `--password`. When omitted:
 
-### Wallet lifecycle
+- **Wallet ID**: `--wallet-id` → session cache (`wallet unlock`) → `NYKS_WALLET_ID` env → error
+- **Password**: `--password` → session cache → `NYKS_WALLET_PASSPHRASE` env → none
+
+Use `relayer-cli wallet unlock` to cache credentials for a terminal session.
+
+## Wallet Commands
 
 ```bash
 # Create a new wallet (prints mnemonic ONCE — save it)
 relayer-cli wallet create --wallet-id <ID> --password <PASS>
+relayer-cli wallet create --btc-address bc1q...  # use existing BTC address
 
-# Import from mnemonic
+# Import from mnemonic (prompts securely if --mnemonic omitted)
 relayer-cli wallet import --mnemonic "<24 words>" --wallet-id <ID> --password <PASS>
 
 # Check balance
 relayer-cli wallet balance --wallet-id <ID> --password <PASS>
 
-# List ZkOS accounts
+# List ZkOS accounts (--on-chain-only to hide off-chain)
 relayer-cli wallet accounts --wallet-id <ID> --password <PASS>
+relayer-cli wallet accounts --on-chain-only
+
+# Wallet info (no chain calls)
+relayer-cli wallet info --wallet-id <ID> --password <PASS>
+
+# List all stored wallets
+relayer-cli wallet list
+
+# Lock/unlock session
+relayer-cli wallet unlock          # cache wallet-id + password for session
+relayer-cli wallet lock            # clear session cache
+
+# Backup & restore
+relayer-cli wallet backup --wallet-id <ID> --password <PASS> --output backup.json
+relayer-cli wallet restore --wallet-id <ID> --password <PASS> --input backup.json
+
+# Export wallet to JSON
+relayer-cli wallet export --wallet-id <ID> --password <PASS> --output wallet.json
+
+# Update BTC deposit address
+relayer-cli wallet update-btc-address --btc-address bc1q... --wallet-id <ID>
+
+# Sync nonce from chain
+relayer-cli wallet sync-nonce --wallet-id <ID> --password <PASS>
+
+# Change password (always prompts via TTY)
+relayer-cli wallet change-password --wallet-id <ID>
 ```
 
-### Funding flow
+## ZkOS Account Commands
 
-The order of operations is critical:
+Fund, withdraw, transfer, and split ZkOS trading accounts. All amounts accept
+one of `--amount` (sats), `--amount-mbtc`, or `--amount-btc`.
 
-1. **On-chain wallet must have SATS** (deposit BTC to the wallet's `btc_address`, or use faucet on testnet)
-2. **Fund a ZkOS trading account** from the on-chain balance:
-   ```bash
-   relayer-cli zkaccount fund --amount <SATS> --wallet-id <ID> --password <PASS>
-   # or: --amount-mbtc 1.0 / --amount-btc 0.001
-   ```
-3. The new account gets an index (e.g. 0). Use this index for all order commands.
+```bash
+# Fund a new ZkOS trading account from on-chain sats
+relayer-cli zkaccount fund --amount 10000
+relayer-cli zkaccount fund --amount-mbtc 1.0
+relayer-cli zkaccount fund --amount-btc 0.001
 
-### Opening a trade
+# Withdraw back to on-chain wallet
+relayer-cli zkaccount withdraw --account <INDEX> --amount 5000
+
+# Transfer (rotate) to a fresh account
+relayer-cli zkaccount transfer --from <INDEX>
+
+# Split one account into multiple
+relayer-cli zkaccount split --from <INDEX> --balances "2000,3000,5000"
+relayer-cli zkaccount split --from <INDEX> --balances-mbtc "0.02,0.03"
+```
+
+## Order Commands
+
+### Open a trade
 
 ```bash
 relayer-cli order open-trade \
-  --account <INDEX> \
-  --symbol BTCUSD \
-  --position <long|short> \
-  --amount <SATS> \
+  --account-index <INDEX> \
+  --side <long|short> \
+  --entry-price <USD_INT> \
   --leverage <1-50> \
-  --wallet-id <ID> --password <PASS>
+  --order-type MARKET \
+  --no-wait              # optional: return immediately after relayer accepts
+
+# Examples:
+relayer-cli order open-trade --account-index 0 --side long --entry-price 66700 --leverage 5
+relayer-cli order open-trade --account-index 0 --side short --entry-price 66700 --leverage 10 --no-wait
 ```
 
 **Constraints:**
 - `leverage`: 1 to 50
-- The entire ZkOS account balance is used (no partial orders)
-- Account transitions from Coin -> Memo state while order is open
+- The entire ZkOS account balance is used as margin (no partial orders)
+- Account transitions Coin → Memo while order is open
+- Check `market market-stats` for max position size (20% of pool equity)
+- If position exceeds cap, split the account first with `zkaccount split`
 
-### Closing a trade
-
-```bash
-relayer-cli order close-trade --account <INDEX> --wallet-id <ID> --password <PASS>
-```
-
-### Canceling a pending limit order
+### Close a trade
 
 ```bash
-relayer-cli order cancel-trade --account <INDEX> --wallet-id <ID> --password <PASS>
+relayer-cli order close-trade --account-index <INDEX>
+relayer-cli order close-trade --account-index <INDEX> --no-wait  # skip chain sync
+
+# With stop-loss / take-profit
+relayer-cli order close-trade --account-index <INDEX> --stop-loss 60000 --take-profit 70000
 ```
 
-### Account reuse after closing
-
-After closing/settling a trade, the account cannot be reused directly. You must rotate:
+### Cancel a pending order
 
 ```bash
-# Rotate to a fresh account (same balance transfers)
-relayer-cli zkaccount transfer --from-account <OLD_INDEX> --to-account <NEW_INDEX> --amount <SATS>
+relayer-cli order cancel-trade --account-index <INDEX>
 ```
 
-Or withdraw back and re-fund:
+### Query orders
+
 ```bash
-relayer-cli zkaccount withdraw --account <INDEX> --amount <SATS>
-relayer-cli zkaccount fund --amount <SATS>
+relayer-cli order query-trade --trade-id <TRADE_ID>
+relayer-cli order query-lend --lend-id <LEND_ID>
+relayer-cli order history-trade --account <INDEX>
+relayer-cli order history-lend --account <INDEX>
+relayer-cli order funding-history --symbol BTCUSD
+relayer-cli order account-summary --account <INDEX>
+relayer-cli order tx-hashes --account <INDEX>
 ```
-
-**Exception:** Cancelled limit orders (never filled) can reuse the same account.
 
 ### Lending
 
 ```bash
-# Open a lend position
-relayer-cli order open-lend --account <INDEX> --pool BTCUSD --amount <SATS>
-
-# Close lending
+relayer-cli order open-lend --account <INDEX> --pool BTCUSD --amount 10000
 relayer-cli order close-lend --account <INDEX> --pool BTCUSD
 ```
 
-### Market data (no wallet needed)
+## Account Reuse After Closing
+
+After closing/settling a trade, the account must be **rotated** before opening
+a new order. Twilight enforces account freshness.
 
 ```bash
-relayer-cli market price --symbol BTCUSD
-relayer-cli market orderbook --symbol BTCUSD
-relayer-cli market funding-rate --symbol BTCUSD
-relayer-cli market fee-rate --symbol BTCUSD
-relayer-cli market recent-trades --symbol BTCUSD
-relayer-cli market open-interest --symbol BTCUSD
-relayer-cli market market-stats --symbol BTCUSD
-relayer-cli market candles --symbol BTCUSD --interval 1h --limit 50
+# Option A: Rotate to fresh account (recommended)
+relayer-cli zkaccount transfer --from <OLD_INDEX>
+# → Creates new account at next index with same balance
+
+# Option B: Withdraw + re-fund
+relayer-cli zkaccount withdraw --account <INDEX> --amount <SATS>
+relayer-cli zkaccount fund --amount <SATS>
+```
+
+**Exception**: Cancelled limit orders (never filled) can reuse the same account.
+
+## Market Data (no wallet needed)
+
+```bash
+relayer-cli market price
+relayer-cli market orderbook
+relayer-cli market funding-rate
+relayer-cli market fee-rate
+relayer-cli market recent-trades
+relayer-cli market open-interest
+relayer-cli market market-stats
+relayer-cli market candles --interval 1h --limit 50
+relayer-cli market server-time
+
+# Lending pool
 relayer-cli market lend-pool --pool BTCUSD
+relayer-cli market pool-share-value --pool BTCUSD
 relayer-cli market last-day-apy --pool BTCUSD
+relayer-cli market apy-chart --pool BTCUSD --days 30
+
+# Historical
+relayer-cli market history-price --symbol BTCUSD --days 30
+relayer-cli market history-funding --symbol BTCUSD
+relayer-cli market history-fees --symbol BTCUSD
 ```
 
-### Portfolio
+## Portfolio
 
 ```bash
-relayer-cli portfolio summary --wallet-id <ID> --password <PASS>
-relayer-cli portfolio balances --in usd --wallet-id <ID> --password <PASS>
-relayer-cli portfolio risks --wallet-id <ID> --password <PASS>
+relayer-cli portfolio summary
+relayer-cli portfolio balances --in usd
+relayer-cli portfolio balances --in btc
+relayer-cli portfolio risks
 ```
 
-### Order history
+## History (requires DB)
 
 ```bash
-relayer-cli order history-trade --account <INDEX>
-relayer-cli order history-lend --account <INDEX>
-relayer-cli history orders --wallet-id <ID> --password <PASS>
+relayer-cli history orders --limit 20
+relayer-cli history transfers --limit 10
 ```
 
-## Typical trade flow (step by step)
+## Typical Trade Flow (step by step)
 
-1. Check market: `relayer-cli market price --symbol BTCUSD`
-2. Check stats: `relayer-cli market market-stats --symbol BTCUSD`
-3. Check balance: `relayer-cli wallet balance --wallet-id <ID> --password <PASS>`
-4. Fund account: `relayer-cli zkaccount fund --amount 10000`
-5. Open trade: `relayer-cli order open-trade --account 0 --symbol BTCUSD --position long --amount 10000 --leverage 5`
-6. Monitor: `relayer-cli order query-trade --trade-id <ID>` or `relayer-cli portfolio summary`
-7. Close: `relayer-cli order close-trade --account 0`
-8. Rotate account for next trade: `relayer-cli zkaccount withdraw --account 0 --amount <SATS>` then `relayer-cli zkaccount fund --amount <SATS>`
+```bash
+# 1. Check market
+relayer-cli market price
+relayer-cli market market-stats
 
-## Important concepts
+# 2. Check balance
+relayer-cli wallet balance
 
-- **Inverse perpetuals**: Margin is denominated in sats (BTC). Position value = margin x leverage. PnL is in sats.
-- **ZkOS accounts**: Privacy-preserving accounts with two states — **Coin** (idle, can open orders) and **Memo** (order active). The full balance is committed per order.
-- **Account rotation**: After a trade settles, the account must be rotated (transfer or withdraw+refund) before opening a new order. Cancelled limit orders are the exception.
-- **Max leverage**: 50x. Min position: check `market market-stats` for `min_position_btc`.
+# 3. Fund a ZkOS account
+relayer-cli zkaccount fund --amount 5000
+
+# 4. Open trade (check max position first from market-stats)
+relayer-cli order open-trade --account-index 0 --side long --entry-price 66700 --leverage 2
+
+# 5. Monitor
+relayer-cli portfolio summary
+
+# 6. Close
+relayer-cli order close-trade --account-index 0
+
+# 7. Rotate for next trade
+relayer-cli zkaccount transfer --from 0
+# Now use next index for the new trade
+```
+
+### Fast trade (--no-wait)
+
+For bots or when you don't need chain confirmation:
+
+```bash
+# Open — returns in ~2.8s instead of ~5s
+relayer-cli order open-trade --account-index 0 --side long --entry-price 66700 --leverage 5 --no-wait
+
+# Close — returns PnL in ~5s, defers chain sync
+relayer-cli order close-trade --account-index 0 --no-wait
+```
+
+## Important Concepts
+
+- **Inverse perpetuals**: Margin is in sats (BTC). Position value = margin × leverage. PnL in sats.
+- **ZkOS accounts**: Privacy-preserving with two states — **Coin** (idle) and **Memo** (order active). Full balance committed per order.
+- **Account rotation**: Must rotate after settle. Use `zkaccount transfer --from <INDEX>`.
+- **Max leverage**: 50x. Max position: 20% of pool equity (check `market market-stats`).
+- **Fees**: 4% filled on market, 2% filled on limit, 4% settled on market, 2% settled on limit.
+- **--no-wait**: Returns after relayer confirms, skips chain UTXO sync. Account syncs lazily on next use.
+- **--json**: All commands support `--json` for scripting/bot integration.
 
 ## Ephemeral REST API (alternative to CLI)
 
