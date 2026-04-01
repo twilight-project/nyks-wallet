@@ -74,6 +74,9 @@ pub struct EndpointConfig {
 
 impl Default for EndpointConfig {
     fn default() -> Self {
+        unsafe {
+            std::env::set_var("ZKOS_SERVER_URL", &ZKOS_SERVER_URL.to_string());
+        }
         Self {
             validator_wallet_path: VALIDATOR_WALLET_PATH.to_string(),
             relayer_program_json_path: RELAYER_PROGRAM_JSON_PATH.to_string(),

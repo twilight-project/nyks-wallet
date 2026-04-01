@@ -18,10 +18,10 @@ use twilight_client_sdk::{
 };
 
 // Retry configuration constants
-const DEFAULT_UTXO_ATTEMPTS: u32 = 15;
-const TXHASH_ATTEMPTS: u32 = 50;
-const INITIAL_RETRY_DELAY_MS: u64 = 500;
-const MAX_RETRY_DELAY_MS: u64 = 10_000;
+const DEFAULT_UTXO_ATTEMPTS: u32 = 30;
+const TXHASH_ATTEMPTS: u32 = 60;
+const INITIAL_RETRY_DELAY_MS: u64 = 200;
+const MAX_RETRY_DELAY_MS: u64 = 1_000;
 const BACKOFF_FACTOR: f64 = 1.5;
 
 /// Calculate retry delay with exponential backoff and jitter.
@@ -29,7 +29,7 @@ fn retry_delay(attempt: u32) -> Duration {
     let base = INITIAL_RETRY_DELAY_MS as f64 * BACKOFF_FACTOR.powi(attempt as i32);
     let capped = base.min(MAX_RETRY_DELAY_MS as f64);
     // Add ~30% jitter to avoid thundering herd
-    let jitter = fastrand::f64() * capped * 0.3;
+    let jitter = fastrand::f64() * capped * 0.1;
     Duration::from_millis((capped + jitter) as u64)
 }
 
@@ -115,7 +115,7 @@ pub async fn fetch_utxo_details_with_retry(
     io_type: IOType,
 ) -> Result<UtxoDetailResponse, String> {
     let mut attempts = 0;
-    info!("fetch_utxo_details_with_retry: account_id: {}", account_id);
+    debug!("fetch_utxo_details_with_retry: account_id: {}", account_id);
     loop {
         let account_id_clone = account_id.clone();
         match tokio::task::spawn_blocking(move || {

@@ -7,8 +7,8 @@ mod tests {
     use crate::nyks_rpc::rpcclient::txresult::from_rpc_response;
     use crate::seed_signer::{build_sign_doc, sign_adr036, signature_bundle};
     use crate::wallet::*;
-    use crate::zkos_accounts::ZkAccountDB;
     use crate::zkos_accounts::encrypted_account::DERIVATION_MESSAGE;
+    use crate::zkos_accounts::ZkAccountDB;
     use cosmrs::crypto::secp256k1::SigningKey;
     use log::warn;
     use secrecy::SecretString;
@@ -31,12 +31,28 @@ mod tests {
     async fn global_setup() {
         INIT_ASYNC
             .get_or_init(|| async {
-                match create_and_export_random_wallet_account("test").await {
-                    Ok(_) => println!("wallet created successfully"),
-                    Err(_) => warn!(
-                        "error: {:?}",
-                        "wallet creation failed, wallet already exists"
-                    ),
+                unsafe {
+                    std::env::set_var("NETWORK_TYPE", "testnet");
+                }
+
+                match Wallet::import_from_json("test.json") {
+                    Ok(wallet) => {
+                        warn!("wallet already exists");
+                    }
+                    Err(e) => {
+                        let wallet = match Wallet::new(None) {
+                            Ok(wallet) => wallet,
+                            Err(e) => {
+                                warn!("Failed to create wallet: {}", e);
+                                return;
+                            }
+                        };
+                        if let Err(e) = wallet.export_to_json("test.json") {
+                            warn!("Failed to export wallet: {}", e);
+                        } else {
+                            println!("wallet exported successfully");
+                        }
+                    }
                 }
             })
             .await;
@@ -44,19 +60,19 @@ mod tests {
 
     // This test creates a new wallet and exports it to a JSON file.
     // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_create_wallet --exact --show-output
-    #[tokio::test]
-    #[serial]
-    async fn test_create_wallet() {
-        init_logger();
-        dotenv::dotenv().ok();
-        match create_and_export_random_wallet_account("test1").await {
-            Ok(_) => println!("wallet created successfully"),
-            Err(_) => println!(
-                "error: {:?}",
-                "wallet creation failed, wallet already exists"
-            ),
-        }
-    }
+    // #[tokio::test]
+    // #[serial]
+    // async fn test_create_wallet() {
+    //     init_logger();
+    //     dotenv::dotenv().ok();
+    //     match create_and_export_random_wallet_account("test1").await {
+    //         Ok(_) => println!("wallet created successfully"),
+    //         Err(_) => println!(
+    //             "error: {:?}",
+    //             "wallet creation failed, wallet already exists"
+    //         ),
+    //     }
+    // }
 
     // This test imports a wallet from a JSON file and prints the wallet details.
     // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_import --exact --show-output

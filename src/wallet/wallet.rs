@@ -3,17 +3,14 @@ use crate::security::print_secret_to_tty;
 use crate::{faucet::*, generate_seed};
 use anyhow::anyhow;
 use bip32::{DerivationPath, XPrv};
-use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
+use bip39::{Language as B39Lang, Mnemonic};
 use cosmrs::crypto::{secp256k1::SigningKey, PublicKey};
 use cosmrs::AccountId;
 use log::{debug, error, info};
 use reqwest::Client;
-use ripemd::Ripemd160;
-use rpassword::prompt_password;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::time::{sleep, Duration};
 use zeroize::ZeroizeOnDrop;
 pub const BECH_PREFIX: &str = "twilight";
@@ -77,169 +74,6 @@ pub struct Balance {
     pub sats: SATS,
 }
 
-/// Generate a random Cosmos account (for testing)
-pub fn generate_cosmos_account(prefix: &str) -> anyhow::Result<(SigningKey, PublicKey, AccountId)> {
-    let signing_key = SigningKey::random();
-    let public_key = signing_key.public_key();
-    let sha256_hash = Sha256::digest(public_key.clone().to_bytes());
-    let ripemd160_hash = Ripemd160::digest(&sha256_hash);
-    let account_id = AccountId::new(prefix, &ripemd160_hash).map_err(|e| anyhow!("{}", e))?;
-    Ok((signing_key, public_key, account_id))
-}
-
-/// Import account from mnemonic phrase
-fn account_from_mnemonic() -> anyhow::Result<(SigningKey, PublicKey, AccountId)> {
-    let phrase = prompt_password("Enter your mnemonic phrase (12 or 24 words): ")?;
-
-    let cleaned = phrase.trim().to_lowercase();
-    let word_count = cleaned.split_whitespace().count();
-    debug!("Validating mnemonic with {} words...", word_count);
-
-    // First, surface spelling issues or bad checksum explicitly.
-    if let Err(e) = Mnemonic::parse_in(B39Lang::English, &cleaned) {
-        match e {
-            Bip39Error::UnknownWord(index) => {
-                return Err(anyhow!(
-                    "Unknown word at position {} — double-check spelling against the official BIP-39 list.",
-                    index + 1
-                ));
-            }
-            Bip39Error::InvalidChecksum => {
-                return Err(anyhow!(
-                    "Checksum mismatch: every word is valid, but the overall phrase isn't — a word is out of place or mistyped."
-                ));
-            }
-            other => return Err(anyhow!("Mnemonic validation error: {}", other)),
-        }
-    }
-
-    // Safe to parse now.
-    let mnemonic = Mnemonic::parse_in(B39Lang::English, &cleaned)?;
-    debug!("Mnemonic validated successfully");
-
-    let keys = derive_keys(&mnemonic)?;
-
-    let signing_key = SigningKey::from_slice(&keys.private_key)
-        .map_err(|e| anyhow!("Invalid private key: {}", e))?;
-    let public_key = signing_key.public_key();
-
-    debug!("Cosmos account derived from mnemonic successfully");
-
-    Ok((signing_key, public_key, keys.account_id))
-}
-
-/// Import account from hex private key
-fn account_from_private_key_hex() -> anyhow::Result<(SigningKey, PublicKey, AccountId)> {
-    let hex_pk = prompt_password("Enter 32-byte private key hex (64 chars): ")?;
-    let hex_pk = hex_pk.trim();
-
-    if hex_pk.len() != 64 {
-        return Err(anyhow!("Private key must be exactly 64 hex characters"));
-    }
-
-    let bytes = hex::decode(hex_pk).map_err(|e| anyhow!("Invalid hex: {}", e))?;
-    if bytes.len() != 32 {
-        return Err(anyhow!("Private key must be 32 bytes"));
-    }
-
-    let mut key_bytes = [0u8; 32];
-    key_bytes.copy_from_slice(&bytes);
-
-    let signing_key =
-        SigningKey::from_slice(&key_bytes).map_err(|e| anyhow!("Invalid key: {}", e))?;
-    let public_key = signing_key.public_key();
-    let account_id = public_key
-        .account_id(BECH_PREFIX)
-        .map_err(|e| anyhow!("{}", e))?;
-
-    Ok((signing_key, public_key, account_id))
-}
-
-pub async fn check_code(lcd_endpoint: &str, faucet_endpoint: &str) -> anyhow::Result<()> {
-    info!("Twilight Market Maker Client");
-
-    info!("Choose account import method:");
-    info!("1. Generate new random account (testing)");
-    info!("2. Import from mnemonic phrase");
-    info!("3. Import from private key hex");
-
-    let choice = prompt_password("Enter choice (1, 2, or 3): ")?;
-
-    let (signing_key, public_key, account_id) = match choice.trim() {
-        "1" => {
-            info!("Generating new random account...");
-            generate_cosmos_account(BECH_PREFIX)?
-        }
-        "2" => {
-            info!("Importing account from mnemonic...");
-            account_from_mnemonic()?
-        }
-        "3" => {
-            info!("Importing account from private key...");
-            account_from_private_key_hex()?
-        }
-        _ => {
-            info!("Invalid choice, using random account");
-            generate_cosmos_account(BECH_PREFIX)?
-        }
-    };
-
-    info!("Account ready! Address: {}", account_id);
-
-    // Step 1: Get testnet tokens from faucet
-    info!("Requesting testnet tokens from faucet...");
-    match get_nyks(&account_id.to_string(), faucet_endpoint).await {
-        Ok(_) => info!("Successfully received testnet tokens"),
-        Err(e) => {
-            error!("Failed to get tokens from faucet: {}", e);
-            info!("You may need to wait or try again later");
-        }
-    };
-
-    // Wait a bit before next operation
-    sleep(Duration::from_secs(5)).await;
-
-    // Step 2: Register Bitcoin deposit address
-    info!("Registering Bitcoin deposit address...");
-    let (_wif, btc_address) = crate::wallet::generate_btc_key::generate_random_btc_address()?;
-    debug!("Generated BTC Address: {}", btc_address);
-
-    match sign_and_send_reg_deposit_tx(
-        signing_key,
-        public_key,
-        account_id.to_string(),
-        btc_address.to_string(),
-        lcd_endpoint,
-    )
-    .await
-    {
-        Ok(_) => {
-            info!("Successfully registered BTC deposit address!");
-            debug!("BTC Address: {}", btc_address);
-        }
-        Err(e) => {
-            error!("Failed to register BTC deposit address: {}", e);
-        }
-    };
-
-    // Wait a bit before next operation
-    sleep(Duration::from_secs(5)).await;
-
-    // Step 3: Mint test satoshis
-    info!("Minting test satoshis...");
-    match mint_sats(&account_id.to_string(), faucet_endpoint).await {
-        Ok(_) => info!("Successfully minted test satoshis"),
-        Err(e) => {
-            error!("Failed to mint satoshis: {}", e);
-            info!("You may need to wait or try again later");
-        }
-    };
-
-    info!("Market maker client operations completed!");
-
-    Ok(())
-}
-
 /// Fetch on-chain balance for the given address via LCD endpoint.
 pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<Balance> {
     let url = format!("{}/cosmos/bank/v1beta1/balances/{}", lcd_endpoint, address);
@@ -267,42 +101,6 @@ pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<
         nyks: balance_nyks,
         sats: balance_sats,
     })
-}
-
-pub async fn create_and_export_random_wallet_account(name: &str) -> anyhow::Result<()> {
-    let write_path = format!("{}.json", name);
-    if std::path::Path::new(&write_path).exists() {
-        return Err(anyhow!(
-            "{} already exists. Please remove or rename it before creating a new account.",
-            write_path
-        ));
-    }
-
-    let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
-    let keys = derive_keys(&mnemonic)?;
-    let (_wif, btc_address) =
-        crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
-
-    debug!("twilight account address: {}", keys.account_id);
-
-    let account_info = serde_json::json!({
-        "mnemonic": mnemonic.to_string(),
-        "private_key": hex::encode(&keys.private_key),
-        "public_key": hex::encode(&keys.public_key),
-        "twilightaddress": keys.account_id.to_string(),
-        "btc_address": btc_address.to_string(),
-        "btc_address_registered": false,
-        "balance_nyks": 0,
-        "balance_sats": 0,
-        "sequence": 0,
-    });
-
-    let json_string = serde_json::to_string_pretty(&account_info)?;
-    std::fs::write(write_path.clone(), json_string)?;
-
-    info!("Account information saved to {}", write_path);
-
-    Ok(())
 }
 
 #[derive(Clone, Serialize, Deserialize, ZeroizeOnDrop)]
@@ -395,28 +193,6 @@ impl Wallet {
         })
     }
 
-    pub fn from(
-        private_key: String,
-        public_key: String,
-        twilightaddress: String,
-        btc_address: String,
-        chain_config: Option<WalletEndPointConfig>,
-    ) -> Wallet {
-        let chain_config = chain_config.unwrap_or_default();
-        Wallet {
-            private_key: hex::decode(private_key.clone()).unwrap_or_default(),
-            public_key: hex::decode(public_key).unwrap_or_default(),
-            twilightaddress,
-            balance_nyks: 0,
-            balance_sats: 0,
-            sequence: 0,
-            btc_address,
-            btc_address_registered: false,
-            account_info: None,
-            chain_config,
-        }
-    }
-
     pub fn from_mnemonic(
         mnemonic: &str,
         chain_config: Option<WalletEndPointConfig>,
@@ -472,10 +248,20 @@ impl Wallet {
         let account_info: Value = serde_json::from_str(&json_string)?;
         let wallet_config = WalletEndPointConfig::from_env();
         let wallet = Wallet {
-            private_key: hex::decode(account_info["private_key"].as_str().unwrap().to_string())
-                .unwrap_or_default(),
-            public_key: hex::decode(account_info["public_key"].as_str().unwrap().to_string())
-                .unwrap_or_default(),
+            private_key: hex::decode(
+                account_info["private_key"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("private_key not found"))?
+                    .to_string(),
+            )
+            .unwrap_or_default(),
+            public_key: hex::decode(
+                account_info["public_key"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("public_key not found"))?
+                    .to_string(),
+            )
+            .unwrap_or_default(),
             twilightaddress: account_info["twilightaddress"]
                 .as_str()
                 .unwrap()
@@ -613,14 +399,16 @@ impl Wallet {
         let sk = self.signing_key()?;
         let pk = self.public_key()?;
 
-        let account_details =
-            crate::faucet::fetch_account_details(&self.twilightaddress, &self.chain_config.lcd_endpoint)
-                .await?;
+        let account_details = crate::faucet::fetch_account_details(
+            &self.twilightaddress,
+            &self.chain_config.lcd_endpoint,
+        )
+        .await?;
         let account_number = account_details.account.account_number;
         let sequence = account_details.account.sequence;
 
-        let signed_tx = method_type
-            .sign_msg::<CosmosMsgSend>(any_msg, pk, sequence, account_number, sk)?;
+        let signed_tx =
+            method_type.sign_msg::<CosmosMsgSend>(any_msg, pk, sequence, account_number, sk)?;
 
         let method = Method::broadcast_tx_sync;
         let (tx_send, _): (RpcBody<TxParams>, String) =
@@ -639,7 +427,9 @@ impl Wallet {
                 if code == 0 {
                     Ok(tx_hash)
                 } else {
-                    Err(anyhow!("Transaction failed (code {code}), TX Hash: {tx_hash}"))
+                    Err(anyhow!(
+                        "Transaction failed (code {code}), TX Hash: {tx_hash}"
+                    ))
                 }
             }
             Err(e) => Err(anyhow!("RPC error: {e}")),
