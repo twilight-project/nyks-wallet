@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
-/// Network type: "testnet" or "mainnet". Controls BIP-44 coin type (1 vs 118)
+/// Network type: "testnet" or "mainnet".
 /// and default endpoint URLs.
 pub static NETWORK_TYPE: LazyLock<String> =
     LazyLock::new(|| std::env::var("NETWORK_TYPE").unwrap_or("mainnet".to_string()));
@@ -34,10 +34,13 @@ pub static NYKS_RPC_BASE_URL: LazyLock<String> = LazyLock::new(|| {
     };
     std::env::var("NYKS_RPC_BASE_URL").unwrap_or(default)
 });
-pub static VALIDATOR_WALLET_PATH: LazyLock<String> =
-    LazyLock::new(|| std::env::var("VALIDATOR_WALLET_PATH").unwrap_or("validator.mnemonic".to_string()));
-pub static RELAYER_PROGRAM_JSON_PATH: LazyLock<String> =
-    LazyLock::new(|| std::env::var("RELAYER_PROGRAM_JSON_PATH").unwrap_or_else(|_| "./relayerprogram.json".to_string()));
+pub static VALIDATOR_WALLET_PATH: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("VALIDATOR_WALLET_PATH").unwrap_or("validator.mnemonic".to_string())
+});
+pub static RELAYER_PROGRAM_JSON_PATH: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("RELAYER_PROGRAM_JSON_PATH")
+        .unwrap_or_else(|_| "./relayerprogram.json".to_string())
+});
 pub static ZKOS_SERVER_URL: LazyLock<String> = LazyLock::new(|| {
     let default = if is_mainnet() {
         "https://zkserver.twilight.org".to_string()
