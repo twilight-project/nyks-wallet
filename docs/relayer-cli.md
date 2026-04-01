@@ -19,57 +19,52 @@ The binary will be at `target/release/relayer-cli`.
 ## Environment Variables
 
 A `.env` file in the working directory is loaded automatically. See `.env.example` for a complete template.
+If a variable is not set, `src/config.rs` applies code defaults (many are derived from `NETWORK_TYPE`).
 
 ### Core
 
-| Variable         | Description                                                                   | Default    |
-| ---------------- | ----------------------------------------------------------------------------- | ---------- |
-| `RUST_LOG`       | Logging level (`info`, `debug`, `trace`)                                      | —          |
-| `RUST_BACKTRACE` | Enable Rust backtraces for debugging (`1` or `full`)                          | —          |
-| `CHAIN_ID`       | Blockchain network identifier                                                 | `nyks`     |
-| `NETWORK_TYPE`   | Network type — controls BIP-44 coin type (`testnet` uses coin type 1, `mainnet` uses 118) | `mainnet`  |
+| Variable         | Description                                                                               | Default   |
+| ---------------- | ----------------------------------------------------------------------------------------- | --------- |
+| `RUST_LOG`       | Logging level (`info`, `debug`, `trace`)                                                  | —         |
+| `RUST_BACKTRACE` | Enable Rust backtraces for debugging (`1` or `full`)                                      | —         |
+| `CHAIN_ID`       | Blockchain network identifier                                                             | `nyks`    |
+| `NETWORK_TYPE`   | Network type — controls BIP-44 coin type (`testnet` uses coin type 1, `mainnet` uses 118) | `mainnet` |
 
 ### Chain Endpoints
 
-Used by the on-chain wallet for balance queries, transaction broadcasting, and faucet requests.
+Used by the on-chain wallet for balance queries, transaction broadcasting, and faucet requests. Defaults are selected from `NETWORK_TYPE`.
 
-| Variable           | Description                                          | Default                |
-| ------------------ | ---------------------------------------------------- | ---------------------- |
-| `NYKS_RPC_BASE_URL`| Nyks chain Tendermint RPC endpoint                   | `http://0.0.0.0:26657` |
-| `NYKS_LCD_BASE_URL`| Nyks chain LCD (REST API) endpoint                   | `http://0.0.0.0:1317`  |
-| `FAUCET_BASE_URL`  | Faucet endpoint for requesting test tokens (testnet only) | `http://0.0.0.0:6969`  |
+| Variable            | Description                                | Default (`mainnet`)                | Default (`testnet`)                |
+| ------------------- | ------------------------------------------ | ---------------------------------- | ---------------------------------- |
+| `NYKS_RPC_BASE_URL` | Nyks chain Tendermint RPC endpoint         | `https://rpc.twilight.org`         | `https://rpc.twilight.rest`        |
+| `NYKS_LCD_BASE_URL` | Nyks chain LCD (REST API) endpoint         | `https://lcd.twilight.org`         | `https://lcd.twilight.rest`        |
+| `FAUCET_BASE_URL`   | Faucet endpoint for requesting test tokens | empty string (disabled by default) | `https://faucet-rpc.twilight.rest` |
 
 ### Order-Wallet Endpoints (feature: `order-wallet`)
 
-Required when using trading, lending, or ZkOS account commands.
+Required when using trading, lending, or ZkOS account commands. Defaults are selected from `NETWORK_TYPE`.
 
-| Variable                     | Description                                                       | Default                   |
-| ---------------------------- | ----------------------------------------------------------------- | ------------------------- |
-| `RELAYER_API_RPC_SERVER_URL` | Relayer public JSON-RPC API endpoint                              | `http://0.0.0.0:8088/api` |
-| `ZKOS_SERVER_URL`            | ZkOS server endpoint for zero-knowledge operations (also used by `relayer-init`) | `http://0.0.0.0:3030`     |
-| `RELAYER_PROGRAM_JSON_PATH`  | Path to the relayer program JSON file (ZkOS circuit parameters)   | `./relayerprogram.json`   |
+| Variable                     | Description                                                                      | Default (`mainnet`)             | Default (`testnet`)                    |
+| ---------------------------- | -------------------------------------------------------------------------------- | ------------------------------- | -------------------------------------- |
+| `RELAYER_API_RPC_SERVER_URL` | Relayer public JSON-RPC API endpoint                                             | `https://api.ephemeral.fi/api`  | `https://relayer.twilight.rest/api`    |
+| `ZKOS_SERVER_URL`            | ZkOS server endpoint for zero-knowledge operations (also used by `relayer-init`) | `https://zkserver.twilight.org` | `https://nykschain.twilight.rest/zkos` |
+| `RELAYER_PROGRAM_JSON_PATH`  | Path to the relayer program JSON file (ZkOS circuit parameters)                  | `./relayerprogram.json`         | `./relayerprogram.json`                |
 
 ### Wallet Configuration
 
-| Variable               | Description                                                                         | Default          |
-| ---------------------- | ----------------------------------------------------------------------------------- | ---------------- |
-| `NYKS_WALLET_ID`       | Default wallet ID (fallback when `--wallet-id` is omitted)                          | —                |
-| `NYKS_WALLET_PASSPHRASE` | Database encryption password (fallback when `--password` is omitted). Leave empty to use interactive prompt | — |
-
-### Validator-Wallet (feature: `validator-wallet`)
-
-| Variable               | Description                        | Default               |
-| ---------------------- | ---------------------------------- | --------------------- |
-| `VALIDATOR_WALLET_PATH`| Path to the validator mnemonic file| `validator.mnemonic`  |
+| Variable                 | Description                                                                                                 | Default |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- | ------- |
+| `NYKS_WALLET_ID`         | Default wallet ID (fallback when `--wallet-id` is omitted)                                                  | —       |
+| `NYKS_WALLET_PASSPHRASE` | Database encryption password (fallback when `--password` is omitted). Leave empty to use interactive prompt | —       |
 
 ### Database (feature: `sqlite` or `postgresql`)
 
 Required for persisting wallets, ZkOS accounts, UTXOs, and order history.
 
-| Variable                 | Description                                                  | Default            |
-| ------------------------ | ------------------------------------------------------------ | ------------------ |
-| `DATABASE_URL_SQLITE`    | SQLite database file path (feature: `sqlite`, enabled by default) | `./wallet_data.db` |
-| `DATABASE_URL_POSTGRESQL`| PostgreSQL connection string (feature: `postgresql`)         | —                  |
+| Variable                  | Description                                                       | Default            |
+| ------------------------- | ----------------------------------------------------------------- | ------------------ |
+| `DATABASE_URL_SQLITE`     | SQLite database file path (feature: `sqlite`, enabled by default) | `./wallet_data.db` |
+| `DATABASE_URL_POSTGRESQL` | PostgreSQL connection string (feature: `postgresql`)              | —                  |
 
 ## Password and Wallet ID Resolution
 
@@ -87,8 +82,8 @@ relayer-cli [--json] <COMMAND>
 
 ### Global Flags
 
-| Flag     | Description                                                     |
-| -------- | --------------------------------------------------------------- |
+| Flag     | Description                                                        |
+| -------- | ------------------------------------------------------------------ |
 | `--json` | Output results as JSON instead of formatted tables (for scripting) |
 
 ### Command Groups
@@ -124,11 +119,11 @@ relayer-cli wallet create --wallet-id my-wallet --password s3cret
 relayer-cli wallet create --btc-address bc1q...
 ```
 
-| Flag                   | Description                                                   |
-| ---------------------- | ------------------------------------------------------------- |
-| `--wallet-id <ID>`    | Wallet ID for DB storage (defaults to the Twilight address)   |
-| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
-| `--btc-address <ADDR>`| BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of generating a random one |
+| Flag                   | Description                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------- |
+| `--wallet-id <ID>`     | Wallet ID for DB storage (defaults to the Twilight address)                           |
+| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)                       |
+| `--btc-address <ADDR>` | BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of generating a random one |
 
 ### `wallet import`
 
@@ -145,12 +140,12 @@ relayer-cli wallet import --wallet-id restored --password s3cret
 relayer-cli wallet import --btc-address bc1q...
 ```
 
-| Flag                   | Description                           |
-| ---------------------- | ------------------------------------- |
-| `--mnemonic <PHRASE>` | 24-word BIP-39 mnemonic. If omitted, prompts securely via TTY |
-| `--wallet-id <ID>`    | Wallet ID for DB storage (defaults to the Twilight address)   |
-| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
-| `--btc-address <ADDR>`| BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of deriving from mnemonic |
+| Flag                   | Description                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| `--mnemonic <PHRASE>`  | 24-word BIP-39 mnemonic. If omitted, prompts securely via TTY                        |
+| `--wallet-id <ID>`     | Wallet ID for DB storage (defaults to the Twilight address)                          |
+| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)                      |
+| `--btc-address <ADDR>` | BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of deriving from mnemonic |
 
 ### `wallet load`
 
@@ -284,10 +279,10 @@ relayer-cli wallet unlock --wallet-id my-wallet
 relayer-cli wallet unlock --force
 ```
 
-| Flag          | Description                                        |
-| ------------- | -------------------------------------------------- |
+| Flag          | Description                                           |
+| ------------- | ----------------------------------------------------- |
 | `--wallet-id` | Wallet ID to cache (prompts interactively if omitted) |
-| `--force`     | Overwrite an existing session without error        |
+| `--force`     | Overwrite an existing session without error           |
 
 ### `wallet lock`
 
@@ -305,8 +300,8 @@ Change the database encryption password for a wallet. Always prompts for both ol
 relayer-cli wallet change-password --wallet-id my-wallet
 ```
 
-| Flag               | Description                                         |
-| ------------------ | --------------------------------------------------- |
+| Flag               | Description                                                    |
+| ------------------ | -------------------------------------------------------------- |
 | `--wallet-id <ID>` | Wallet to change password for (falls back to `NYKS_WALLET_ID`) |
 
 If a session cache exists, it is updated with the new password automatically.
@@ -320,10 +315,10 @@ relayer-cli wallet info
 relayer-cli wallet info --wallet-id my-wallet --password s3cret
 ```
 
-| Flag                | Description                      |
-| ------------------- | -------------------------------- |
-| `--wallet-id <ID>`  | Load wallet from DB              |
-| `--password <PASS>` | DB encryption password           |
+| Flag                | Description            |
+| ------------------- | ---------------------- |
+| `--wallet-id <ID>`  | Load wallet from DB    |
+| `--password <PASS>` | DB encryption password |
 
 ### `wallet update-btc-address`
 
@@ -333,11 +328,11 @@ Update the BTC deposit address stored in the wallet. The `btc_address_registered
 relayer-cli wallet update-btc-address --btc-address bc1q... --wallet-id my-wallet
 ```
 
-| Flag                    | Description                                          |
-| ----------------------- | ---------------------------------------------------- |
-| `--btc-address <ADDR>`  | **Required.** New BTC address                        |
-| `--wallet-id <ID>`      | Wallet ID (falls back to `NYKS_WALLET_ID`)           |
-| `--password <PASS>`     | DB encryption password                               |
+| Flag                   | Description                                |
+| ---------------------- | ------------------------------------------ |
+| `--btc-address <ADDR>` | **Required.** New BTC address              |
+| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID`) |
+| `--password <PASS>`    | DB encryption password                     |
 
 ### `wallet send`
 
@@ -353,13 +348,13 @@ relayer-cli wallet send --to twilight1abc... --amount 500 --denom sats
 relayer-cli wallet send --to twilight1abc... --amount 1000 --wallet-id my-wallet --password s3cret
 ```
 
-| Flag                | Description                                             |
-| ------------------- | ------------------------------------------------------- |
-| `--to <ADDR>`       | **Required.** Recipient Twilight address                |
-| `--amount <N>`      | **Required.** Amount to send                            |
-| `--denom <DENOM>`   | Token denomination: `nyks` (default) or `sats`          |
-| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)              |
-| `--password <PASS>` | DB encryption password                                  |
+| Flag                | Description                                    |
+| ------------------- | ---------------------------------------------- |
+| `--to <ADDR>`       | **Required.** Recipient Twilight address       |
+| `--amount <N>`      | **Required.** Amount to send                   |
+| `--denom <DENOM>`   | Token denomination: `nyks` (default) or `sats` |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)     |
+| `--password <PASS>` | DB encryption password                         |
 
 ---
 
@@ -384,11 +379,11 @@ relayer-cli zkaccount fund --amount-mbtc 1.0
 relayer-cli zkaccount fund --amount-btc 0.001
 ```
 
-| Flag                  | Description                                   |
-| --------------------- | --------------------------------------------- |
-| `--amount <SATS>`     | Amount in satoshis                            |
-| `--amount-mbtc <MBTC>`| Amount in milli-BTC (1 mBTC = 100,000 sats)  |
-| `--amount-btc <BTC>`  | Amount in BTC (1 BTC = 100,000,000 sats)     |
+| Flag                   | Description                                 |
+| ---------------------- | ------------------------------------------- |
+| `--amount <SATS>`      | Amount in satoshis                          |
+| `--amount-mbtc <MBTC>` | Amount in milli-BTC (1 mBTC = 100,000 sats) |
+| `--amount-btc <BTC>`   | Amount in BTC (1 BTC = 100,000,000 sats)    |
 
 At least one amount flag is required. All values are converted to satoshis before funding.
 
@@ -598,11 +593,11 @@ relayer-cli order account-summary --from 2024-01-01 --to 2024-12-31
 relayer-cli --json order account-summary
 ```
 
-| Flag            | Description                                           |
-| --------------- | ----------------------------------------------------- |
-| `--from <DATE>` | Start date filter (RFC3339 or YYYY-MM-DD)             |
-| `--to <DATE>`   | End date filter (RFC3339 or YYYY-MM-DD)               |
-| `--since <DATE>`| Alternative date filter (RFC3339 or YYYY-MM-DD)       |
+| Flag             | Description                                     |
+| ---------------- | ----------------------------------------------- |
+| `--from <DATE>`  | Start date filter (RFC3339 or YYYY-MM-DD)       |
+| `--to <DATE>`    | End date filter (RFC3339 or YYYY-MM-DD)         |
+| `--since <DATE>` | Alternative date filter (RFC3339 or YYYY-MM-DD) |
 
 ### `order tx-hashes`
 
@@ -622,13 +617,13 @@ relayer-cli order tx-hashes --by tx --id <tx_id>
 relayer-cli order tx-hashes --id REQID... --status FILLED
 ```
 
-| Flag              | Description                                          |
-| ----------------- | ---------------------------------------------------- |
-| `--by <MODE>`     | Lookup mode: `request` (default), `account`, or `tx` |
-| `--id <ID>`       | **Required.** The ID to look up                      |
-| `--status <S>`    | Filter by order status (PENDING, FILLED, SETTLED, etc.) |
-| `--limit <N>`     | Max results                                          |
-| `--offset <N>`    | Pagination offset                                    |
+| Flag           | Description                                             |
+| -------------- | ------------------------------------------------------- |
+| `--by <MODE>`  | Lookup mode: `request` (default), `account`, or `tx`    |
+| `--id <ID>`    | **Required.** The ID to look up                         |
+| `--status <S>` | Filter by order status (PENDING, FILLED, SETTLED, etc.) |
+| `--limit <N>`  | Max results                                             |
+| `--offset <N>` | Pagination offset                                       |
 
 Output columns: `ORDER ID`, `STATUS`, `TYPE`, `TX HASH`, `DATE`.
 
@@ -720,9 +715,9 @@ relayer-cli portfolio balances --unit btc
 relayer-cli portfolio balances --wallet-id my-wallet --password s3cret
 ```
 
-| Flag          | Description                                |
-| ------------- | ------------------------------------------ |
-| `--unit <U>`  | Display unit: `sats` (default), `mbtc`, `btc` |
+| Flag         | Description                                   |
+| ------------ | --------------------------------------------- |
+| `--unit <U>` | Display unit: `sats` (default), `mbtc`, `btc` |
 
 Output columns: `INDEX`, `BALANCE`, `IO-TYPE`, `ON-CHAIN`, plus a total.
 
@@ -852,12 +847,12 @@ relayer-cli market history-price --from 2024-01-01T00:00:00Z --to 2024-01-31T23:
 relayer-cli --json market history-price --from 2024-01-01 --to 2024-01-31
 ```
 
-| Flag              | Description                                     |
-| ----------------- | ----------------------------------------------- |
-| `--from <DATE>`   | **Required.** Start date (RFC3339 or YYYY-MM-DD)|
-| `--to <DATE>`     | **Required.** End date (RFC3339 or YYYY-MM-DD)  |
-| `--limit <N>`     | Max results (default: `50`)                     |
-| `--offset <N>`    | Pagination offset (default: `0`)                |
+| Flag            | Description                                      |
+| --------------- | ------------------------------------------------ |
+| `--from <DATE>` | **Required.** Start date (RFC3339 or YYYY-MM-DD) |
+| `--to <DATE>`   | **Required.** End date (RFC3339 or YYYY-MM-DD)   |
+| `--limit <N>`   | Max results (default: `50`)                      |
+| `--offset <N>`  | Pagination offset (default: `0`)                 |
 
 ### `market candles`
 
@@ -869,12 +864,12 @@ relayer-cli market candles --since 2024-01-01 --interval 1d --limit 30
 relayer-cli --json market candles --since 2024-01-01 --interval 5m
 ```
 
-| Flag              | Description                                         |
-| ----------------- | --------------------------------------------------- |
-| `--since <DATE>`  | **Required.** Start date (RFC3339 or YYYY-MM-DD)    |
-| `--interval <I>`  | Candle interval: `1m`, `5m`, `15m`, `30m`, `1h` (default), `4h`, `8h`, `12h`, `1d` |
-| `--limit <N>`     | Max results (default: `50`)                         |
-| `--offset <N>`    | Pagination offset (default: `0`)                    |
+| Flag             | Description                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| `--since <DATE>` | **Required.** Start date (RFC3339 or YYYY-MM-DD)                                   |
+| `--interval <I>` | Candle interval: `1m`, `5m`, `15m`, `30m`, `1h` (default), `4h`, `8h`, `12h`, `1d` |
+| `--limit <N>`    | Max results (default: `50`)                                                        |
+| `--offset <N>`   | Pagination offset (default: `0`)                                                   |
 
 Output columns: `START`, `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VOLUME`, `TRADES`.
 
@@ -887,12 +882,12 @@ relayer-cli market history-funding --from 2024-01-01 --to 2024-01-31
 relayer-cli --json market history-funding --from 2024-01-01 --to 2024-01-31
 ```
 
-| Flag              | Description                                     |
-| ----------------- | ----------------------------------------------- |
-| `--from <DATE>`   | **Required.** Start date (RFC3339 or YYYY-MM-DD)|
-| `--to <DATE>`     | **Required.** End date (RFC3339 or YYYY-MM-DD)  |
-| `--limit <N>`     | Max results (default: `50`)                     |
-| `--offset <N>`    | Pagination offset (default: `0`)                |
+| Flag            | Description                                      |
+| --------------- | ------------------------------------------------ |
+| `--from <DATE>` | **Required.** Start date (RFC3339 or YYYY-MM-DD) |
+| `--to <DATE>`   | **Required.** End date (RFC3339 or YYYY-MM-DD)   |
+| `--limit <N>`   | Max results (default: `50`)                      |
+| `--offset <N>`  | Pagination offset (default: `0`)                 |
 
 ### `market history-fees`
 
@@ -903,12 +898,12 @@ relayer-cli market history-fees --from 2024-01-01 --to 2024-01-31
 relayer-cli --json market history-fees --from 2024-01-01 --to 2024-01-31
 ```
 
-| Flag              | Description                                     |
-| ----------------- | ----------------------------------------------- |
-| `--from <DATE>`   | **Required.** Start date (RFC3339 or YYYY-MM-DD)|
-| `--to <DATE>`     | **Required.** End date (RFC3339 or YYYY-MM-DD)  |
-| `--limit <N>`     | Max results (default: `50`)                     |
-| `--offset <N>`    | Pagination offset (default: `0`)                |
+| Flag            | Description                                      |
+| --------------- | ------------------------------------------------ |
+| `--from <DATE>` | **Required.** Start date (RFC3339 or YYYY-MM-DD) |
+| `--to <DATE>`   | **Required.** End date (RFC3339 or YYYY-MM-DD)   |
+| `--limit <N>`   | Max results (default: `50`)                      |
+| `--offset <N>`  | Pagination offset (default: `0`)                 |
 
 Output columns: `MKT FILL`, `LMT FILL`, `MKT SETTLE`, `LMT SETTLE`, `TIMESTAMP`.
 
@@ -922,11 +917,11 @@ relayer-cli market apy-chart --range 30d --step 1d
 relayer-cli --json market apy-chart --range 7d
 ```
 
-| Flag              | Description                                  |
-| ----------------- | -------------------------------------------- |
-| `--range <R>`     | Time range, e.g. `7d`, `30d`, `1y` (default: `7d`) |
-| `--step <S>`      | Step/granularity, e.g. `1h`, `1d`            |
-| `--lookback <L>`  | Lookback period for rolling average          |
+| Flag             | Description                                        |
+| ---------------- | -------------------------------------------------- |
+| `--range <R>`    | Time range, e.g. `7d`, `30d`, `1y` (default: `7d`) |
+| `--step <S>`     | Step/granularity, e.g. `1h`, `1d`                  |
+| `--lookback <L>` | Lookback period for rolling average                |
 
 Output columns: `TIME`, `APY %`.
 
