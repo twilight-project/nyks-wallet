@@ -74,6 +74,98 @@ pub struct Balance {
     pub sats: SATS,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtcReserve {
+    pub reserve_id: u64,
+    pub reserve_address: String,
+    pub judge_address: String,
+    pub btc_relay_capacity_value: u64,
+    pub total_value: u64,
+    pub private_pool_value: u64,
+    pub public_value: u64,
+    pub fee_pool: u64,
+    pub unlock_height: u64,
+    pub round_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtcDepositInfo {
+    pub btc_deposit_address: String,
+    pub twilight_address: String,
+    pub is_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtcDepositDetail {
+    pub btc_deposit_address: String,
+    pub btc_satoshi_amount: u64,
+    pub twilight_staking_amount: u64,
+    pub twilight_address: String,
+    pub is_confirmed: bool,
+    pub creation_block_height: i64,
+}
+
+/// Deposit record from the Twilight indexer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerDeposit {
+    pub id: u64,
+    pub tx_hash: String,
+    pub block_height: u64,
+    pub reserve_address: String,
+    pub deposit_amount: String,
+    pub btc_height: String,
+    pub btc_hash: String,
+    pub votes: u64,
+    pub confirmed: bool,
+    pub created_at: String,
+}
+
+/// Withdrawal record from the Twilight indexer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerWithdrawal {
+    pub id: u64,
+    pub withdraw_identifier: u32,
+    pub withdraw_address: String,
+    pub withdraw_reserve_id: String,
+    pub withdraw_amount: String,
+    pub is_confirmed: bool,
+    pub block_height: u64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Full account info from the Twilight indexer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerAccountInfo {
+    pub address: String,
+    pub balance: String,
+    pub tx_count: u64,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub balances: Vec<IndexerBalance>,
+    pub deposits: Vec<IndexerDeposit>,
+    pub withdrawals: Vec<IndexerWithdrawal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerBalance {
+    pub denom: String,
+    pub amount: String,
+}
+
+/// Fetch the current Bitcoin block height from the Twilight indexer.
+pub async fn fetch_btc_block_height() -> anyhow::Result<u64> {
+    let client = Client::new();
+    let url = format!("{}/api/bitcoin/info", crate::config::TWILIGHT_INDEXER_URL.as_str());
+    let response = client.get(&url).send().await?;
+    let json: Value = response.json().await?;
+    let height = json
+        .get("blockHeight")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow!("Missing blockHeight in indexer response"))?;
+    Ok(height)
+}
+
 /// Fetch on-chain balance for the given address via LCD endpoint.
 pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<Balance> {
     let url = format!("{}/cosmos/bank/v1beta1/balances/{}", lcd_endpoint, address);
@@ -436,6 +528,363 @@ impl Wallet {
         }
     }
 
+    /// Register the wallet's BTC deposit address on-chain (mainnet only).
+    /// This tells the chain that the user intends to deposit `btc_satoshi_amount` satoshis.
+    /// After registration, the user must send BTC to a reserve address to complete the deposit.
+    /// `twilight_staking_amount` is typically 10_000.
+    pub async fn register_btc_deposit(
+        &mut self,
+        btc_satoshi_amount: u64,
+        twilight_staking_amount: u64,
+    ) -> anyhow::Result<String> {
+        if crate::config::NETWORK_TYPE.as_str() != "mainnet" {
+            return Err(anyhow!("register_btc_deposit is only available on mainnet. Use get_test_tokens for testnet."));
+        }
+
+        use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
+        use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+        use crate::nyks_rpc::rpcclient::txresult::parse_tx_response;
+
+        let msg = crate::MsgRegisterBtcDepositAddress {
+            btc_deposit_address: self.btc_address.clone(),
+            btc_satoshi_test_amount: btc_satoshi_amount,
+            twilight_staking_amount,
+            twilight_address: self.twilightaddress.clone(),
+        };
+
+        let method_type = MethodTypeURL::MsgRegisterBtcDepositAddress;
+        let any_msg = method_type.type_url(msg);
+
+        let sk = self.signing_key()?;
+        let pk = self.public_key()?;
+
+        let account_details = crate::faucet::fetch_account_details(
+            &self.twilightaddress,
+            &self.chain_config.lcd_endpoint,
+        )
+        .await?;
+        let account_number = account_details.account.account_number;
+        let sequence = account_details.account.sequence;
+
+        let signed_tx = method_type
+            .sign_msg::<crate::MsgRegisterBtcDepositAddress>(any_msg, pk, sequence, account_number, sk)?;
+
+        let method = Method::broadcast_tx_sync;
+        let (tx_send, _): (RpcBody<TxParams>, String) =
+            RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
+
+        let rpc_endpoint = self.chain_config.rpc_endpoint.clone();
+        let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
+            .await
+            .map_err(|e| anyhow!("RPC send failed: {e}"))?;
+
+        match response {
+            Ok(rpc_response) => {
+                let result = parse_tx_response(&method, rpc_response)?;
+                let tx_hash = result.get_tx_hash();
+                let code = result.get_code();
+                if code == 0 {
+                    self.btc_address_registered = true;
+                    info!("Registered BTC deposit address: {}", self.btc_address);
+                    Ok(tx_hash)
+                } else {
+                    Err(anyhow!(
+                        "Register BTC deposit failed (code {code}), TX Hash: {tx_hash}"
+                    ))
+                }
+            }
+            Err(e) => Err(anyhow!("RPC error: {e}")),
+        }
+    }
+
+    /// Submit a BTC withdrawal request on-chain.
+    /// `withdraw_address` is the Bitcoin address to receive BTC.
+    /// `reserve_id` is the reserve pool to withdraw from (fetch via `fetch_btc_reserves`).
+    /// `withdraw_amount` is the amount in satoshis.
+    pub async fn withdraw_btc(
+        &mut self,
+        withdraw_address: &str,
+        reserve_id: u64,
+        withdraw_amount: u64,
+    ) -> anyhow::Result<String> {
+        if crate::config::NETWORK_TYPE.as_str() != "mainnet" {
+            return Err(anyhow!("withdraw_btc is only available on mainnet."));
+        }
+
+        use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
+        use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+        use crate::nyks_rpc::rpcclient::txresult::parse_tx_response;
+
+        let msg = crate::MsgWithdrawBtcRequest {
+            withdraw_address: withdraw_address.to_string(),
+            reserve_id,
+            withdraw_amount,
+            twilight_address: self.twilightaddress.clone(),
+        };
+
+        let method_type = MethodTypeURL::MsgWithdrawBtcRequest;
+        let any_msg = method_type.type_url(msg);
+
+        let sk = self.signing_key()?;
+        let pk = self.public_key()?;
+
+        let account_details = crate::faucet::fetch_account_details(
+            &self.twilightaddress,
+            &self.chain_config.lcd_endpoint,
+        )
+        .await?;
+        let account_number = account_details.account.account_number;
+        let sequence = account_details.account.sequence;
+
+        let signed_tx = method_type
+            .sign_msg::<crate::MsgWithdrawBtcRequest>(any_msg, pk, sequence, account_number, sk)?;
+
+        let method = Method::broadcast_tx_sync;
+        let (tx_send, _): (RpcBody<TxParams>, String) =
+            RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
+
+        let rpc_endpoint = self.chain_config.rpc_endpoint.clone();
+        let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
+            .await
+            .map_err(|e| anyhow!("RPC send failed: {e}"))?;
+
+        match response {
+            Ok(rpc_response) => {
+                let result = parse_tx_response(&method, rpc_response)?;
+                let tx_hash = result.get_tx_hash();
+                let code = result.get_code();
+                if code == 0 {
+                    info!("Withdrawal request submitted: {} sats to {}", withdraw_amount, withdraw_address);
+                    Ok(tx_hash)
+                } else {
+                    Err(anyhow!(
+                        "Withdraw BTC request failed (code {code}), TX Hash: {tx_hash}"
+                    ))
+                }
+            }
+            Err(e) => Err(anyhow!("RPC error: {e}")),
+        }
+    }
+
+    /// Fetch all BTC reserve pools from the chain.
+    /// Returns a list of reserves with their IDs, addresses, and capacity info.
+    /// Users need a reserve ID to submit withdrawal requests and should send BTC
+    /// deposits to the reserve address.
+    pub async fn fetch_btc_reserves(&self) -> anyhow::Result<Vec<BtcReserve>> {
+        let url = format!(
+            "{}/twilight-project/nyks/volt/btc_reserve",
+            self.chain_config.lcd_endpoint
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Failed to fetch BTC reserves ({}): {}", status, body));
+        }
+
+        let json: Value = response.json().await?;
+        let reserves = json
+            .get("BtcReserves")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow!("Missing BtcReserves field in response"))?;
+
+        let mut result = Vec::new();
+        for r in reserves {
+            result.push(BtcReserve {
+                reserve_id: r.get("ReserveId").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                reserve_address: r.get("ReserveAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                judge_address: r.get("JudgeAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                btc_relay_capacity_value: r.get("BtcRelayCapacityValue").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                total_value: r.get("TotalValue").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                private_pool_value: r.get("PrivatePoolValue").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                public_value: r.get("PublicValue").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                fee_pool: r.get("FeePool").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                unlock_height: r.get("UnlockHeight").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                round_id: r.get("RoundId").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+            });
+        }
+
+        Ok(result)
+    }
+
+    /// Query the on-chain deposit registration status for this wallet's twilight address.
+    /// Returns the registered BTC deposit address info including confirmation status.
+    pub async fn fetch_deposit_status(&self) -> anyhow::Result<Option<BtcDepositInfo>> {
+        let url = format!(
+            "{}/twilight-project/nyks/bridge/registered_btc_deposit_address_by_twilight_address/{}",
+            self.chain_config.lcd_endpoint, self.twilightaddress
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            if status.as_u16() == 404 {
+                return Ok(None);
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Failed to query deposit status ({}): {}", status, body));
+        }
+
+        let json: Value = response.json().await?;
+        let deposit_address = json
+            .get("depositAddress")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let twilight_address = json
+            .get("twilightDepositAddress")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if deposit_address.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(BtcDepositInfo {
+            btc_deposit_address: deposit_address,
+            twilight_address,
+            is_confirmed: false, // this endpoint doesn't return confirmation; use fetch_all_deposits
+        }))
+    }
+
+    /// Query all registered BTC deposit addresses and find entries matching this wallet.
+    /// Returns full deposit info including confirmation status.
+    pub async fn fetch_deposit_details(&self) -> anyhow::Result<Vec<BtcDepositDetail>> {
+        let url = format!(
+            "{}/twilight-project/nyks/bridge/registered_btc_deposit_addresses",
+            self.chain_config.lcd_endpoint
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Failed to fetch deposit addresses ({}): {}", status, body));
+        }
+
+        let json: Value = response.json().await?;
+        let addresses = json
+            .get("addresses")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow!("Missing addresses field in response"))?;
+
+        let mut results = Vec::new();
+        for a in addresses {
+            let twilight_addr = a
+                .get("twilightAddress")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if twilight_addr == self.twilightaddress {
+                results.push(BtcDepositDetail {
+                    btc_deposit_address: a.get("btcDepositAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    btc_satoshi_amount: a.get("btcSatoshiTestAmount").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                    twilight_staking_amount: a.get("twilightStakingAmount").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                    twilight_address: twilight_addr.to_string(),
+                    is_confirmed: a.get("isConfirmed").and_then(|v| v.as_bool()).unwrap_or(false),
+                    creation_block_height: a.get("CreationTwilightBlockHeight").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                });
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Fetch account details from the Twilight indexer, including deposits and withdrawals.
+    pub async fn fetch_account_from_indexer(&self) -> anyhow::Result<IndexerAccountInfo> {
+        let url = format!(
+            "{}/api/accounts/{}",
+            crate::config::TWILIGHT_INDEXER_URL.as_str(),
+            self.twilightaddress
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Indexer request failed ({}): {}", status, body));
+        }
+
+        let json: Value = response.json().await?;
+
+        let account = json.get("account").ok_or_else(|| anyhow!("Missing account field"))?;
+        let address = account.get("address").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let balance = account.get("balance").and_then(|v| v.as_str()).unwrap_or("0").to_string();
+        let tx_count = account.get("txCount").and_then(|v| v.as_u64()).unwrap_or(0);
+        let first_seen = account.get("firstSeen").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let last_seen = account.get("lastSeen").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+        let balances = json
+            .get("balances")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|b| IndexerBalance {
+                        denom: b.get("denom").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        amount: b.get("amount").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let deposits = json
+            .get("deposits")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|d| IndexerDeposit {
+                        id: d.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+                        tx_hash: d.get("txHash").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        block_height: d.get("blockHeight").and_then(|v| v.as_u64()).unwrap_or(0),
+                        reserve_address: d.get("reserveAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        deposit_amount: d.get("depositAmount").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+                        btc_height: d.get("btcHeight").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+                        btc_hash: d.get("btcHash").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        votes: d.get("votes").and_then(|v| v.as_u64()).unwrap_or(0),
+                        confirmed: d.get("confirmed").and_then(|v| v.as_bool()).unwrap_or(false),
+                        created_at: d.get("createdAt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let withdrawals = json
+            .get("withdrawals")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|w| IndexerWithdrawal {
+                        id: w.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+                        withdraw_identifier: w.get("withdrawIdentifier").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                        withdraw_address: w.get("withdrawAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        withdraw_reserve_id: w.get("withdrawReserveId").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+                        withdraw_amount: w.get("withdrawAmount").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+                        is_confirmed: w.get("isConfirmed").and_then(|v| v.as_bool()).unwrap_or(false),
+                        block_height: w.get("blockHeight").and_then(|v| v.as_u64()).unwrap_or(0),
+                        created_at: w.get("createdAt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        updated_at: w.get("updatedAt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(IndexerAccountInfo {
+            address,
+            balance,
+            tx_count,
+            first_seen,
+            last_seen,
+            balances,
+            deposits,
+            withdrawals,
+        })
+    }
+
     pub fn get_zk_account_seed(
         &self,
         chain_id: &str,
@@ -455,6 +904,10 @@ impl Wallet {
 }
 
 pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
+    if crate::config::NETWORK_TYPE.as_str() == "mainnet" {
+        return Err(anyhow!("get_test_tokens is only available on testnet. Use register-btc for mainnet deposits."));
+    }
+
     let balance = wallet.update_balance().await?;
     debug!("Checking balance values if nyks is less than 50000");
     debug!("nyks: {}", balance.nyks);

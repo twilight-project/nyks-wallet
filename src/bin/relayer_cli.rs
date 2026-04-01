@@ -272,6 +272,81 @@ enum WalletCmd {
         #[arg(long)]
         password: Option<String>,
     },
+
+    /// Register the wallet's BTC address for deposit on-chain
+    RegisterBtc {
+        /// Amount in satoshis the user intends to deposit
+        #[arg(long)]
+        amount: u64,
+
+        /// Twilight staking amount (defaults to 10000)
+        #[arg(long, default_value_t = 10000)]
+        staking_amount: u64,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Show available BTC reserve addresses (where to send BTC after registration)
+    Reserves {
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Check BTC deposit registration status from chain
+    DepositStatus {
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Submit a BTC withdrawal request (mainnet only)
+    WithdrawBtc {
+        /// Bitcoin address to receive the withdrawal
+        #[arg(long)]
+        to: String,
+
+        /// Reserve ID to withdraw from (see `wallet reserves`)
+        #[arg(long)]
+        reserve_id: u64,
+
+        /// Amount in satoshis to withdraw
+        #[arg(long)]
+        amount: u64,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Get test tokens from faucet (testnet only)
+    Faucet {
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,7 +1199,8 @@ USAGE:
 COMMANDS:
     wallet      Wallet management (create, import, load, list, balance, accounts,
                 export, backup, restore, unlock/lock, change-password, info,
-                update-btc-address, sync-nonce)
+                update-btc-address, sync-nonce, register-btc, reserves,
+                deposit-status, withdraw-btc)
     zkaccount   ZkOS account operations (fund, withdraw, transfer, split)
     order       Trading and lending orders (open/close/cancel/query trade & lend,
                 unlock-trade, history-trade, history-lend, funding-history,
@@ -1173,12 +1249,22 @@ SUBCOMMANDS:
     change-password     Change the DB encryption password
     update-btc-address  Update the BTC deposit address
     sync-nonce          Sync nonce/sequence from chain state
+    register-btc        Register BTC deposit address on-chain (mainnet only)
+    reserves            Show available BTC reserve addresses
+    deposit-status      Check BTC deposit registration & confirmation status (mainnet only)
+    withdraw-btc        Submit a BTC withdrawal request (mainnet only)
+    faucet              Get test tokens from faucet (testnet only)
 
 EXAMPLES:
     relayer-cli wallet create --btc-address bc1q...
     relayer-cli wallet unlock                         # interactive prompt
     relayer-cli wallet balance                        # uses session cache
-    relayer-cli wallet accounts --on-chain-only"#
+    relayer-cli wallet accounts --on-chain-only
+    relayer-cli wallet register-btc --amount 50000    # mainnet: register for 50k sats deposit
+    relayer-cli wallet reserves                       # see where to send BTC
+    relayer-cli wallet deposit-status                 # check if confirmed by validators
+    relayer-cli wallet withdraw-btc --to bc1q... --reserve-id 1 --amount 50000
+    relayer-cli wallet faucet                         # testnet only: get test tokens"#
     );
 }
 
@@ -1850,6 +1936,351 @@ async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
         #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
         WalletCmd::Send { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::RegisterBtc {
+            amount,
+            staking_amount,
+            wallet_id,
+            password,
+        } => {
+            if nyks_wallet::config::NETWORK_TYPE.as_str() != "mainnet" {
+                return Err("register-btc is only available on mainnet. Use `wallet faucet` for testnet tokens.".to_string());
+            }
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let btc_addr = ow.wallet.btc_address.clone();
+            let tw_addr = ow.wallet.twilightaddress.clone();
+
+            println!("Registering BTC deposit address on-chain");
+            println!("  Twilight address: {tw_addr}");
+            println!("  BTC address:      {btc_addr}");
+            println!("  Deposit amount:   {amount} sats");
+            println!("  Staking amount:   {staking_amount}");
+
+            match ow
+                .wallet
+                .register_btc_deposit(amount, staking_amount)
+                .await
+            {
+                Ok(tx_hash) => {
+                    println!("\nRegistration submitted successfully");
+                    println!("  TX Hash: {tx_hash}");
+
+                    // Persist the updated btc_address_registered flag
+                    if let Some(db_manager) = ow.get_db_manager() {
+                        if let Some(wallet_password) = ow.get_wallet_password() {
+                            let _ = db_manager.save_encrypted_wallet(&ow.wallet, wallet_password);
+                        }
+                    }
+
+                    // Fetch and display reserve addresses
+                    println!("\nFetching reserve addresses...");
+                    match ow.wallet.fetch_btc_reserves().await {
+                        Ok(reserves) => {
+                            if reserves.is_empty() {
+                                println!("No reserves found on chain.");
+                            } else {
+                                println!("\nSend {amount} sats to any of these ACTIVE reserve addresses:");
+                                println!(
+                                    "\n{:<6} {:<50} {:<15} {:<14}",
+                                    "ID", "RESERVE ADDRESS", "TOTAL VALUE", "UNLOCK HEIGHT"
+                                );
+                                println!("{}", "-".repeat(90));
+                                for r in &reserves {
+                                    println!(
+                                        "{:<6} {:<50} {:<15} {:<14}",
+                                        r.reserve_id,
+                                        r.reserve_address,
+                                        r.total_value,
+                                        r.unlock_height
+                                    );
+                                }
+                                println!("\nWARNING: Reserve addresses expire every ~144 BTC blocks (~24h).");
+                                println!("Ensure the reserve is still active when your BTC tx confirms.");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Could not fetch reserves: {e}");
+                            println!("Run `wallet reserves` to see reserve addresses.");
+                        }
+                    }
+
+                    println!("\nAfter sending BTC, check status with: wallet deposit-status");
+                    Ok(())
+                }
+                Err(e) => Err(format!("Registration failed: {e}")),
+            }
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::RegisterBtc { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::Reserves {
+            wallet_id,
+            password,
+        } => {
+            let ow = resolve_order_wallet(wallet_id, password).await?;
+            match ow.wallet.fetch_btc_reserves().await {
+                Ok(reserves) => {
+                    if reserves.is_empty() {
+                        println!("No BTC reserves found on chain.");
+                    } else {
+                        // Fetch current BTC block height for status calculation
+                        let btc_height = nyks_wallet::wallet::wallet::fetch_btc_block_height()
+                            .await
+                            .unwrap_or(0);
+                        if btc_height > 0 {
+                            println!("Current BTC block height: {btc_height}\n");
+                        }
+
+                        println!(
+                            "{:<6} {:<50} {:<15} {:<14} {:<10}",
+                            "ID", "RESERVE ADDRESS", "TOTAL VALUE", "BLOCKS LEFT", "STATUS"
+                        );
+                        println!("{}", "-".repeat(98));
+                        for r in &reserves {
+                            let next_unlock = r.unlock_height + 144;
+                            let (blocks_left, status) = if btc_height > 0 {
+                                if next_unlock <= btc_height {
+                                    ("expired".to_string(), "EXPIRED")
+                                } else {
+                                    let remaining = next_unlock - btc_height;
+                                    let st = if remaining <= 4 {
+                                        "CRITICAL"
+                                    } else if remaining <= 72 {
+                                        "WARNING"
+                                    } else {
+                                        "ACTIVE"
+                                    };
+                                    (remaining.to_string(), st)
+                                }
+                            } else {
+                                (format!("unlock:{}", r.unlock_height), "UNKNOWN")
+                            };
+                            println!(
+                                "{:<6} {:<50} {:<15} {:<14} {:<10}",
+                                r.reserve_id,
+                                r.reserve_address,
+                                r.total_value,
+                                blocks_left,
+                                status
+                            );
+                        }
+                        println!("\nTotal: {} reserve(s)", reserves.len());
+                        println!("\nSTATUS KEY:");
+                        println!("  ACTIVE   - Safe to send BTC");
+                        println!("  WARNING  - Less than ~12h remaining, send only if your BTC tx will confirm quickly");
+                        println!("  CRITICAL - Less than 4 blocks remaining, do NOT send");
+                        println!("  EXPIRED  - Reserve is sweeping, do NOT send");
+                        println!("\nReserve addresses rotate every ~144 BTC blocks (~24 hours).");
+                        println!("The reserve must still be ACTIVE when your BTC transaction confirms on Bitcoin.");
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(format!("Failed to fetch reserves: {e}")),
+            }
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::Reserves { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::DepositStatus {
+            wallet_id,
+            password,
+        } => {
+            if nyks_wallet::config::NETWORK_TYPE.as_str() != "mainnet" {
+                return Err("deposit-status is only available on mainnet. Testnet uses faucet for tokens.".to_string());
+            }
+            let ow = resolve_order_wallet(wallet_id, password).await?;
+            let tw_addr = ow.wallet.twilightaddress.clone();
+
+            println!("Checking deposit & withdrawal status for {tw_addr}...\n");
+
+            match ow.wallet.fetch_account_from_indexer().await {
+                Ok(info) => {
+                    // Balances
+                    println!("Account: {}", info.address);
+                    println!("  Transactions: {}", info.tx_count);
+                    if !info.first_seen.is_empty() {
+                        println!("  First seen:   {}", &info.first_seen[..std::cmp::min(19, info.first_seen.len())]);
+                    }
+                    if !info.last_seen.is_empty() {
+                        println!("  Last seen:    {}", &info.last_seen[..std::cmp::min(19, info.last_seen.len())]);
+                    }
+                    println!();
+
+                    if !info.balances.is_empty() {
+                        println!("Balances:");
+                        for b in &info.balances {
+                            println!("  {}: {}", b.denom, b.amount);
+                        }
+                        println!();
+                    }
+
+                    // Deposits
+                    if info.deposits.is_empty() {
+                        println!("No deposits found.");
+                        println!("Register first with: wallet register-btc --amount <sats>");
+                    } else {
+                        println!("Deposits ({}):", info.deposits.len());
+                        println!(
+                            "  {:<6} {:<12} {:<12} {:<10} {:<8} {:<22}",
+                            "ID", "AMOUNT", "BTC HEIGHT", "CONFIRMED", "VOTES", "DATE"
+                        );
+                        println!("  {}", "-".repeat(72));
+                        for d in &info.deposits {
+                            let date = if d.created_at.len() >= 19 {
+                                &d.created_at[..19]
+                            } else {
+                                &d.created_at
+                            };
+                            println!(
+                                "  {:<6} {:<12} {:<12} {:<10} {:<8} {:<22}",
+                                d.id,
+                                d.deposit_amount,
+                                d.btc_height,
+                                if d.confirmed { "YES" } else { "NO" },
+                                d.votes,
+                                date
+                            );
+                        }
+
+                        let confirmed = info.deposits.iter().filter(|d| d.confirmed).count();
+                        let pending = info.deposits.len() - confirmed;
+                        let total_deposited: u64 = info.deposits.iter()
+                            .filter(|d| d.confirmed)
+                            .filter_map(|d| d.deposit_amount.parse::<u64>().ok())
+                            .sum();
+                        println!("\n  Total confirmed deposits: {total_deposited} sats ({confirmed} confirmed, {pending} pending)");
+
+                        if pending > 0 {
+                            println!("\n  Pending deposits require:");
+                            println!("    1. BTC sent to an active reserve address (run: wallet reserves)");
+                            println!("    2. BTC transaction confirmed on Bitcoin (~10 min)");
+                            println!("    3. Validator detection and confirmation (can take 1+ hours)");
+                        }
+                    }
+
+                    // Withdrawals
+                    if !info.withdrawals.is_empty() {
+                        println!("\nWithdrawals ({}):", info.withdrawals.len());
+                        println!(
+                            "  {:<6} {:<50} {:<12} {:<10} {:<22}",
+                            "ID", "BTC ADDRESS", "AMOUNT", "CONFIRMED", "DATE"
+                        );
+                        println!("  {}", "-".repeat(102));
+                        for w in &info.withdrawals {
+                            let date = if w.created_at.len() >= 19 {
+                                &w.created_at[..19]
+                            } else {
+                                &w.created_at
+                            };
+                            println!(
+                                "  {:<6} {:<50} {:<12} {:<10} {:<22}",
+                                w.withdraw_identifier,
+                                w.withdraw_address,
+                                w.withdraw_amount,
+                                if w.is_confirmed { "YES" } else { "NO" },
+                                date
+                            );
+                        }
+
+                        let w_confirmed = info.withdrawals.iter().filter(|w| w.is_confirmed).count();
+                        let w_pending = info.withdrawals.len() - w_confirmed;
+                        let total_withdrawn: u64 = info.withdrawals.iter()
+                            .filter(|w| w.is_confirmed)
+                            .filter_map(|w| w.withdraw_amount.parse::<u64>().ok())
+                            .sum();
+                        println!("\n  Total confirmed withdrawals: {total_withdrawn} sats ({w_confirmed} confirmed, {w_pending} pending)");
+                    }
+
+                    Ok(())
+                }
+                Err(e) => Err(format!("Failed to fetch account from indexer: {e}")),
+            }
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::DepositStatus { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::WithdrawBtc {
+            to,
+            reserve_id,
+            amount,
+            wallet_id,
+            password,
+        } => {
+            if nyks_wallet::config::NETWORK_TYPE.as_str() != "mainnet" {
+                return Err("withdraw-btc is only available on mainnet.".to_string());
+            }
+            validate_btc_segwit_address(&to)?;
+
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let tw_addr = ow.wallet.twilightaddress.clone();
+
+            println!("Submitting BTC withdrawal request");
+            println!("  From:       {tw_addr}");
+            println!("  To (BTC):   {to}");
+            println!("  Reserve ID: {reserve_id}");
+            println!("  Amount:     {amount} sats");
+
+            match ow.wallet.withdraw_btc(&to, reserve_id, amount).await {
+                Ok(tx_hash) => {
+                    println!("\nWithdrawal request submitted successfully");
+                    println!("  TX Hash: {tx_hash}");
+                    println!("\nThe withdrawal will be processed by validators.");
+                    Ok(())
+                }
+                Err(e) => Err(format!("Withdrawal failed: {e}")),
+            }
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::WithdrawBtc { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        WalletCmd::Faucet {
+            wallet_id,
+            password,
+        } => {
+            if nyks_wallet::config::NETWORK_TYPE.as_str() == "mainnet" {
+                return Err("faucet is only available on testnet. Use `wallet register-btc` for mainnet deposits.".to_string());
+            }
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let tw_addr = ow.wallet.twilightaddress.clone();
+
+            println!("Requesting test tokens for {tw_addr}...");
+            nyks_wallet::wallet::wallet::get_test_tokens(&mut ow.wallet)
+                .await
+                .map_err(|e| format!("Failed to get test tokens: {e}"))?;
+
+            let balance = ow.wallet.update_balance().await.map_err(|e| e.to_string())?;
+            println!("\nUpdated balance:");
+            println!("  NYKS: {}", balance.nyks);
+            println!("  SATS: {}", balance.sats);
+            Ok(())
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        WalletCmd::Faucet { .. } => Err(
             "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
                 .to_string(),
         ),

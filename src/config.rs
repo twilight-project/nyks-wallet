@@ -59,6 +59,14 @@ pub static RELAYER_API_RPC_SERVER_URL: LazyLock<String> = LazyLock::new(|| {
 });
 pub static CHAIN_ID: LazyLock<String> =
     LazyLock::new(|| std::env::var("CHAIN_ID").unwrap_or("nyks".to_string()));
+pub static TWILIGHT_INDEXER_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://indexer.twilight.org".to_string()
+    } else {
+        "https://indexer.twilight.rest".to_string()
+    };
+    std::env::var("TWILIGHT_INDEXER_URL").unwrap_or(default)
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EndpointConfig {

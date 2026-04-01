@@ -34,11 +34,12 @@ If a variable is not set, `src/config.rs` applies code defaults (many are derive
 
 Used by the on-chain wallet for balance queries, transaction broadcasting, and faucet requests. Defaults are selected from `NETWORK_TYPE`.
 
-| Variable            | Description                                | Default (`mainnet`)                | Default (`testnet`)                |
-| ------------------- | ------------------------------------------ | ---------------------------------- | ---------------------------------- |
-| `NYKS_RPC_BASE_URL` | Nyks chain Tendermint RPC endpoint         | `https://rpc.twilight.org`         | `https://rpc.twilight.rest`        |
-| `NYKS_LCD_BASE_URL` | Nyks chain LCD (REST API) endpoint         | `https://lcd.twilight.org`         | `https://lcd.twilight.rest`        |
-| `FAUCET_BASE_URL`   | Faucet endpoint for requesting test tokens | empty string (disabled by default) | `https://faucet-rpc.twilight.rest` |
+| Variable            | Description                                | Default (`mainnet`)                             | Default (`testnet`)                              |
+| ------------------- | ------------------------------------------ | ----------------------------------------------- | ------------------------------------------------ |
+| `NYKS_RPC_BASE_URL` | Nyks chain Tendermint RPC endpoint         | `https://rpc.twilight.org`                      | `https://rpc.twilight.rest`                      |
+| `NYKS_LCD_BASE_URL` | Nyks chain LCD (REST API) endpoint         | `https://lcd.twilight.org`                      | `https://lcd.twilight.rest`                      |
+| `FAUCET_BASE_URL`   | Faucet endpoint for requesting test tokens | empty string (disabled by default)              | `https://faucet-rpc.twilight.rest`               |
+| `TWILIGHT_INDEXER_URL` | Twilight indexer base URL (BTC block height, account queries) | `https://indexer.twilight.org` | `https://indexer.twilight.rest` |
 
 ### Order-Wallet Endpoints (feature: `order-wallet`)
 
@@ -88,7 +89,7 @@ relayer-cli [--json] <COMMAND>
 
 ### Command Groups
 
-- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send
+- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send, register-btc, reserves, deposit-status, withdraw-btc, faucet
 - `zkaccount` — fund, withdraw, transfer, and split ZkOS trading accounts
 - `order` — open/close/cancel/query trader and lend orders, unlock-trade, history-trade, history-lend, funding-history, account-summary, tx-hashes
 - `market` — query prices, orderbook, rates, historical data, candles, APY charts
@@ -355,6 +356,104 @@ relayer-cli wallet send --to twilight1abc... --amount 1000 --wallet-id my-wallet
 | `--denom <DENOM>`   | Token denomination: `nyks` (default) or `sats` |
 | `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)     |
 | `--password <PASS>` | DB encryption password                         |
+
+### `wallet register-btc`
+
+**Mainnet only.** Register the wallet's BTC deposit address on-chain. After registration, the CLI displays available reserve addresses where you must send BTC to complete the deposit.
+
+```bash
+# Register for a 50,000 sat deposit
+relayer-cli wallet register-btc --amount 50000
+
+# Custom staking amount (default is 10000)
+relayer-cli wallet register-btc --amount 100000 --staking-amount 10000
+```
+
+| Flag                   | Description                                            |
+| ---------------------- | ------------------------------------------------------ |
+| `--amount <SATS>`      | **Required.** Amount in satoshis you intend to deposit |
+| `--staking-amount <N>` | Twilight staking amount (default: `10000`)             |
+| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID`)             |
+| `--password <PASS>`    | DB encryption password                                 |
+
+**Deposit flow:**
+1. Run `wallet register-btc --amount <sats>` to register your BTC address on-chain
+2. The CLI shows available reserve addresses — pick an **ACTIVE** one
+3. Send the registered amount of BTC from your registered BTC address to the chosen reserve address
+4. Wait for Bitcoin confirmation (~10 min) and then validator confirmation (can take 1+ hours)
+5. Check status with `wallet deposit-status`
+
+### `wallet reserves`
+
+Show all BTC reserve addresses on-chain. Fetches the current Bitcoin block height to display real-time expiry status for each reserve.
+
+```bash
+relayer-cli wallet reserves
+```
+
+Output columns: `ID`, `RESERVE ADDRESS`, `TOTAL VALUE`, `BLOCKS LEFT`, `STATUS`.
+
+**Status key:**
+- `ACTIVE` — Safe to send BTC
+- `WARNING` — Less than ~12 hours remaining; send only if your BTC tx will confirm quickly
+- `CRITICAL` — Less than 4 blocks remaining; do **not** send
+- `EXPIRED` — Reserve is sweeping; do **not** send
+
+Reserve addresses rotate every ~144 Bitcoin blocks (~24 hours). The reserve **must still be active** when your BTC transaction confirms on Bitcoin. Never send BTC to an expired reserve — funds may be delayed or require manual recovery by the validator set.
+
+### `wallet deposit-status`
+
+**Mainnet only.** Show deposit and withdrawal history for the wallet by querying the Twilight indexer (`TWILIGHT_INDEXER_URL`). Provides richer data than on-chain queries, including BTC transaction hashes, block heights, oracle votes, and confirmation status.
+
+```bash
+relayer-cli wallet deposit-status
+```
+
+Output sections:
+
+1. **Account info** — address, transaction count, first/last seen timestamps
+2. **Balances** — current NYKS and SATS balances
+3. **Deposits** — columns: `ID`, `AMOUNT`, `BTC HEIGHT`, `CONFIRMED`, `VOTES`, `DATE`
+4. **Withdrawals** — columns: `ID`, `BTC ADDRESS`, `AMOUNT`, `CONFIRMED`, `DATE`
+
+Each section shows totals (confirmed vs pending) and cumulative amounts.
+
+Validator confirmation can take over 1 hour after the BTC transaction confirms on Bitcoin. If a deposit shows `CONFIRMED: NO`, ensure you have:
+1. Sent BTC to an active reserve address
+2. The Bitcoin transaction has at least 1 confirmation
+3. Waited for validators to detect and confirm the deposit
+
+### `wallet withdraw-btc`
+
+**Mainnet only.** Submit a BTC withdrawal request. The BTC address must be a SegWit address (`bc1q...` or `bc1p...`).
+
+```bash
+relayer-cli wallet withdraw-btc --to bc1q... --reserve-id 1 --amount 50000
+```
+
+| Flag                | Description                                           |
+| ------------------- | ----------------------------------------------------- |
+| `--to <ADDR>`       | **Required.** Bitcoin address to receive BTC          |
+| `--reserve-id <N>`  | **Required.** Reserve pool ID (see `wallet reserves`) |
+| `--amount <SATS>`   | **Required.** Amount in satoshis to withdraw          |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)            |
+| `--password <PASS>` | DB encryption password                                |
+
+The withdrawal is processed by validators after submission.
+
+### `wallet faucet`
+
+**Testnet only.** Request test NYKS and SATS tokens from the faucet. Automatically registers a BTC deposit address and mints test satoshis if needed.
+
+```bash
+relayer-cli wallet faucet
+relayer-cli wallet faucet --wallet-id my-wallet --password s3cret
+```
+
+| Flag                | Description                                |
+| ------------------- | ------------------------------------------ |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`) |
+| `--password <PASS>` | DB encryption password                     |
 
 ---
 
