@@ -1,9 +1,13 @@
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::database::{
     models::{
-        DbOrderWallet, DbRequestId, DbUtxoDetail, DbZkAccount, EncryptedWallet, NewEncryptedWallet,
+        DbBtcDeposit, DbBtcWithdrawal, DbOrderWallet, DbRequestId, DbUtxoDetail, DbZkAccount,
+        EncryptedWallet, NewEncryptedWallet,
     },
-    schema::{encrypted_wallets, order_wallets, request_ids, utxo_details, zk_accounts},
+    schema::{
+        btc_deposits, btc_withdrawals, encrypted_wallets, order_wallets, request_ids,
+        utxo_details, zk_accounts,
+    },
 };
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::security::SecurePassword;
@@ -604,6 +608,144 @@ impl DatabaseManager {
             .offset(offset)
             .load::<crate::database::models::DbTransferHistory>(&mut conn)
             .map_err(|e| format!("Failed to load transfer history: {}", e))?;
+        Ok(rows)
+    }
+
+    // -------------------------
+    // BTC Deposit operations
+    // -------------------------
+
+    pub fn save_btc_deposit(
+        &self,
+        entry: crate::database::models::NewDbBtcDeposit,
+    ) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        diesel::insert_into(btc_deposits::table)
+            .values(&entry)
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to save BTC deposit: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_btc_deposit_status(
+        &self,
+        deposit_id: i32,
+        status: &str,
+    ) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        let now = chrono::Utc::now().naive_utc();
+        diesel::update(btc_deposits::table.filter(btc_deposits::id.eq(deposit_id)))
+            .set((
+                btc_deposits::status.eq(status),
+                btc_deposits::updated_at.eq(now),
+            ))
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to update BTC deposit status: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_btc_deposit_reserve(
+        &self,
+        deposit_id: i32,
+        reserve_address: &str,
+    ) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        let now = chrono::Utc::now().naive_utc();
+        diesel::update(btc_deposits::table.filter(btc_deposits::id.eq(deposit_id)))
+            .set((
+                btc_deposits::reserve_address.eq(Some(reserve_address)),
+                btc_deposits::updated_at.eq(now),
+            ))
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to update BTC deposit reserve: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load_btc_deposits(&self) -> Result<Vec<DbBtcDeposit>, String> {
+        let net = current_network_type();
+        let mut conn = get_conn(self.pool())?;
+        let rows = btc_deposits::table
+            .filter(btc_deposits::wallet_id.eq(&self.wallet_id))
+            .filter(btc_deposits::network_type.eq(&net))
+            .order(btc_deposits::created_at.desc())
+            .load::<DbBtcDeposit>(&mut conn)
+            .map_err(|e| format!("Failed to load BTC deposits: {}", e))?;
+        Ok(rows)
+    }
+
+    pub fn load_btc_deposits_by_status(&self, status: &str) -> Result<Vec<DbBtcDeposit>, String> {
+        let net = current_network_type();
+        let mut conn = get_conn(self.pool())?;
+        let rows = btc_deposits::table
+            .filter(btc_deposits::wallet_id.eq(&self.wallet_id))
+            .filter(btc_deposits::network_type.eq(&net))
+            .filter(btc_deposits::status.eq(status))
+            .order(btc_deposits::created_at.desc())
+            .load::<DbBtcDeposit>(&mut conn)
+            .map_err(|e| format!("Failed to load BTC deposits by status: {}", e))?;
+        Ok(rows)
+    }
+
+    // -------------------------
+    // BTC Withdrawal operations
+    // -------------------------
+
+    pub fn save_btc_withdrawal(
+        &self,
+        entry: crate::database::models::NewDbBtcWithdrawal,
+    ) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        diesel::insert_into(btc_withdrawals::table)
+            .values(&entry)
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to save BTC withdrawal: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_btc_withdrawal_status(
+        &self,
+        withdrawal_id: i32,
+        status: &str,
+    ) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        let now = chrono::Utc::now().naive_utc();
+        diesel::update(
+            btc_withdrawals::table.filter(btc_withdrawals::id.eq(withdrawal_id)),
+        )
+        .set((
+            btc_withdrawals::status.eq(status),
+            btc_withdrawals::updated_at.eq(now),
+        ))
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to update BTC withdrawal status: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load_btc_withdrawals(&self) -> Result<Vec<DbBtcWithdrawal>, String> {
+        let net = current_network_type();
+        let mut conn = get_conn(self.pool())?;
+        let rows = btc_withdrawals::table
+            .filter(btc_withdrawals::wallet_id.eq(&self.wallet_id))
+            .filter(btc_withdrawals::network_type.eq(&net))
+            .order(btc_withdrawals::created_at.desc())
+            .load::<DbBtcWithdrawal>(&mut conn)
+            .map_err(|e| format!("Failed to load BTC withdrawals: {}", e))?;
+        Ok(rows)
+    }
+
+    pub fn load_btc_withdrawals_by_status(
+        &self,
+        status: &str,
+    ) -> Result<Vec<DbBtcWithdrawal>, String> {
+        let net = current_network_type();
+        let mut conn = get_conn(self.pool())?;
+        let rows = btc_withdrawals::table
+            .filter(btc_withdrawals::wallet_id.eq(&self.wallet_id))
+            .filter(btc_withdrawals::network_type.eq(&net))
+            .filter(btc_withdrawals::status.eq(status))
+            .order(btc_withdrawals::created_at.desc())
+            .load::<DbBtcWithdrawal>(&mut conn)
+            .map_err(|e| format!("Failed to load BTC withdrawals by status: {}", e))?;
         Ok(rows)
     }
 }

@@ -2,13 +2,13 @@
 use crate::database::{
     connection::get_conn,
     models::{
-        DbOrderHistory, DbOrderWallet, DbRequestId, DbTransferHistory, DbUtxoDetail,
-        DbZkAccount, EncryptedWallet,
+        DbBtcDeposit, DbBtcWithdrawal, DbOrderHistory, DbOrderWallet, DbRequestId,
+        DbTransferHistory, DbUtxoDetail, DbZkAccount, EncryptedWallet,
     },
     operations::DatabaseManager,
     schema::{
-        encrypted_wallets, order_history, order_wallets, request_ids, transfer_history,
-        utxo_details, zk_accounts,
+        btc_deposits, btc_withdrawals, encrypted_wallets, order_history, order_wallets,
+        request_ids, transfer_history, utxo_details, zk_accounts,
     },
 };
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 /// Version of the backup format. Increment when the schema changes.
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-const BACKUP_FORMAT_VERSION: u32 = 2;
+const BACKUP_FORMAT_VERSION: u32 = 3;
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 fn current_network_type() -> String {
@@ -45,6 +45,10 @@ pub struct WalletBackup {
     pub request_ids: Vec<DbRequestId>,
     pub order_history: Vec<DbOrderHistory>,
     pub transfer_history: Vec<DbTransferHistory>,
+    #[serde(default)]
+    pub btc_deposits: Vec<DbBtcDeposit>,
+    #[serde(default)]
+    pub btc_withdrawals: Vec<DbBtcWithdrawal>,
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -99,6 +103,20 @@ impl DatabaseManager {
             .load(&mut conn)
             .map_err(|e| format!("Failed to export transfer_history: {}", e))?;
 
+        let btc_deps: Vec<DbBtcDeposit> = btc_deposits::table
+            .filter(btc_deposits::wallet_id.eq(self.get_wallet_id()))
+            .filter(btc_deposits::network_type.eq(&net))
+            .order(btc_deposits::created_at.desc())
+            .load(&mut conn)
+            .map_err(|e| format!("Failed to export btc_deposits: {}", e))?;
+
+        let btc_wds: Vec<DbBtcWithdrawal> = btc_withdrawals::table
+            .filter(btc_withdrawals::wallet_id.eq(self.get_wallet_id()))
+            .filter(btc_withdrawals::network_type.eq(&net))
+            .order(btc_withdrawals::created_at.desc())
+            .load(&mut conn)
+            .map_err(|e| format!("Failed to export btc_withdrawals: {}", e))?;
+
         let backup = WalletBackup {
             format_version: BACKUP_FORMAT_VERSION,
             wallet_id: self.get_wallet_id().to_string(),
@@ -111,6 +129,8 @@ impl DatabaseManager {
             request_ids: req_ids,
             order_history: ord_hist,
             transfer_history: xfer_hist,
+            btc_deposits: btc_deps,
+            btc_withdrawals: btc_wds,
         };
 
         debug!(
@@ -157,6 +177,22 @@ impl DatabaseManager {
         let wallet_id = self.get_wallet_id();
 
         // Delete existing data for this wallet on this network (in dependency order)
+        diesel::delete(
+            btc_withdrawals::table
+                .filter(btc_withdrawals::wallet_id.eq(wallet_id))
+                .filter(btc_withdrawals::network_type.eq(&net)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to clear btc_withdrawals: {}", e))?;
+
+        diesel::delete(
+            btc_deposits::table
+                .filter(btc_deposits::wallet_id.eq(wallet_id))
+                .filter(btc_deposits::network_type.eq(&net)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to clear btc_deposits: {}", e))?;
+
         diesel::delete(
             transfer_history::table
                 .filter(transfer_history::wallet_id.eq(wallet_id))
@@ -280,6 +316,26 @@ impl DatabaseManager {
                 .values(&th)
                 .execute(&mut conn)
                 .map_err(|e| format!("Failed to import transfer_history: {}", e))?;
+        }
+
+        for mut dep in backup.btc_deposits.clone() {
+            dep.id = None;
+            dep.wallet_id = wallet_id.to_string();
+            dep.network_type = net.clone();
+            diesel::insert_into(btc_deposits::table)
+                .values(&dep)
+                .execute(&mut conn)
+                .map_err(|e| format!("Failed to import btc_deposit: {}", e))?;
+        }
+
+        for mut wd in backup.btc_withdrawals.clone() {
+            wd.id = None;
+            wd.wallet_id = wallet_id.to_string();
+            wd.network_type = net.clone();
+            diesel::insert_into(btc_withdrawals::table)
+                .values(&wd)
+                .execute(&mut conn)
+                .map_err(|e| format!("Failed to import btc_withdrawal: {}", e))?;
         }
 
         debug!(

@@ -134,6 +134,18 @@ pub struct IndexerWithdrawal {
     pub updated_at: String,
 }
 
+/// On-chain BTC withdrawal request status from LCD.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtcWithdrawStatus {
+    pub withdraw_identifier: u64,
+    pub withdraw_address: String,
+    pub withdraw_reserve_id: String,
+    pub withdraw_amount: String,
+    pub twilight_address: String,
+    pub is_confirmed: bool,
+    pub creation_twilight_block_height: String,
+}
+
 /// Full account info from the Twilight indexer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexerAccountInfo {
@@ -709,6 +721,55 @@ impl Wallet {
         Ok(result)
     }
 
+    /// Look up whether a specific BTC address is already registered on-chain.
+    /// Returns the twilight address it is mapped to, or None if not registered.
+    pub async fn fetch_registered_btc_by_address(
+        &self,
+        btc_address: &str,
+    ) -> anyhow::Result<Option<BtcDepositInfo>> {
+        let url = format!(
+            "{}/twilight-project/nyks/bridge/registered_btc_deposit_address/{}",
+            self.chain_config.lcd_endpoint, btc_address
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            if status.as_u16() == 404 || status.as_u16() == 400 {
+                return Ok(None);
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to query BTC registration ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let json: Value = response.json().await?;
+        let deposit_address = json
+            .get("depositAddress")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let twilight_address = json
+            .get("twilightDepositAddress")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if deposit_address.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(BtcDepositInfo {
+            btc_deposit_address: deposit_address,
+            twilight_address,
+            is_confirmed: false,
+        }))
+    }
+
     /// Query the on-chain deposit registration status for this wallet's twilight address.
     /// Returns the registered BTC deposit address info including confirmation status.
     pub async fn fetch_deposit_status(&self) -> anyhow::Result<Option<BtcDepositInfo>> {
@@ -792,6 +853,77 @@ impl Wallet {
         }
 
         Ok(results)
+    }
+
+    /// Query the on-chain withdrawal request status from LCD.
+    /// Parameters match the LCD query: reserve_id, btc_address, withdraw_amount.
+    pub async fn fetch_withdrawal_status(
+        &self,
+        reserve_id: u64,
+        btc_address: &str,
+        withdraw_amount: u64,
+    ) -> anyhow::Result<Option<BtcWithdrawStatus>> {
+        let url = format!(
+            "{}/twilight-project/nyks/volt/btc_withdraw_request/{}?reserveId={}&btcAddress={}&withdrawAmount={}",
+            self.chain_config.lcd_endpoint, self.twilightaddress, reserve_id, btc_address, withdraw_amount
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            if status.as_u16() == 404 || status.as_u16() == 400 {
+                return Ok(None);
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to query withdrawal status ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let json: Value = response.json().await?;
+        let req = match json.get("BtcWithdrawRequest") {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        Ok(Some(BtcWithdrawStatus {
+            withdraw_identifier: req
+                .get("withdrawIdentifier")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            withdraw_address: req
+                .get("withdrawAddress")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            withdraw_reserve_id: req
+                .get("withdrawReserveId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            withdraw_amount: req
+                .get("withdrawAmount")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            twilight_address: req
+                .get("twilightAddress")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            is_confirmed: req
+                .get("isConfirmed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            creation_twilight_block_height: req
+                .get("CreationTwilightBlockHeight")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+        }))
     }
 
     /// Fetch account details from the Twilight indexer, including deposits and withdrawals.

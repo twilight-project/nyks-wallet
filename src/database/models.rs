@@ -437,6 +437,80 @@ pub struct NewDbTransferHistory {
     pub network_type: String,
 }
 
+// BTC Deposit model
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = btc_deposits)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct DbBtcDeposit {
+    pub id: Option<i32>,
+    pub wallet_id: String,
+    pub network_type: String,
+    pub btc_address: String,
+    pub twilight_address: String,
+    pub reserve_address: Option<String>,
+    pub amount: i64,
+    pub staking_amount: i64,
+    pub registration_tx_hash: Option<String>,
+    pub status: String,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = btc_deposits)]
+pub struct NewDbBtcDeposit {
+    pub wallet_id: String,
+    pub network_type: String,
+    pub btc_address: String,
+    pub twilight_address: String,
+    pub reserve_address: Option<String>,
+    pub amount: i64,
+    pub staking_amount: i64,
+    pub registration_tx_hash: Option<String>,
+    pub status: String,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+// BTC Withdrawal model
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = btc_withdrawals)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct DbBtcWithdrawal {
+    pub id: Option<i32>,
+    pub wallet_id: String,
+    pub network_type: String,
+    pub withdraw_address: String,
+    pub twilight_address: String,
+    pub reserve_id: i64,
+    pub amount: i64,
+    pub tx_hash: Option<String>,
+    pub status: String,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = btc_withdrawals)]
+pub struct NewDbBtcWithdrawal {
+    pub wallet_id: String,
+    pub network_type: String,
+    pub withdraw_address: String,
+    pub twilight_address: String,
+    pub reserve_id: i64,
+    pub amount: i64,
+    pub tx_hash: Option<String>,
+    pub status: String,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 impl DbRequestId {
     pub fn new(wallet_id: String, account_index: u64, request_id: String) -> NewDbRequestId {

@@ -89,7 +89,7 @@ relayer-cli [--json] <COMMAND>
 
 ### Command Groups
 
-- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send, register-btc, reserves, deposit-status, withdraw-btc, faucet
+- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send, register-btc, deposit-btc, reserves, deposit-status, withdraw-btc, withdraw-status, faucet
 - `zkaccount` — fund, withdraw, transfer, and split ZkOS trading accounts
 - `order` — open/close/cancel/query trader and lend orders, unlock-trade, history-trade, history-lend, funding-history, account-summary, tx-hashes
 - `market` — query prices, orderbook, rates, historical data, candles, APY charts
@@ -217,7 +217,7 @@ Output columns: `INDEX`, `BALANCE`, `ON-CHAIN`, `IO-TYPE`, `ACCOUNT`.
 
 ### `wallet backup`
 
-Export a full database backup (all tables) to a JSON file. Includes ZkOS accounts, encrypted wallet data, order wallet config, UTXO details, request IDs, order history, and transfer history. Requires `sqlite` or `postgresql` feature.
+Export a full database backup (all tables) to a JSON file. Includes ZkOS accounts, encrypted wallet data, order wallet config, UTXO details, request IDs, order history, transfer history, BTC deposits, and BTC withdrawals. Requires `sqlite` or `postgresql` feature.
 
 ```bash
 relayer-cli wallet backup --wallet-id my-wallet --password s3cret
@@ -323,7 +323,9 @@ relayer-cli wallet info --wallet-id my-wallet --password s3cret
 
 ### `wallet update-btc-address`
 
-Update the BTC deposit address stored in the wallet. The `btc_address_registered` flag is reset to `false` — the address will be re-registered on the next balance check.
+Update the BTC deposit address stored in the wallet. **Only allowed before on-chain registration.** Once a BTC address is registered on-chain (via `wallet register-btc`), it cannot be changed — each Twilight address can only be linked to a single BTC address.
+
+The address must be a native SegWit address (`bc1q...`). Taproot addresses (`bc1p...`) are not supported.
 
 ```bash
 relayer-cli wallet update-btc-address --btc-address bc1q... --wallet-id my-wallet
@@ -331,7 +333,7 @@ relayer-cli wallet update-btc-address --btc-address bc1q... --wallet-id my-walle
 
 | Flag                   | Description                                |
 | ---------------------- | ------------------------------------------ |
-| `--btc-address <ADDR>` | **Required.** New BTC address              |
+| `--btc-address <ADDR>` | **Required.** New native SegWit BTC address (`bc1q...`) |
 | `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID`) |
 | `--password <PASS>`    | DB encryption password                     |
 
@@ -359,7 +361,11 @@ relayer-cli wallet send --to twilight1abc... --amount 1000 --wallet-id my-wallet
 
 ### `wallet register-btc`
 
-**Mainnet only.** Register the wallet's BTC deposit address on-chain. After registration, the CLI displays available reserve addresses where you must send BTC to complete the deposit.
+**Mainnet only.** Register the wallet's BTC deposit address on-chain. Before registering, the CLI performs several safety checks:
+
+1. **Checks if the BTC address is already registered** — if it is registered to your wallet, you are told to use `wallet deposit-btc` instead. If registered to another wallet, registration is blocked.
+2. **Checks reserve status** — if all reserves are CRITICAL or EXPIRED, registration is blocked with an ETA for the next available reserve.
+3. **Registers on-chain** and saves a deposit record to the database.
 
 ```bash
 # Register for a 50,000 sat deposit
@@ -376,10 +382,53 @@ relayer-cli wallet register-btc --amount 100000 --staking-amount 10000
 | `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID`)             |
 | `--password <PASS>`    | DB encryption password                                 |
 
-**Deposit flow:**
+After successful registration, the CLI shows only ACTIVE/WARNING reserves and guides you to the next step:
+
+```
+wallet deposit-btc --reserve-address <RESERVE_ADDRESS>
+```
+
+### `wallet deposit-btc`
+
+**Mainnet only.** Record a BTC deposit after your address has been registered on-chain. Requires an amount (in sats, mBTC, or BTC). Verifies that your BTC address is registered, validates the chosen reserve, saves the deposit to the database, and tells you where to send BTC.
+
+```bash
+# Record deposit with amount in satoshis, list active reserves
+relayer-cli wallet deposit-btc --amount 50000
+
+# Record deposit with a specific reserve address
+relayer-cli wallet deposit-btc --amount 50000 --reserve-address bc1q...
+
+# Amount in milli-BTC (1 mBTC = 100,000 sats)
+relayer-cli wallet deposit-btc --amount-mbtc 0.5
+
+# Amount in BTC (1 BTC = 100,000,000 sats)
+relayer-cli wallet deposit-btc --amount-btc 0.0005
+```
+
+| Flag                        | Description                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| `--amount <SATS>`           | Amount in satoshis (priority 1)                                                |
+| `--amount-mbtc <MBTC>`     | Amount in milli-BTC (1 mBTC = 100,000 sats, priority 2)                       |
+| `--amount-btc <BTC>`       | Amount in BTC (1 BTC = 100,000,000 sats, priority 3)                          |
+| `--reserve-address <ADDR>`  | Reserve address to send BTC to. If omitted, lists all active reserves          |
+| `--wallet-id <ID>`          | Wallet ID (falls back to `NYKS_WALLET_ID`)                                    |
+| `--password <PASS>`         | DB encryption password                                                         |
+
+At least one amount flag is required. If multiple are provided, priority is: `--amount` > `--amount-mbtc` > `--amount-btc`.
+
+**Pre-checks:**
+- Verifies your BTC address is registered on-chain (errors if not — run `wallet register-btc` first)
+- If a reserve address is provided, validates it exists and is ACTIVE or WARNING (rejects CRITICAL/EXPIRED)
+
+The deposit is saved to the local database with status `pending`. Use `wallet deposit-status` to track confirmation progress.
+
+**Important:** You **must** send BTC from your registered BTC address only. Sending from any other address will not be credited to your account.
+
+**Full deposit flow:**
 1. Run `wallet register-btc --amount <sats>` to register your BTC address on-chain
-2. The CLI shows available reserve addresses — pick an **ACTIVE** one
-3. Send the registered amount of BTC from your registered BTC address to the chosen reserve address
+2. Run `wallet deposit-btc --amount <sats> --reserve-address <addr>` to pick a reserve and record the deposit
+3. Send BTC from your registered address to the chosen reserve address
 4. Wait for Bitcoin confirmation (~10 min) and then validator confirmation (can take 1+ hours)
 5. Check status with `wallet deposit-status`
 
@@ -403,7 +452,12 @@ Reserve addresses rotate every ~144 Bitcoin blocks (~24 hours). The reserve **mu
 
 ### `wallet deposit-status`
 
-**Mainnet only.** Show deposit and withdrawal history for the wallet by querying the Twilight indexer (`TWILIGHT_INDEXER_URL`). Provides richer data than on-chain queries, including BTC transaction hashes, block heights, oracle votes, and confirmation status.
+**Mainnet only.** Show deposit and withdrawal status by combining data from two sources:
+
+1. **Twilight indexer** (`TWILIGHT_INDEXER_URL`) — confirmed on-chain transactions
+2. **Local database** — pending deposits and withdrawals not yet confirmed on-chain
+
+The command also auto-updates local DB records: if a pending deposit appears as confirmed on the indexer, its local status is updated to `confirmed`.
 
 ```bash
 relayer-cli wallet deposit-status
@@ -413,33 +467,54 @@ Output sections:
 
 1. **Account info** — address, transaction count, first/last seen timestamps
 2. **Balances** — current NYKS and SATS balances
-3. **Deposits** — columns: `ID`, `AMOUNT`, `BTC HEIGHT`, `CONFIRMED`, `VOTES`, `DATE`
-4. **Withdrawals** — columns: `ID`, `BTC ADDRESS`, `AMOUNT`, `CONFIRMED`, `DATE`
+3. **Confirmed Deposits** (from indexer) — columns: `ID`, `AMOUNT`, `BTC HEIGHT`, `CONFIRMED`, `VOTES`, `DATE`
+4. **Confirmed Withdrawals** (from indexer) — columns: `ID`, `BTC ADDRESS`, `AMOUNT`, `CONFIRMED`, `DATE`
+5. **Pending Deposits — local** (from DB, not yet on indexer) — columns: `ID`, `BTC ADDRESS`, `AMOUNT`, `RESERVE ADDRESS`, `STATUS`, `DATE`
+6. **Pending Withdrawals — local** (from DB, not yet confirmed) — columns: `ID`, `BTC ADDRESS`, `RESERVE`, `AMOUNT`, `STATUS`, `DATE`
 
 Each section shows totals (confirmed vs pending) and cumulative amounts.
 
-Validator confirmation can take over 1 hour after the BTC transaction confirms on Bitcoin. If a deposit shows `CONFIRMED: NO`, ensure you have:
-1. Sent BTC to an active reserve address
+Validator confirmation can take over 1 hour after the BTC transaction confirms on Bitcoin. If a deposit shows as pending:
+1. Ensure BTC was sent to an active reserve address
 2. The Bitcoin transaction has at least 1 confirmation
-3. Waited for validators to detect and confirm the deposit
+3. Wait for validators to detect and confirm the deposit
+
+For pending withdrawals, run `wallet withdraw-status` to check and update confirmation status.
 
 ### `wallet withdraw-btc`
 
-**Mainnet only.** Submit a BTC withdrawal request. The BTC address must be a SegWit address (`bc1q...` or `bc1p...`).
+**Mainnet only.** Submit a BTC withdrawal request. BTC is always withdrawn to the wallet's registered BTC address (the same `bc1q...` address used for deposits). The BTC address must be registered on-chain before withdrawing.
 
 ```bash
-relayer-cli wallet withdraw-btc --to bc1q... --reserve-id 1 --amount 50000
+relayer-cli wallet withdraw-btc --reserve-id 1 --amount 50000
 ```
 
 | Flag                | Description                                           |
 | ------------------- | ----------------------------------------------------- |
-| `--to <ADDR>`       | **Required.** Bitcoin address to receive BTC          |
 | `--reserve-id <N>`  | **Required.** Reserve pool ID (see `wallet reserves`) |
 | `--amount <SATS>`   | **Required.** Amount in satoshis to withdraw          |
 | `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)            |
 | `--password <PASS>` | DB encryption password                                |
 
-The withdrawal is processed by validators after submission.
+The withdrawal is submitted on-chain and saved to the local database with status `submitted`. Use `wallet withdraw-status` to check for confirmations.
+
+### `wallet withdraw-status`
+
+**Mainnet only.** Check on-chain confirmation status for all pending BTC withdrawal requests. The command loads all withdrawals from the database, queries the chain for each pending one, and updates confirmed entries in the database automatically.
+
+```bash
+relayer-cli wallet withdraw-status
+relayer-cli wallet withdraw-status --wallet-id my-wallet --password s3cret
+```
+
+| Flag                | Description                                |
+| ------------------- | ------------------------------------------ |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`) |
+| `--password <PASS>` | DB encryption password                     |
+
+Output columns: `ID`, `BTC ADDRESS`, `RESERVE`, `AMOUNT`, `STATUS`, `DATE`.
+
+The command displays totals for confirmed vs pending withdrawals and cumulative confirmed amounts. Run this periodically after submitting withdrawals to track their progress.
 
 ### `wallet faucet`
 
