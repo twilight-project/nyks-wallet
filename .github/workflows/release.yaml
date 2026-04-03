@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  release:
+    types: [created, published]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: nyks-wallet-linux-amd64
+            binary: target/x86_64-unknown-linux-gnu/release/relayer-cli
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: nyks-wallet-macos-arm64
+            binary: target/aarch64-apple-darwin/release/relayer-cli
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: nyks-wallet-windows-amd64.exe
+            binary: target/x86_64-pc-windows-msvc/release/relayer-cli.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev libpq-dev pkg-config
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install protobuf openssl@3 libpq postgresql
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
+          echo "PQ_LIB_DIR=$(brew --prefix libpq)/lib" >> $GITHUB_ENV
+
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install protoc -y
+          vcpkg install openssl:x64-windows
+          vcpkg install libpq:x64-windows
+          vcpkg integrate install
+          echo "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "PQ_LIB_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-release-
+
+      - name: Build release binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          RUSTFLAGS="-C symbol-mangling-version=v0" cargo build --release --bin relayer-cli --target ${{ matrix.target }} --verbose
+
+      - name: Build release binary
+        if: runner.os != 'macOS'
+        run: cargo build --release --bin relayer-cli --target ${{ matrix.target }} --verbose
+
+      - name: Prepare binary artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cp ${{ matrix.binary }} ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Prepare binary artifact (Windows)
+        if: runner.os == 'Windows'
+        run: cp ${{ matrix.binary }} ${{ matrix.artifact }}
+
+      - name: Upload binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}
