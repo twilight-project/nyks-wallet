@@ -6,8 +6,18 @@ use std::sync::LazyLock;
 pub static NETWORK_TYPE: LazyLock<String> =
     LazyLock::new(|| std::env::var("NETWORK_TYPE").unwrap_or("mainnet".to_string()));
 
-fn is_mainnet() -> bool {
+pub fn is_mainnet() -> bool {
     *NETWORK_TYPE == "mainnet"
+}
+
+/// Bitcoin network type: "mainnet" or "testnet".
+/// Falls back to `NETWORK_TYPE` if `BTC_NETWORK_TYPE` is not set.
+pub static BTC_NETWORK_TYPE: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("BTC_NETWORK_TYPE").unwrap_or("mainnet".to_string())
+});
+
+pub fn is_btc_mainnet() -> bool {
+    *BTC_NETWORK_TYPE == "mainnet"
 }
 
 pub static FAUCET_BASE_URL: LazyLock<String> = LazyLock::new(|| {

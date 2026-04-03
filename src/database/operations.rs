@@ -1,12 +1,12 @@
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::database::{
     models::{
-        DbBtcDeposit, DbBtcWithdrawal, DbOrderWallet, DbRequestId, DbUtxoDetail, DbZkAccount,
-        EncryptedWallet, NewEncryptedWallet,
+        DbBtcDeposit, DbBtcTransfer, DbBtcWithdrawal, DbOrderWallet, DbRequestId, DbUtxoDetail,
+        DbZkAccount, EncryptedWallet, NewDbBtcTransfer, NewEncryptedWallet,
     },
     schema::{
-        btc_deposits, btc_withdrawals, encrypted_wallets, order_wallets, request_ids,
-        utxo_details, zk_accounts,
+        btc_deposits, btc_transfers, btc_withdrawals, encrypted_wallets, order_wallets,
+        request_ids, utxo_details, zk_accounts,
     },
 };
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -746,6 +746,63 @@ impl DatabaseManager {
             .order(btc_withdrawals::created_at.desc())
             .load::<DbBtcWithdrawal>(&mut conn)
             .map_err(|e| format!("Failed to load BTC withdrawals by status: {}", e))?;
+        Ok(rows)
+    }
+
+    // ---- BTC Transfer operations ----
+
+    pub fn save_btc_transfer(&self, record: NewDbBtcTransfer) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        diesel::insert_into(btc_transfers::table)
+            .values(&record)
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to save BTC transfer: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_btc_transfer_status(
+        &self,
+        transfer_id: i32,
+        status: &str,
+        confirmations: i32,
+    ) -> Result<(), String> {
+        let mut conn = get_conn(self.pool())?;
+        diesel::update(btc_transfers::table.filter(btc_transfers::id.eq(transfer_id)))
+            .set((
+                btc_transfers::status.eq(status),
+                btc_transfers::confirmations.eq(confirmations),
+                btc_transfers::updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to update BTC transfer status: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load_btc_transfers(&self) -> Result<Vec<DbBtcTransfer>, String> {
+        let net = current_network_type();
+        let mut conn = get_conn(self.pool())?;
+        let rows = btc_transfers::table
+            .filter(btc_transfers::wallet_id.eq(&self.wallet_id))
+            .filter(btc_transfers::network_type.eq(&net))
+            .order(btc_transfers::created_at.desc())
+            .load::<DbBtcTransfer>(&mut conn)
+            .map_err(|e| format!("Failed to load BTC transfers: {}", e))?;
+        Ok(rows)
+    }
+
+    pub fn load_btc_transfers_by_status(
+        &self,
+        status: &str,
+    ) -> Result<Vec<DbBtcTransfer>, String> {
+        let net = current_network_type();
+        let mut conn = get_conn(self.pool())?;
+        let rows = btc_transfers::table
+            .filter(btc_transfers::wallet_id.eq(&self.wallet_id))
+            .filter(btc_transfers::network_type.eq(&net))
+            .filter(btc_transfers::status.eq(status))
+            .order(btc_transfers::created_at.desc())
+            .load::<DbBtcTransfer>(&mut conn)
+            .map_err(|e| format!("Failed to load BTC transfers by status: {}", e))?;
         Ok(rows)
     }
 }

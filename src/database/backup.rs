@@ -2,13 +2,13 @@
 use crate::database::{
     connection::get_conn,
     models::{
-        DbBtcDeposit, DbBtcWithdrawal, DbOrderHistory, DbOrderWallet, DbRequestId,
-        DbTransferHistory, DbUtxoDetail, DbZkAccount, EncryptedWallet,
+        DbBtcDeposit, DbBtcTransfer, DbBtcWithdrawal, DbOrderHistory, DbOrderWallet,
+        DbRequestId, DbTransferHistory, DbUtxoDetail, DbZkAccount, EncryptedWallet,
     },
     operations::DatabaseManager,
     schema::{
-        btc_deposits, btc_withdrawals, encrypted_wallets, order_history, order_wallets,
-        request_ids, transfer_history, utxo_details, zk_accounts,
+        btc_deposits, btc_transfers, btc_withdrawals, encrypted_wallets, order_history,
+        order_wallets, request_ids, transfer_history, utxo_details, zk_accounts,
     },
 };
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -49,6 +49,8 @@ pub struct WalletBackup {
     pub btc_deposits: Vec<DbBtcDeposit>,
     #[serde(default)]
     pub btc_withdrawals: Vec<DbBtcWithdrawal>,
+    #[serde(default)]
+    pub btc_transfers: Vec<DbBtcTransfer>,
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -117,6 +119,13 @@ impl DatabaseManager {
             .load(&mut conn)
             .map_err(|e| format!("Failed to export btc_withdrawals: {}", e))?;
 
+        let btc_xfers: Vec<DbBtcTransfer> = btc_transfers::table
+            .filter(btc_transfers::wallet_id.eq(self.get_wallet_id()))
+            .filter(btc_transfers::network_type.eq(&net))
+            .order(btc_transfers::created_at.desc())
+            .load(&mut conn)
+            .map_err(|e| format!("Failed to export btc_transfers: {}", e))?;
+
         let backup = WalletBackup {
             format_version: BACKUP_FORMAT_VERSION,
             wallet_id: self.get_wallet_id().to_string(),
@@ -131,6 +140,7 @@ impl DatabaseManager {
             transfer_history: xfer_hist,
             btc_deposits: btc_deps,
             btc_withdrawals: btc_wds,
+            btc_transfers: btc_xfers,
         };
 
         debug!(
@@ -177,6 +187,14 @@ impl DatabaseManager {
         let wallet_id = self.get_wallet_id();
 
         // Delete existing data for this wallet on this network (in dependency order)
+        diesel::delete(
+            btc_transfers::table
+                .filter(btc_transfers::wallet_id.eq(wallet_id))
+                .filter(btc_transfers::network_type.eq(&net)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to clear btc_transfers: {}", e))?;
+
         diesel::delete(
             btc_withdrawals::table
                 .filter(btc_withdrawals::wallet_id.eq(wallet_id))
@@ -336,6 +354,16 @@ impl DatabaseManager {
                 .values(&wd)
                 .execute(&mut conn)
                 .map_err(|e| format!("Failed to import btc_withdrawal: {}", e))?;
+        }
+
+        for mut xfer in backup.btc_transfers.clone() {
+            xfer.id = None;
+            xfer.wallet_id = wallet_id.to_string();
+            xfer.network_type = net.clone();
+            diesel::insert_into(btc_transfers::table)
+                .values(&xfer)
+                .execute(&mut conn)
+                .map_err(|e| format!("Failed to import btc_transfer: {}", e))?;
         }
 
         debug!(

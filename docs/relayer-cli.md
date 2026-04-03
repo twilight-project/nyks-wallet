@@ -29,6 +29,7 @@ If a variable is not set, `src/config.rs` applies code defaults (many are derive
 | `RUST_BACKTRACE` | Enable Rust backtraces for debugging (`1` or `full`)                                      | —         |
 | `CHAIN_ID`       | Blockchain network identifier                                                             | `nyks`    |
 | `NETWORK_TYPE`   | Network type — controls BIP-44 coin type (`testnet` uses coin type 1, `mainnet` uses 118) | `mainnet` |
+| `BTC_NETWORK_TYPE` | Bitcoin network for BTC key derivation, balance queries, and transfers. Falls back to `NETWORK_TYPE` if not set | `mainnet` |
 
 ### Chain Endpoints
 
@@ -89,8 +90,9 @@ relayer-cli [--json] <COMMAND>
 
 ### Command Groups
 
-- `wallet` — create, import, load, list, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send, register-btc, deposit-btc, reserves, deposit-status, withdraw-btc, withdraw-status, faucet
-- `zkaccount` — fund, withdraw, transfer, and split ZkOS trading accounts
+- `wallet` — create, import, load, list, balance, accounts, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send, register-btc, deposit-btc, reserves, deposit-status, withdraw-btc, withdraw-status, faucet
+- `bitcoin-wallet` — balance, transfer, receive, history (on-chain BTC operations)
+- `zkaccount` — fund, withdraw, transfer, split
 - `order` — open/close/cancel/query trader and lend orders, unlock-trade, history-trade, history-lend, funding-history, account-summary, tx-hashes
 - `market` — query prices, orderbook, rates, historical data, candles, APY charts
 - `history` — view order and transfer history (requires DB)
@@ -585,12 +587,12 @@ relayer-cli zkaccount withdraw --account-index 0
 Transfer funds between ZkOS trading accounts (creates a new destination account).
 
 ```bash
-relayer-cli zkaccount transfer --from 0
+relayer-cli zkaccount transfer --account-index 0
 ```
 
-| Flag         | Description                        |
-| ------------ | ---------------------------------- |
-| `--from <N>` | **Required.** Source account index |
+| Flag                  | Description                        |
+| --------------------- | ---------------------------------- |
+| `--account-index <N>` | **Required.** Source account index |
 
 ### `zkaccount split`
 
@@ -600,18 +602,18 @@ Balances can be provided in three units — **exactly one** must be used. If mul
 
 ```bash
 # In satoshis
-relayer-cli zkaccount split --from 0 --balances "1000,2000,3000"
+relayer-cli zkaccount split --account-index 0 --balances "1000,2000,3000"
 
 # In milli-BTC (1 mBTC = 100,000 sats)
-relayer-cli zkaccount split --from 0 --balances-mbtc "0.01,0.02,0.03"
+relayer-cli zkaccount split --account-index 0 --balances-mbtc "0.01,0.02,0.03"
 
 # In BTC (1 BTC = 100,000,000 sats)
-relayer-cli zkaccount split --from 0 --balances-btc "0.00001,0.00002,0.00003"
+relayer-cli zkaccount split --account-index 0 --balances-btc "0.00001,0.00002,0.00003"
 ```
 
 | Flag                     | Description                                                                    |
 | ------------------------ | ------------------------------------------------------------------------------ |
-| `--from <N>`             | **Required.** Source account index                                             |
+| `--account-index <N>`    | **Required.** Source account index                                             |
 | `--balances <LIST>`      | Comma-separated list of balances in **satoshis**. Priority 1 if multiple given |
 | `--balances-mbtc <LIST>` | Comma-separated list of balances in **milli-BTC** (×100,000). Priority 2       |
 | `--balances-btc <LIST>`  | Comma-separated list of balances in **BTC** (×100,000,000). Priority 3         |
@@ -1105,6 +1107,137 @@ relayer-cli --json market apy-chart --range 7d
 | `--lookback <L>` | Lookback period for rolling average                |
 
 Output columns: `TIME`, `APY %`.
+
+---
+
+## Bitcoin Wallet Commands
+
+On-chain Bitcoin operations: check balance, transfer BTC, and view receive address. These commands query the Bitcoin network directly via [Blockstream Esplora](https://blockstream.info) (with [mempool.space](https://mempool.space) as fallback).
+
+Network selection follows the `BTC_NETWORK_TYPE` env var (falls back to `NETWORK_TYPE`, default: `mainnet`).
+
+### `bitcoin-wallet balance`
+
+Check the actual on-chain Bitcoin balance for a BTC address. Displays confirmed, unconfirmed (mempool), and total balances in sats, mBTC, and BTC.
+
+When `--btc-address` is provided, no wallet is loaded — you can check any arbitrary address without credentials.
+
+```bash
+# Use wallet's own BTC address (default: sats)
+relayer-cli bitcoin-wallet balance
+relayer-cli bitcoin-wallet balance --wallet-id my-wallet --password s3cret
+
+# Display in BTC or mBTC
+relayer-cli bitcoin-wallet balance --btc
+relayer-cli bitcoin-wallet balance --mbtc
+
+# Check any arbitrary BTC address (no wallet required)
+relayer-cli bitcoin-wallet balance --btc-address bc1q...
+
+# Testnet
+BTC_NETWORK_TYPE=testnet relayer-cli bitcoin-wallet balance --btc-address tb1q...
+```
+
+| Flag                   | Description                                                        |
+| ---------------------- | ------------------------------------------------------------------ |
+| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID` env var)                 |
+| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)    |
+| `--btc-address <ADDR>` | Query an arbitrary BTC address instead of the wallet's own address |
+| `--btc`                | Display balance in BTC                                             |
+| `--mbtc`               | Display balance in mBTC                                            |
+
+Default unit is sats. If both `--btc` and `--mbtc` are passed, `--btc` takes priority.
+
+### `bitcoin-wallet transfer`
+
+Transfer BTC to a native SegWit address. Uses the BTC wallet stored inside the Twilight wallet (created when the wallet was generated from a mnemonic). If the wallet was created from a private key instead of a mnemonic, the BTC wallet is not available and the command returns an error.
+
+BDK handles coin selection and fee estimation. If the balance (including fees) is insufficient, a clear error is shown with available vs requested amounts.
+
+Provide exactly one of `--amount` (sats), `--amount-mbtc`, or `--amount-btc`. If multiple are given, priority is: `--amount` > `--amount-mbtc` > `--amount-btc`.
+
+```bash
+# In satoshis
+relayer-cli bitcoin-wallet transfer --to bc1q... --amount 50000
+
+# In milli-BTC (1 mBTC = 100,000 sats)
+relayer-cli bitcoin-wallet transfer --to bc1q... --amount-mbtc 0.5
+
+# In BTC (1 BTC = 100,000,000 sats)
+relayer-cli bitcoin-wallet transfer --to bc1q... --amount-btc 0.0005
+
+# Custom fee rate (higher = faster confirmation)
+relayer-cli bitcoin-wallet transfer --to bc1q... --amount 50000 --fee-rate 5
+
+relayer-cli bitcoin-wallet transfer --to bc1q... --amount 50000 --wallet-id my-wallet --password s3cret
+
+# Testnet
+BTC_NETWORK_TYPE=testnet relayer-cli bitcoin-wallet transfer --to tb1q... --amount 10000
+```
+
+| Flag                   | Description                                                        |
+| ---------------------- | ------------------------------------------------------------------ |
+| `--to <ADDR>`          | **Required.** Destination BTC address (bc1q.../tb1q...)            |
+| `--amount <SATS>`      | Amount in satoshis (priority 1)                                    |
+| `--amount-mbtc <MBTC>` | Amount in milli-BTC (1 mBTC = 100,000 sats, priority 2)           |
+| `--amount-btc <BTC>`   | Amount in BTC (1 BTC = 100,000,000 sats, priority 3)              |
+| `--fee-rate <SAT/VB>`  | Fee rate in sat/vB — higher = faster confirmation (default: auto)  |
+| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID` env var)                 |
+| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)    |
+
+At least one amount flag is required. All values are converted to satoshis before sending.
+
+On success, displays the transaction ID, fee paid, and a block explorer link.
+
+### `bitcoin-wallet receive`
+
+Show the wallet's BTC receive address with network and address type details.
+
+```bash
+relayer-cli bitcoin-wallet receive
+relayer-cli bitcoin-wallet receive --wallet-id my-wallet --password s3cret
+```
+
+| Flag                | Description                                        |
+| ------------------- | -------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID` env var) |
+| `--password <PASS>` | DB encryption password                             |
+
+Output includes:
+- BTC address
+- Network (mainnet/testnet)
+- Address type (Native SegWit P2WPKH / Taproot P2TR)
+- On-chain registration status
+- BTC wallet availability and derivation path
+
+### `bitcoin-wallet history`
+
+Show BTC transfer history with confirmation status. Requires `sqlite` or `postgresql` feature.
+
+Transfers are saved automatically when using `bitcoin-wallet transfer`. Each record tracks the from/to addresses, amount, fee, transaction ID, confirmation count, and status.
+
+```bash
+relayer-cli bitcoin-wallet history
+relayer-cli bitcoin-wallet history --wallet-id my-wallet --password s3cret
+
+# Filter by status
+relayer-cli bitcoin-wallet history --status broadcast
+relayer-cli bitcoin-wallet history --status confirmed
+
+# Limit results
+relayer-cli bitcoin-wallet history --limit 10
+```
+
+| Flag                | Description                                          |
+| ------------------- | ---------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID` env var)   |
+| `--password <PASS>` | DB encryption password                               |
+| `--status <STATUS>` | Filter by status: `pending`, `broadcast`, `confirmed` |
+| `--limit <N>`       | Max results (default: `50`)                          |
+
+Output columns: `ID`, `STATUS`, `FROM`, `TO`, `AMOUNT`, `FEE`, `CONFIRMS`, `NET`, `DATE`.
+
+Shows totals for confirmed vs pending transfers and cumulative amounts sent and fees paid.
 
 ---
 

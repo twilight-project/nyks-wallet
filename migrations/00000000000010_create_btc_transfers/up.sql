@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS btc_transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet_id TEXT NOT NULL,
+    network_type TEXT NOT NULL DEFAULT 'mainnet',
+    from_address TEXT NOT NULL,
+    to_address TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    fee INTEGER NOT NULL DEFAULT 0,
+    tx_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    confirmations INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

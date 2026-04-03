@@ -74,36 +74,7 @@ pub struct Balance {
     pub sats: SATS,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BtcReserve {
-    pub reserve_id: u64,
-    pub reserve_address: String,
-    pub judge_address: String,
-    pub btc_relay_capacity_value: u64,
-    pub total_value: u64,
-    pub private_pool_value: u64,
-    pub public_value: u64,
-    pub fee_pool: u64,
-    pub unlock_height: u64,
-    pub round_id: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BtcDepositInfo {
-    pub btc_deposit_address: String,
-    pub twilight_address: String,
-    pub is_confirmed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BtcDepositDetail {
-    pub btc_deposit_address: String,
-    pub btc_satoshi_amount: u64,
-    pub twilight_staking_amount: u64,
-    pub twilight_address: String,
-    pub is_confirmed: bool,
-    pub creation_block_height: i64,
-}
+pub use crate::wallet::btc_wallet::types::*;
 
 /// Deposit record from the Twilight indexer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,18 +105,6 @@ pub struct IndexerWithdrawal {
     pub updated_at: String,
 }
 
-/// On-chain BTC withdrawal request status from LCD.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BtcWithdrawStatus {
-    pub withdraw_identifier: u64,
-    pub withdraw_address: String,
-    pub withdraw_reserve_id: String,
-    pub withdraw_amount: String,
-    pub twilight_address: String,
-    pub is_confirmed: bool,
-    pub creation_twilight_block_height: String,
-}
-
 /// Full account info from the Twilight indexer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexerAccountInfo {
@@ -165,18 +124,7 @@ pub struct IndexerBalance {
     pub amount: String,
 }
 
-/// Fetch the current Bitcoin block height from the Twilight indexer.
-pub async fn fetch_btc_block_height() -> anyhow::Result<u64> {
-    let client = Client::new();
-    let url = format!("{}/api/bitcoin/info", crate::config::TWILIGHT_INDEXER_URL.as_str());
-    let response = client.get(&url).send().await?;
-    let json: Value = response.json().await?;
-    let height = json
-        .get("blockHeight")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| anyhow!("Missing blockHeight in indexer response"))?;
-    Ok(height)
-}
+pub use crate::wallet::btc_wallet::balance::*;
 
 /// Fetch on-chain balance for the given address via LCD endpoint.
 pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<Balance> {
@@ -217,6 +165,9 @@ pub struct Wallet {
     pub sequence: u64,
     pub btc_address: String,
     pub btc_address_registered: bool,
+    /// BTC wallet key material (populated when created from mnemonic)
+    #[zeroize(skip)]
+    pub btc_wallet: Option<crate::wallet::btc_wallet::BtcWallet>,
     #[zeroize(skip)]
     pub account_info: Option<Account>,
     #[zeroize(skip)]
@@ -244,6 +195,7 @@ impl std::fmt::Debug for Wallet {
             .field("sequence", &self.sequence)
             .field("btc_address", &self.btc_address)
             .field("btc_address_registered", &self.btc_address_registered)
+            .field("btc_wallet", &self.btc_wallet)
             .field("account_info", &self.account_info)
             .field("chain_config", &self.chain_config)
             .finish()
@@ -260,9 +212,10 @@ impl Wallet {
         let chain_config = chain_config.unwrap_or_default();
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
         let keys = derive_keys(&mnemonic)?;
-        let (_wif, btc_address) =
-            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
-        print_secret_to_tty(&mut mnemonic.to_string())?;
+        let mnemonic_str = mnemonic.to_string();
+        let btc_wallet = crate::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic_str)?;
+        let btc_address = btc_wallet.address.clone();
+        print_secret_to_tty(&mut mnemonic_str.clone())?;
         Ok(Wallet {
             private_key: keys.private_key,
             public_key: keys.public_key,
@@ -272,6 +225,7 @@ impl Wallet {
             sequence: 0,
             btc_address,
             btc_address_registered: false,
+            btc_wallet: Some(btc_wallet),
             account_info: None,
             chain_config,
         })
@@ -280,8 +234,8 @@ impl Wallet {
     pub async fn create_new_with_random_btc_address() -> anyhow::Result<Wallet> {
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
         let keys = derive_keys(&mnemonic)?;
-        let (_wif, btc_address) =
-            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
+        let btc_wallet = crate::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic.to_string())?;
+        let btc_address = btc_wallet.address.clone();
 
         Ok(Wallet {
             private_key: keys.private_key,
@@ -292,6 +246,7 @@ impl Wallet {
             sequence: 0,
             btc_address,
             btc_address_registered: false,
+            btc_wallet: Some(btc_wallet),
             account_info: None,
             chain_config: WalletEndPointConfig::from_env(),
         })
@@ -304,8 +259,9 @@ impl Wallet {
         let chain_config = chain_config.unwrap_or_default();
         let mnemonic = Mnemonic::parse_in(B39Lang::English, mnemonic)?;
         let keys = derive_keys(&mnemonic)?;
-        let (_wif, btc_address) =
-            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
+        let mnemonic_str = mnemonic.to_string();
+        let btc_wallet = crate::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic_str)?;
+        let btc_address = btc_wallet.address.clone();
         Ok(Wallet {
             private_key: keys.private_key,
             public_key: keys.public_key,
@@ -315,6 +271,7 @@ impl Wallet {
             sequence: 0,
             btc_address,
             btc_address_registered: false,
+            btc_wallet: Some(btc_wallet),
             account_info: None,
             chain_config,
         })
@@ -342,6 +299,7 @@ impl Wallet {
             sequence: 0,
             btc_address: btc_address.to_string(),
             btc_address_registered: false,
+            btc_wallet: None,
             account_info: None,
             chain_config,
         })
@@ -377,6 +335,8 @@ impl Wallet {
             btc_address_registered: account_info["btc_address_registered"]
                 .as_bool()
                 .unwrap_or_default(),
+            btc_wallet: account_info.get("btc_wallet")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             account_info: None,
             chain_config: WalletEndPointConfig::new(
                 account_info["lcd_endpoint"]
@@ -435,6 +395,7 @@ impl Wallet {
             "twilightaddress": self.twilightaddress,
             "btc_address": self.btc_address,
             "btc_address_registered": self.btc_address_registered,
+            "btc_wallet": self.btc_wallet,
             "balance_nyks": self.balance_nyks,
             "balance_sats": self.balance_sats,
             "sequence": self.sequence,

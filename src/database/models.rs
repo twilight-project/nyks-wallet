@@ -512,6 +512,41 @@ pub struct NewDbBtcWithdrawal {
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = btc_transfers)]
+pub struct DbBtcTransfer {
+    pub id: Option<i32>,
+    pub wallet_id: String,
+    pub network_type: String,
+    pub from_address: String,
+    pub to_address: String,
+    pub amount: i64,
+    pub fee: i64,
+    pub tx_id: Option<String>,
+    pub status: String,
+    pub confirmations: i32,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = btc_transfers)]
+pub struct NewDbBtcTransfer {
+    pub wallet_id: String,
+    pub network_type: String,
+    pub from_address: String,
+    pub to_address: String,
+    pub amount: i64,
+    pub fee: i64,
+    pub tx_id: Option<String>,
+    pub status: String,
+    pub confirmations: i32,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
 impl DbRequestId {
     pub fn new(wallet_id: String, account_index: u64, request_id: String) -> NewDbRequestId {
         let now = chrono::Utc::now().naive_utc();

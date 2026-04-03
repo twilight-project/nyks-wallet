@@ -149,6 +149,24 @@ diesel::table! {
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+diesel::table! {
+    btc_transfers (id) {
+        id -> Nullable<Integer>,
+        wallet_id -> Text,
+        network_type -> Text,
+        from_address -> Text,
+        to_address -> Text,
+        amount -> BigInt,
+        fee -> BigInt,
+        tx_id -> Nullable<Text>,
+        status -> Text,
+        confirmations -> Integer,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
 diesel::allow_tables_to_appear_in_same_query!(
     zk_accounts,
     encrypted_wallets,
@@ -159,4 +177,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     transfer_history,
     btc_deposits,
     btc_withdrawals,
+    btc_transfers,
 );
