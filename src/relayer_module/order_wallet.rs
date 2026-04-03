@@ -843,9 +843,6 @@ impl OrderWallet {
         if leverage == 0 {
             return Err("Leverage must be greater than 0".to_string());
         }
-        if entry_price == 0 {
-            return Err("Entry price must be greater than 0".to_string());
-        }
 
         // Pre-validate against the risk engine before submitting
         let initial_margin = self.zk_accounts.get_account(&index)?.balance;

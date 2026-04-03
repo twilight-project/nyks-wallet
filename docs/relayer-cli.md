@@ -95,6 +95,7 @@ relayer-cli [--json] <COMMAND>
 - `market` — query prices, orderbook, rates, historical data, candles, APY charts
 - `history` — view order and transfer history (requires DB)
 - `portfolio` — portfolio summary, balances (with unit conversion), liquidation risks
+- `verify-test` — run verification tests against testnet (testnet only)
 - `help` — show help for the CLI or a specific command group
 
 ### Built-in Help
@@ -260,13 +261,15 @@ Output shows the next sequence number, cached account number, and count of relea
 
 ### `wallet unlock`
 
-Prompt for wallet ID and password, then cache both for the current terminal session. Subsequent commands in the same shell will use the cached values automatically, so you don't need to pass `--wallet-id` or `--password` each time.
+Cache wallet ID and password for the current terminal session. Subsequent commands in the same shell will use the cached values automatically, so you don't need to pass `--wallet-id` or `--password` each time.
 
-Before prompting for the wallet ID, the CLI lists all available wallets in the database (similar to `wallet list`). You can also pass `--wallet-id` on the command line to skip the interactive prompt.
+Both wallet ID and password can be provided via flags, environment variables, or interactive prompt. Before prompting for the wallet ID, the CLI lists all available wallets in the database (similar to `wallet list`).
 
 The cache is scoped to the parent shell process — closing the terminal invalidates it. Only one session can be active at a time; use `--force` to overwrite an existing cached session, or run `wallet lock` first.
 
-Resolution priority for both wallet ID and password: `--flag` > session cache > environment variable.
+**Wallet ID resolution:** `--wallet-id` flag → `NYKS_WALLET_ID` env var → interactive prompt.
+
+**Password resolution:** `--password` flag → `NYKS_WALLET_PASSPHRASE` env var → interactive prompt.
 
 ```bash
 relayer-cli wallet unlock
@@ -276,14 +279,18 @@ relayer-cli wallet balance   # no --wallet-id or --password needed
 # Pass wallet ID directly (skip interactive prompt)
 relayer-cli wallet unlock --wallet-id my-wallet
 
+# Pass both wallet ID and password (fully non-interactive)
+relayer-cli wallet unlock --wallet-id my-wallet --password s3cret
+
 # Overwrite an existing session
 relayer-cli wallet unlock --force
 ```
 
-| Flag          | Description                                           |
-| ------------- | ----------------------------------------------------- |
-| `--wallet-id` | Wallet ID to cache (prompts interactively if omitted) |
-| `--force`     | Overwrite an existing session without error           |
+| Flag               | Description                                            |
+| ------------------ | ------------------------------------------------------ |
+| `--wallet-id <ID>` | Wallet ID to cache (prompts interactively if omitted)  |
+| `--password <PASS>`| Wallet password to cache (prompts interactively if omitted) |
+| `--force`          | Overwrite an existing session without error            |
 
 ### `wallet lock`
 
@@ -1098,6 +1105,60 @@ relayer-cli --json market apy-chart --range 7d
 | `--lookback <L>` | Lookback period for rolling average                |
 
 Output columns: `TIME`, `APY %`.
+
+---
+
+## Verify-Test Commands
+
+**Testnet only.** Run verification tests against the testnet to validate that CLI commands are working correctly. Blocked on mainnet (`NETWORK_TYPE` must be `testnet`).
+
+Each subcommand creates temporary test wallets, exercises the relevant commands, and reports PASS/FAIL/SKIP results with a final summary.
+
+To run on testnet in a single command (without modifying `.env`):
+
+```bash
+NETWORK_TYPE=testnet relayer-cli verify-test all
+```
+
+### `verify-test wallet`
+
+Verify all wallet subcommands: create, info, faucet, balance, export, accounts, reserves, send (to self), backup, and sync-nonce.
+
+```bash
+relayer-cli verify-test wallet
+```
+
+### `verify-test market`
+
+Verify market data queries: price, orderbook, funding-rate, lend-pool-info, and server-time.
+
+```bash
+relayer-cli verify-test market
+```
+
+### `verify-test zkaccount`
+
+Verify ZkOS account commands: fund, query, and withdraw. Requires a funded wallet (uses faucet automatically).
+
+```bash
+relayer-cli verify-test zkaccount
+```
+
+### `verify-test order`
+
+Verify order commands: open-trade (MARKET LONG), query-trade, and close-trade. Requires a funded ZkOS account (set up automatically).
+
+```bash
+relayer-cli verify-test order
+```
+
+### `verify-test all`
+
+Run all verification tests in sequence: wallet → market → zkaccount → order.
+
+```bash
+relayer-cli verify-test all
+```
 
 ---
 
