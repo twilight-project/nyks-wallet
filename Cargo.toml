@@ -11,7 +11,7 @@ required-features = ["order-wallet"]
 
 [[bin]]
 name = "relayer-cli"
-path = "src/bin/relayer_cli.rs"
+path = "src/bin/relayer_cli/main.rs"
 required-features = ["order-wallet"]
 
 [lib]
