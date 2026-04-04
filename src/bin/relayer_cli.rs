@@ -10,7 +10,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 /// Twilight Relayer CLI — manage wallets and orders from the command line.
 #[derive(Parser)]
-#[command(name = "relayer-cli", version, about, long_about = None)]
+#[command(name = "relayer-cli", version, about, long_about = None, disable_help_subcommand = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -21,6 +21,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[command(name = "commands", version, about, long_about = None, disable_help_subcommand = true)]
 enum Commands {
     /// Wallet management commands
     #[command(subcommand)]
@@ -1356,20 +1357,22 @@ USAGE:
     relayer-cli [--json] <COMMAND>
 
 COMMANDS:
-    wallet      Wallet management (create, import, load, list, balance, btc-balance, accounts,
-                export, backup, restore, unlock/lock, change-password, info,
-                update-btc-address, sync-nonce, register-btc, reserves,
-                deposit-status, withdraw-btc)
-    zkaccount   ZkOS account operations (fund, withdraw, transfer, split)
-    order       Trading and lending orders (open/close/cancel/query trade & lend,
-                unlock-trade, history-trade, history-lend, funding-history,
-                account-summary, tx-hashes)
-    market      Market data (price, orderbook, funding-rate, fee-rate, recent-trades,
-                position-size, lend-pool, pool-share-value, last-day-apy,
-                open-interest, market-stats, server-time, history-price,
-                candles, history-funding, history-fees, apy-chart)
-    history     Local DB history (orders, transfers)
-    portfolio   Portfolio tracking (summary, balances, risks)
+    wallet          Wallet management (create, import, load, list, balance, accounts,
+                    export, backup, restore, unlock/lock, change-password, info,
+                    update-btc-address, sync-nonce, send, register-btc, deposit-btc,
+                    reserves, deposit-status, withdraw-btc, withdraw-status, faucet)
+    bitcoin-wallet  On-chain BTC operations (balance, transfer, receive, history)
+    zkaccount       ZkOS account operations (fund, withdraw, transfer, split)
+    order           Trading and lending orders (open/close/cancel/query trade & lend,
+                    unlock-trade, history-trade, history-lend, funding-history,
+                    account-summary, tx-hashes)
+    market          Market data (price, orderbook, funding-rate, fee-rate, recent-trades,
+                    position-size, lend-pool, pool-share-value, last-day-apy,
+                    open-interest, market-stats, server-time, history-price,
+                    candles, history-funding, history-fees, apy-chart)
+    history         Local DB history (orders, transfers)
+    portfolio       Portfolio tracking (summary, balances, risks)
+    verify-test     Run verification tests against testnet (testnet only)
 
 GLOBAL FLAGS:
     --json      Output results as JSON (for scripting)
@@ -1380,6 +1383,7 @@ RESOLUTION PRIORITY (wallet-id & password):
 ENVIRONMENT:
     NYKS_WALLET_ID          Default wallet ID
     NYKS_WALLET_PASSPHRASE  Default password
+    BTC_NETWORK_TYPE        Bitcoin network (mainnet/testnet, falls back to mainnet)
 
 Run `relayer-cli help <COMMAND>` for details on a specific command group."#
     );
@@ -1408,10 +1412,13 @@ SUBCOMMANDS:
     change-password     Change the DB encryption password
     update-btc-address  Update the BTC deposit address
     sync-nonce          Sync nonce/sequence from chain state
+    send                Send tokens (nyks or sats) to a Twilight address
     register-btc        Register BTC deposit address on-chain (mainnet only)
+    deposit-btc         Record a BTC deposit after registration (mainnet only)
     reserves            Show available BTC reserve addresses
-    deposit-status      Check BTC deposit registration & confirmation status (mainnet only)
+    deposit-status      Check BTC deposit & confirmation status (mainnet only)
     withdraw-btc        Submit a BTC withdrawal request (mainnet only)
+    withdraw-status     Check pending BTC withdrawal status (mainnet only)
     faucet              Get test tokens from faucet (testnet only)
 
 EXAMPLES:
@@ -1419,10 +1426,13 @@ EXAMPLES:
     relayer-cli wallet unlock                         # interactive prompt
     relayer-cli wallet balance                        # uses session cache
     relayer-cli wallet accounts --on-chain-only
+    relayer-cli wallet send --to twilight1... --amount 1000
     relayer-cli wallet register-btc --amount 50000    # mainnet: register for 50k sats deposit
+    relayer-cli wallet deposit-btc --amount 50000 --reserve-address bc1q...
     relayer-cli wallet reserves                       # see where to send BTC
     relayer-cli wallet deposit-status                 # check if confirmed by validators
-    relayer-cli wallet withdraw-btc --to bc1q... --reserve-id 1 --amount 50000
+    relayer-cli wallet withdraw-btc --reserve-id 1 --amount 50000
+    relayer-cli wallet withdraw-status                # check pending withdrawals
     relayer-cli wallet faucet                         # testnet only: get test tokens"#
     );
 }
@@ -1561,14 +1571,72 @@ EXAMPLES:
     );
 }
 
+fn print_bitcoin_wallet_help() {
+    println!(
+        r#"On-chain Bitcoin operations — check balance, transfer BTC, view receive address, and transfer history.
+
+USAGE:
+    relayer-cli bitcoin-wallet <SUBCOMMAND>
+
+SUBCOMMANDS:
+    balance     Check on-chain BTC balance (confirmed + unconfirmed)
+    transfer    Send BTC to a native SegWit address
+    receive     Show BTC receive address and wallet details
+    history     Show BTC transfer history with confirmation status
+
+AMOUNTS (transfer):
+    --amount <sats>           Satoshis (priority 1)
+    --amount-mbtc <mbtc>      Milli-BTC — 1 mBTC = 100,000 sats (priority 2)
+    --amount-btc <btc>        BTC — 1 BTC = 100,000,000 sats (priority 3)
+
+DISPLAY UNIT (balance):
+    --btc                     Show balance in BTC
+    --mbtc                    Show balance in mBTC
+    (default: sats)
+
+EXAMPLES:
+    relayer-cli bitcoin-wallet balance
+    relayer-cli bitcoin-wallet balance --btc
+    relayer-cli bitcoin-wallet balance --btc-address bc1q...
+    relayer-cli bitcoin-wallet transfer --to bc1q... --amount 50000
+    relayer-cli bitcoin-wallet transfer --to bc1q... --amount-mbtc 0.5 --fee-rate 5
+    relayer-cli bitcoin-wallet receive
+    relayer-cli bitcoin-wallet history
+    relayer-cli bitcoin-wallet history --status confirmed"#
+    );
+}
+
+fn print_verify_test_help() {
+    println!(
+        r#"Run verification tests against testnet (testnet only).
+
+USAGE:
+    relayer-cli verify-test <SUBCOMMAND>
+
+SUBCOMMANDS:
+    wallet      Verify wallet commands (create, balance, faucet, send, etc.)
+    market      Verify market data queries
+    zkaccount   Verify ZkOS account commands (requires funded wallet)
+    order       Verify order commands (requires funded ZkOS account)
+    all         Run all verification tests in sequence
+
+EXAMPLES:
+    NETWORK_TYPE=testnet relayer-cli verify-test all
+    NETWORK_TYPE=testnet relayer-cli verify-test wallet
+    NETWORK_TYPE=testnet relayer-cli verify-test market"#
+    );
+}
+
 fn print_subcommand_help(group: &str) {
-    match group.to_lowercase().as_str() {
+    match group.to_lowercase().replace('-', "").as_str() {
         "wallet" => print_wallet_help(),
+        "bitcoinwallet" => print_bitcoin_wallet_help(),
         "zkaccount" => print_zkaccount_help(),
         "order" => print_order_help(),
         "market" => print_market_help(),
         "history" => print_history_help(),
         "portfolio" => print_portfolio_help(),
+        "verifytest" => print_verify_test_help(),
         _ => {
             eprintln!("Unknown command group: '{}'\n", group);
             print_global_help();
