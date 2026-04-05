@@ -247,6 +247,100 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
         }
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        BitcoinWalletCmd::UpdateBitcoinWallet {
+            wallet_id,
+            password,
+            mnemonic,
+        } => {
+            let mnemonic = match mnemonic {
+                Some(m) => m,
+                None => rpassword::prompt_password("Enter mnemonic phrase: ")
+                    .map_err(|e| format!("Failed to read mnemonic: {}", e))?,
+            };
+
+            let mnemonic = mnemonic.trim().to_string();
+            if mnemonic.is_empty() {
+                return Err("Mnemonic cannot be empty".to_string());
+            }
+
+            // Derive new BTC wallet from the mnemonic
+            let btc_wallet =
+                nyks_wallet::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic)
+                    .map_err(|e| format!("Invalid mnemonic: {}", e))?;
+
+            let new_address = btc_wallet.address.clone();
+
+            // Load the existing wallet from DB
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+
+            let old_address = ow.wallet.btc_address.clone();
+            let twilight_address = ow.wallet.twilightaddress.clone();
+
+            // Check if current BTC address is already registered on-chain for this twilight address
+            if ow.wallet.btc_address_registered {
+                return Err(format!(
+                    "Cannot update BTC wallet: the current BTC address ({}) is already \
+                     registered and linked to your twilight address ({}).\n\
+                     A twilight address can only be linked to one BTC address.\n\
+                     You can either:\n  \
+                     - Send the balance to the linked BTC address\n  \
+                     - Import a new wallet using `wallet import` with the desired mnemonic",
+                    old_address, twilight_address
+                ));
+            }
+
+            // Check if the new BTC address is already linked to another twilight address
+            if let Some(info) = ow
+                .wallet
+                .fetch_registered_btc_by_address(&new_address)
+                .await
+                .map_err(|e| format!("Failed to check BTC address registration: {}", e))?
+            {
+                if info.twilight_address != twilight_address {
+                    return Err(format!(
+                        "Cannot update BTC wallet: the new BTC address ({}) is already \
+                         linked to a different twilight address ({}).\n\
+                         A BTC address can only be linked to one twilight address.",
+                        new_address, info.twilight_address
+                    ));
+                }
+            }
+
+            // Update wallet fields
+            ow.wallet.btc_address = new_address.clone();
+            ow.wallet.btc_wallet = Some(btc_wallet);
+
+            // Persist to DB
+            let db = ow.get_db_manager().ok_or(
+                "Database not available. Rebuild with --features sqlite".to_string(),
+            )?;
+            let wallet_password = ow.get_wallet_password().ok_or(
+                "No wallet password available for re-encryption".to_string(),
+            )?;
+            db.save_encrypted_wallet(&ow.wallet, wallet_password)
+                .map_err(|e| format!("Failed to save updated wallet: {}", e))?;
+
+            let network = if nyks_wallet::config::is_btc_mainnet() {
+                "mainnet"
+            } else {
+                "testnet"
+            };
+
+            println!("Bitcoin wallet updated successfully!");
+            println!("  Network:     {}", network);
+            println!("  Old address: {}", old_address);
+            println!("  New address: {}", new_address);
+
+            Ok(())
+        }
+
+        #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+        BitcoinWalletCmd::UpdateBitcoinWallet { .. } => Err(
+            "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
+                .to_string(),
+        ),
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         BitcoinWalletCmd::History {
             wallet_id,
             password,

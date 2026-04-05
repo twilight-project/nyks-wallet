@@ -32,9 +32,21 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
                     "Opening {side} {order_type} order on account {account_index} (price={entry_price}, leverage={leverage}x)..."
                 );
             }
-            let request_id = ow
+            let request_id = match ow
                 .open_trader_order(account_index, ot, ps, entry_price, leverage)
-                .await?;
+                .await
+            {
+                Ok(id) => id,
+                Err(e) if e.contains("Value Witness Verification Failed") => {
+                    return Err(format!(
+                        "{e}\n\nHint: If a previous order on this account was closed, you need to \
+                         create a transfer first before placing a new order.\n\
+                         An order cannot be placed with the same account address twice.\n\
+                         Use: relayer-cli zkaccount transfer --account-index {account_index}"
+                    ));
+                }
+                Err(e) => return Err(e),
+            };
             if json_output {
                 println!("{}", serde_json::json!({"request_id": request_id}));
             } else {
@@ -149,7 +161,18 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             if !json_output {
                 println!("Opening lend order on account {account_index}...");
             }
-            let request_id = ow.open_lend_order(account_index).await?;
+            let request_id = match ow.open_lend_order(account_index).await {
+                Ok(id) => id,
+                Err(e) if e.contains("Value Witness Verification Failed") => {
+                    return Err(format!(
+                        "{e}\n\nHint: If the account was previously used for an open/closed order, \
+                         you must transfer the account first before placing a new order.\n\
+                         An order cannot be placed with the same account address twice.\n\
+                         Use: relayer-cli zkaccount transfer --account-index {account_index}"
+                    ));
+                }
+                Err(e) => return Err(e),
+            };
             if json_output {
                 println!("{}", serde_json::json!({"request_id": request_id}));
             } else {

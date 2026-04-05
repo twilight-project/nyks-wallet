@@ -129,7 +129,7 @@ TRADING:
     close-trade         Close a position (MARKET/LIMIT/SLTP)
     cancel-trade        Cancel a pending order
     query-trade         Query current order status
-    unlock-trade        Reclaim account after SLTP settlement
+    unlock-trade        Reclaim account after SLTP/LIMIT settlement
 
 LENDING:
     open-lend           Open a lend order
@@ -148,7 +148,14 @@ EXAMPLES:
     relayer-cli order close-trade --account-index 1
     relayer-cli order query-trade --account-index 1
     relayer-cli order history-trade --account-index 1
-    relayer-cli order account-summary --from 2024-01-01 --to 2024-12-31"#
+    relayer-cli order account-summary --from 2024-01-01 --to 2024-12-31
+
+NOTE:
+    If the account was previously used for a open/closed order. You must transfer the account
+    first before placing a new order, as an order cannot be placed with the same
+    account address twice. If the order was pending to fill and later cancelled, you can reuse the
+    account.
+    Use: relayer-cli zkaccount transfer --account-index <index>"#
     );
 }
 

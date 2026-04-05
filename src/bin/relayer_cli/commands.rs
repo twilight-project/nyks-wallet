@@ -993,6 +993,22 @@ pub(crate) enum BitcoinWalletCmd {
         password: Option<String>,
     },
 
+    /// Update the BTC wallet by providing a new mnemonic phrase.
+    /// Re-derives BIP-84 keys and updates the wallet's BTC address and keys.
+    UpdateBitcoinWallet {
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+
+        /// Mnemonic phrase (if omitted, you will be prompted securely)
+        #[arg(long)]
+        mnemonic: Option<String>,
+    },
+
     /// Show BTC transfer history with confirmation status
     History {
         /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)

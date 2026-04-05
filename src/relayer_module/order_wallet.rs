@@ -15,7 +15,8 @@ use crate::{
     error::{Result as WalletResult, WalletError},
     relayer_module::{
         self, fetch_removed_utxo_details_with_retry, fetch_tx_hash_with_account_address_retry,
-        fetch_tx_hash_with_retry, fetch_utxo_details_with_retry,
+        fetch_tx_hash_with_retry, fetch_tx_hash_with_retry_with_close_order,
+        fetch_utxo_details_with_retry,
         nonce_manager::NonceManager,
         relayer_api::RelayerJsonRpcClient,
         relayer_order::{
@@ -286,8 +287,11 @@ impl OrderWallet {
             .zk_accounts
             .get_account(&index)
             .map_err(|e| e.to_string())?;
-        if !a.on_chain || a.io_type != IOType::Coin || a.balance == 0 {
-            return Err(format!("Account is not on chain or not a coin account"));
+        if a.io_type != IOType::Coin {
+            return Err(format!("Account is locked, io type: {:?}", a.io_type));
+        }
+        if !a.on_chain || a.balance == 0 {
+            return Err(format!("Account does not exist on chain or has no balance"));
         }
         Ok(())
     }
@@ -937,16 +941,17 @@ impl OrderWallet {
         self.validate_market_not_halted().await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
-        let request_id = self.request_id(index)?;
-        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
-        if tx_hash.order_status != OrderStatus::FILLED {
+        let trader_order = self.query_trader_order(index).await?;
+        if trader_order.order_status != OrderStatus::FILLED {
             return Err(format!(
                 "Order is not filled, status: {}",
-                tx_hash.order_status.to_str()
+                trader_order.order_status.to_str()
             ));
         }
+        let request_id = self.request_id(index)?;
+        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
         let output = tx_hash.get_output()?;
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+
         let order_type_str = format!("{:?}", order_type);
         let request_id = close_trader_order_internal(
             output,
@@ -958,14 +963,37 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
+        let tx_hash;
+        if order_type == OrderType::MARKET {
+            tx_hash = fetch_tx_hash_with_retry_with_close_order(
+                &request_id,
+                &self.relayer_api_client,
+                OrderType::MARKET,
+            )
+            .await?;
+        } else {
+            tx_hash = fetch_tx_hash_with_retry_with_close_order(
+                &request_id,
+                &self.relayer_api_client,
+                OrderType::LIMIT,
+            )
+            .await?;
+        }
         if tx_hash.order_status != OrderStatus::SETTLED {
             // order_type is LIMIT , so we need to wait for the order to be settled
-            info!(
-                "Limit order is not settled, status: {}",
-                tx_hash.order_status.to_str()
-            );
-            return Ok(request_id);
+            if tx_hash.order_status == OrderStatus::LimitPriceAdded
+                || tx_hash.order_status == OrderStatus::LimitPriceUpdated
+            {
+                info!("Limit request submitted");
+                return Ok(request_id);
+            } else {
+                return Err(format!(
+                    "Invalid request, order status is {}, reason: {}, request id: {}",
+                    tx_hash.order_status.to_str(),
+                    tx_hash.reason.unwrap_or_default(),
+                    &request_id
+                ));
+            }
         }
         if order_type == OrderType::LIMIT {
             info!("Limit order is settled on Market Price due to mark price hit limit price");
@@ -973,16 +1001,14 @@ impl OrderWallet {
 
         let trader_order = self.query_trader_order(index).await?;
         info!(
-            "PnL: {:?}, Net PnL: {:?}",
+            "PnL: {:?}, Net PnL: {:?}, Available Margin: {:?}",
             trader_order.unrealized_pnl,
-            trader_order.available_margin - trader_order.initial_margin
+            trader_order.available_margin - trader_order.initial_margin,
+            trader_order.available_margin
         );
         self.zk_accounts
             .update_balance(&index, trader_order.available_margin as u64)?;
-        debug!(
-            "trader_order available_margin: {:?}",
-            trader_order.available_margin as u64
-        );
+
         self.zk_accounts.update_io_type(&index, IOType::Coin)?;
         let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
         self.utxo_details.insert(index, utxo_detail.clone());
@@ -1028,16 +1054,17 @@ impl OrderWallet {
         self.validate_market_not_halted().await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
-        let request_id = self.request_id(index)?;
-        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
-        if tx_hash.order_status != OrderStatus::FILLED {
+        let trader_order = self.query_trader_order(index).await?;
+        if trader_order.order_status != OrderStatus::FILLED {
             return Err(format!(
-                "Order is not filled, status: {}",
-                tx_hash.order_status.to_str()
+                "Invalid request, order status is {}",
+                trader_order.order_status.to_str()
             ));
         }
+        let request_id = self.request_id(index)?;
+        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
         let output = tx_hash.get_output()?;
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        // #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         let order_type_str = format!("{:?}", order_type);
         let request_id = close_trader_order_sltp_internal(
             output,
@@ -1051,18 +1078,31 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let trader_order = self.query_trader_order(index).await?;
-        if trader_order.order_status != OrderStatus::SETTLED {
+        let tx_hash = fetch_tx_hash_with_retry_with_close_order(
+            &request_id,
+            &self.relayer_api_client,
+            OrderType::SLTP,
+        )
+        .await?;
+        if tx_hash.order_status != OrderStatus::SETTLED {
             // SLTP orders are conditional — they stay pending until the market
             // price hits the stop-loss or take-profit level.  We only need to
             // confirm the order was accepted (tx hash exists), not that it has
             // already settled.
-            info!(
-                "SLTP close order submitted, status: {}",
-                tx_hash.order_status.to_str()
-            );
+            if tx_hash.order_status == OrderStatus::StopLossAdded
+                || tx_hash.order_status == OrderStatus::TakeProfitAdded
+                || tx_hash.order_status == OrderStatus::TakeProfitUpdated
+                || tx_hash.order_status == OrderStatus::StopLossUpdated
+            {
+                info!("SLTP request submitted");
+            } else {
+                return Err(format!(
+                    "Invalid request, order status is {}, reason: {}, request id: {}",
+                    tx_hash.order_status.to_str(),
+                    tx_hash.reason.unwrap_or_default(),
+                    &request_id
+                ));
+            }
             #[cfg(any(feature = "sqlite", feature = "postgresql"))]
             {
                 // let trader_order = self.query_trader_order(index).await.ok();
@@ -1081,12 +1121,16 @@ impl OrderWallet {
                 );
             }
         } else {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let trader_order = self.query_trader_order(index).await?;
             info!("Order settled on Market Price due to mark price hit SLTP price");
             info!(
-                "PnL: {:?}, Net PnL: {:?}",
+                "PnL: {:?}, Net PnL: {:?}, Available Margin: {:?}",
                 trader_order.unrealized_pnl,
-                trader_order.available_margin - trader_order.initial_margin
+                trader_order.available_margin - trader_order.initial_margin,
+                trader_order.available_margin
             );
+
             let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
             self.utxo_details.insert(index, utxo_detail.clone());
 

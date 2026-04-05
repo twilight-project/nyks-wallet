@@ -191,6 +191,75 @@ pub async fn fetch_tx_hash_with_retry(
         }
     }
 }
+pub async fn fetch_tx_hash_with_retry_with_close_order(
+    request_id: &str,
+    relayer_api_client: &RelayerJsonRpcClient,
+    _order_type: twilight_client_sdk::relayer_types::OrderType,
+) -> Result<TxHash, String> {
+    let mut attempts = 0;
+    loop {
+        let response = relayer_api_client
+            .transaction_hashes(TransactionHashArgs::RequestId {
+                id: request_id.to_string(),
+                status: None,
+                limit: None,
+                offset: None,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        if response.is_empty() {
+            attempts += 1;
+            if attempts >= TXHASH_ATTEMPTS {
+                return Err(format!(
+                    "Failed to get tx hash after {} attempts",
+                    TXHASH_ATTEMPTS
+                ));
+            }
+            sleep(retry_delay(attempts)).await;
+        } else {
+            // Filter out specific cancelled order statuses
+            let filtered_response: Vec<_> = response
+                .iter()
+                .filter(|tx| {
+                    let status = tx.order_status.to_str();
+                    status != "CancelledLimitClose"
+                        && status != "CancelledStopLoss"
+                        && status != "CancelledTakeProfit"
+                })
+                .collect();
+
+            if filtered_response.is_empty() {
+                // Do not return; continue to retry in the outer loop
+                attempts += 1;
+                if attempts >= TXHASH_ATTEMPTS {
+                    return Err(format!(
+                        "Failed to get tx hash after {} attempts",
+                        TXHASH_ATTEMPTS
+                    ));
+                }
+                sleep(retry_delay(attempts)).await;
+                continue;
+            }
+
+            // Check if any transaction has order_status == SETTLED. If so, return it.
+            let settled_tx = filtered_response
+                .iter()
+                .find(|tx| tx.order_status == OrderStatus::SETTLED)
+                .copied();
+            let latest_tx = if let Some(tx) = settled_tx {
+                tx
+            } else {
+                filtered_response
+                    .iter()
+                    .max_by_key(|tx| (tx.datetime.trim().parse::<i64>().unwrap_or(i64::MIN), tx.id))
+                    .copied()
+                    .unwrap_or(filtered_response[0])
+            };
+
+            return Ok(latest_tx.clone());
+        }
+    }
+}
 pub async fn fetch_tx_hash_with_account_address_retry(
     account_address: &str,
     order_status: Option<OrderStatus>,
