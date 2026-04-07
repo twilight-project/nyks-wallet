@@ -310,7 +310,7 @@ async fn main() -> Result<(), String> {
         "    Updating ZkAccountDB on index : {} with io_type: State",
         index
     );
-    zk_accounts.update_io_type(&index, IOType::State)?;
+    zk_accounts.update_io_type(&index, IOType::State, None)?;
     zk_accounts.update_on_chain(&index, true)?;
     zk_accounts.export_to_json("ZkAccounts.json")?;
 

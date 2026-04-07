@@ -6,7 +6,7 @@
 //! - Open/close/cancel trader and lend orders via the relayer
 //! - Query order states with retry helpers
 //! - Optionally persist wallet, ZK accounts, UTXOs, and request IDs in a database
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use std::sync::Arc;
 
@@ -15,7 +15,8 @@ use crate::{
     error::{Result as WalletResult, WalletError},
     relayer_module::{
         self, fetch_removed_utxo_details_with_retry, fetch_tx_hash_with_account_address_retry,
-        fetch_tx_hash_with_retry, fetch_tx_hash_with_retry_with_close_order,
+        fetch_tx_hash_with_once, fetch_tx_hash_with_retry,
+        fetch_tx_hash_with_retry_with_close_order, fetch_utxo_details_with_once,
         fetch_utxo_details_with_retry,
         nonce_manager::NonceManager,
         relayer_api::RelayerJsonRpcClient,
@@ -27,7 +28,7 @@ use crate::{
     wallet::Wallet,
     zkos_accounts::{
         encrypted_account::{KeyManager, DERIVATION_MESSAGE},
-        zkaccount::ZkAccountDB,
+        zkaccount::{ZkAccount, ZkAccountDB},
     },
 };
 
@@ -46,7 +47,7 @@ use twilight_client_sdk::{
     relayer_rpcclient::method::UtxoDetailResponse,
     relayer_types::{
         LendOrder, OrderStatus, OrderType, PositionType, QueryLendOrderZkos, QueryTraderOrderZkos,
-        TraderOrder,
+        TXType, TraderOrder,
     },
     transaction::{Receiver, Sender},
     transfer::{
@@ -137,30 +138,11 @@ impl OrderWallet {
         endpoint_config: Option<EndpointConfig>,
     ) -> Result<Self, String> {
         let endpoint_config = endpoint_config.unwrap_or_default();
-        let relayer_endpoint_config = endpoint_config.to_relayer_endpoint_config();
         let wallet_endpoint_config = endpoint_config.to_wallet_endpoint_config();
         let wallet = Wallet::from_mnemonic(mnemonic, Some(wallet_endpoint_config))
             .map_err(|e| e.to_string())?;
         let zk_accounts = ZkAccountDB::new();
-        let utxo_details = HashMap::new();
-        let request_ids = HashMap::new();
-        let relayer_api_client =
-            RelayerJsonRpcClient::new(&relayer_endpoint_config.relayer_api_endpoint)
-                .map_err(|e| e.to_string())?;
-        let seed = wallet.get_zk_account_seed(&endpoint_config.chain_id, DERIVATION_MESSAGE)?;
-        Ok(Self {
-            wallet,
-            zk_accounts,
-            chain_id: endpoint_config.chain_id,
-            seed,
-            utxo_details,
-            request_ids,
-            relayer_api_client,
-            relayer_endpoint_config,
-            nonce_manager: Arc::new(NonceManager::new()),
-            db_manager: None,
-            wallet_password: None,
-        })
+        Self::init(wallet, zk_accounts, endpoint_config).map_err(|e| e.to_string())
     }
 
     // deafault feature is sqlite, if postgresql is enabled, then use postgresql
@@ -295,6 +277,16 @@ impl OrderWallet {
         }
         Ok(())
     }
+    /// Ensure the account exists on-chain, has IOType::Coin, and a non-zero balance.
+    pub fn ensure_zk_account_onchain(&self, a: &ZkAccount) -> Result<(), String> {
+        if a.io_type != IOType::Coin {
+            return Err(format!("Account is locked, io type: {:?}", a.io_type));
+        }
+        if !a.on_chain || a.balance == 0 {
+            return Err(format!("Account does not exist on chain or has no balance"));
+        }
+        Ok(())
+    }
 
     /// Sync the nonce manager from the on-chain account state.
     /// Call this before a batch of transactions, or periodically to
@@ -309,117 +301,203 @@ impl OrderWallet {
     }
 
     // -------------------------
+    // Internal helpers
+    // -------------------------
+
+    /// Sync an account's on-chain UTXO state. Call this to complete a deferred
+    /// sync after a `--no-wait` open or close operation.
+    pub async fn sync_account_state(&mut self, index: AccountIndex) -> Result<(), String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let io_type = self.zk_accounts.get_account(&index)?.io_type;
+        let utxo_detail = fetch_utxo_details_with_retry(account_address, io_type).await?;
+        self.utxo_details.insert(index, utxo_detail.clone());
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
+            error!("Failed to sync UTXO detail to database: {}", e);
+        }
+        if io_type == IOType::Coin {
+            let account = utxo_detail.output.to_quisquis_account()?;
+            self.zk_accounts.update_qq_account(&index, account)?;
+
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            {
+                if let Ok(account) = self.zk_accounts.get_account(&index) {
+                    let _ = self.update_zk_account_in_db(&account);
+                }
+            }
+        }
+        info!("Account {} synced with on-chain state", index);
+        Ok(())
+    }
+
+    /// Cache a UTXO detail in memory and sync to database if enabled.
+    fn cache_utxo(&mut self, index: AccountIndex, utxo_detail: UtxoDetailResponse) {
+        self.utxo_details.insert(index, utxo_detail.clone());
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
+            error!("Failed to sync UTXO detail to database: {}", e);
+        }
+    }
+
+    /// Remove a UTXO detail from memory and database.
+    fn uncache_utxo(&mut self, index: AccountIndex) {
+        self.utxo_details.remove(&index);
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Err(e) = self.remove_utxo_detail_from_db(index) {
+            error!("Failed to remove UTXO detail from database: {}", e);
+        }
+    }
+
+    /// Persist a newly created ZkAccount to the database.
+    fn try_save_new_account_to_db(&self, index: &AccountIndex) {
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(index) {
+            let _ = self.sync_zk_account_to_db(&account);
+        }
+    }
+
+    /// Persist the current state of an existing ZkAccount to the database.
+    fn try_update_account_in_db(&self, index: &AccountIndex) {
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Ok(account) = self.zk_accounts.get_account(index) {
+            let _ = self.update_zk_account_in_db(&account);
+        }
+    }
+
+    /// Store a request ID in memory and sync to database.
+    fn cache_request_id(&mut self, index: AccountIndex, request_id: &str) {
+        self.request_ids.insert(index, request_id.to_string());
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        if let Err(e) = self.sync_request_id_to_db(index, request_id) {
+            error!("Failed to sync request ID to database: {}", e);
+        }
+    }
+
+    /// Build an authenticated `QueryTraderOrderZkos` for the given account.
+    fn build_trader_query(&self, index: AccountIndex) -> Result<QueryTraderOrderZkos, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let query_order = query_trader_order_zkos(
+            account_address.clone(),
+            &secret_key,
+            account_address,
+            "PENDING".to_string(),
+        );
+        QueryTraderOrderZkos::decode_from_hex_string(query_order)
+    }
+
+    /// Build an authenticated `QueryLendOrderZkos` for the given account.
+    fn build_lend_query(&self, index: AccountIndex) -> Result<QueryLendOrderZkos, String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let query_order = query_lend_order_zkos(
+            account_address.clone(),
+            &secret_key,
+            account_address,
+            OrderStatus::LENDED.to_str(),
+        );
+        QueryLendOrderZkos::decode_from_hex_string(query_order)
+    }
+
+    /// Transition an account back to Coin state after an order settles.
+    /// Updates balance, IO type, QQ account, and UTXO cache.
+    fn settle_to_coin(
+        &mut self,
+        index: AccountIndex,
+        new_balance: u64,
+        utxo_detail: UtxoDetailResponse,
+    ) -> Result<(), String> {
+        self.zk_accounts.update_balance(&index, new_balance)?;
+        self.zk_accounts
+            .update_io_type(&index, IOType::Coin, None)?;
+        let account = utxo_detail.output.to_quisquis_account()?;
+        self.zk_accounts.update_qq_account(&index, account)?;
+        self.cache_utxo(index, utxo_detail);
+        self.try_update_account_in_db(&index);
+        Ok(())
+    }
+
+    // -------------------------
     // Funding Operations
     // -------------------------
-    // Create a new zk_account and transfer sats from wallet to zk_account
-    // Return the tx result (tx_hash, code) and the account index
     pub async fn funding_to_trading(&mut self, amount: u64) -> Result<(TxResult, u64), String> {
         let wallet_balance = self
             .wallet
             .update_balance()
             .await
             .map_err(|e| e.to_string())?;
-        if wallet_balance.nyks > 0 && wallet_balance.sats >= amount {
-            let account_index = self.zk_accounts.generate_new_account(amount, &self.seed)?;
-
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Ok(account) = self.zk_accounts.get_account(&account_index) {
-                let _ = self.sync_zk_account_to_db(&account);
-            }
-            self.wallet
-                .update_account_info()
-                .await
-                .map_err(|e| e.to_string())?;
-
-            // Sync nonce manager and acquire a sequence number
-            self.nonce_manager
-                .sync_from_chain(
-                    &self.wallet.chain_config.lcd_endpoint,
-                    &self.wallet.twilightaddress,
-                )
-                .await?;
-            let (sequence, account_number) = self.nonce_manager.acquire_next()?;
-
-            let signed_tx = build_and_sign_msg_mint_burn_trading_btc(
-                &self.wallet,
-                &self.zk_accounts,
-                account_index,
-                sequence,
-                account_number,
-                amount,
-                true,
-            )?;
-            let result =
-                send_tx_to_chain(signed_tx, &self.wallet.chain_config.rpc_endpoint).await?;
-            if result.code != 0 {
-                self.nonce_manager.release(sequence);
-                return Err(format!("Failed to send tx to chain: {}", result.tx_hash));
-            } else {
-                let account_address = self.zk_accounts.get_account_address(&account_index)?;
-                let utxo_detail =
-                    fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
-
-                self.utxo_details.insert(account_index, utxo_detail.clone());
-
-                // Sync to database
-                #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-                if let Err(e) = self.sync_utxo_detail_to_db(account_index, &utxo_detail) {
-                    error!("Failed to sync UTXO detail to database: {}", e);
-                }
-
-                self.zk_accounts.update_on_chain(&account_index, true)?;
-
-                #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-                if let Ok(account) = self.zk_accounts.get_account(&account_index) {
-                    let _ = self.update_zk_account_in_db(&account);
-                }
-
-                #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-                self.log_transfer_history(
-                    "fund_to_trade",
-                    None,
-                    Some(account_index),
-                    amount,
-                    Some(&result.tx_hash),
-                );
-            }
-            Ok((result, account_index))
-        } else {
-            error!("Insufficient balance");
-            Err(format!("Insufficient balance"))
+        // temporary disabled, will be re-enabled later if there is a need to check nyks balance
+        // if wallet_balance.nyks == 0 {
+        //     return Err("Insufficient balance".to_string());
+        // }
+        if wallet_balance.sats < amount {
+            return Err("Insufficient balance".to_string());
         }
+
+        let account_index = self.zk_accounts.generate_new_account(amount, &self.seed)?;
+        self.try_save_new_account_to_db(&account_index);
+
+        // self.wallet
+        //     .update_account_info()
+        //     .await
+        //     .map_err(|e| e.to_string())?;
+
+        // Sync nonce manager and acquire a sequence number
+        self.nonce_manager
+            .sync_from_chain(
+                &self.wallet.chain_config.lcd_endpoint,
+                &self.wallet.twilightaddress,
+            )
+            .await?;
+        let (sequence, account_number) = self.nonce_manager.acquire_next()?;
+
+        let signed_tx = build_and_sign_msg_mint_burn_trading_btc(
+            &self.wallet,
+            &self.zk_accounts,
+            account_index,
+            sequence,
+            account_number,
+            amount,
+            true,
+        )?;
+        let result = send_tx_to_chain(signed_tx, &self.wallet.chain_config.rpc_endpoint).await?;
+        if result.code != 0 {
+            self.nonce_manager.release(sequence);
+            return Err(format!("Failed to send tx to chain: {}", result.tx_hash));
+        }
+
+        self.zk_accounts.update_on_chain(&account_index, true)?;
+        self.try_update_account_in_db(&account_index);
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        self.log_transfer_history(
+            "fund_to_trade",
+            None,
+            Some(account_index),
+            amount,
+            Some(&result.tx_hash),
+        );
+
+        Ok((result, account_index))
     }
     //  -> Result<(TxResult, u64), String>
     pub async fn trading_to_trading(
         &mut self,
         index: AccountIndex,
     ) -> Result<AccountIndex, String> {
-        self.ensure_coin_onchain(index)?;
+        self.sync_account_state(index).await?;
         let sender_account = self.zk_accounts.get_account(&index)?;
-        let sender_account_address = sender_account.account.clone();
+        self.ensure_zk_account_onchain(&sender_account)?;
         let amount = sender_account.balance;
         let new_account_index = self.zk_accounts.generate_new_account(amount, &self.seed)?;
-
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Ok(account) = self.zk_accounts.get_account(&new_account_index) {
-            let _ = self.sync_zk_account_to_db(&account);
-        }
+        self.try_save_new_account_to_db(&new_account_index);
 
         let receiver_input_string = self.zk_accounts.get_account(&new_account_index)?.account;
-        // let utxo_detail =
-        //     fetch_utxo_details_with_retry(sender_account_address, IOType::Coin).await?;
-        // let input = utxo_detail.get_input()?;
-        let utxo_detail = match self.utxo_details.get(&index) {
-            Some(utxo_detail) => utxo_detail.clone(),
-            None => {
-                info!(
-                    "UTXO detail not found for index: {}, fetching from chain",
-                    index
-                );
-                fetch_utxo_details_with_retry(sender_account_address, IOType::Coin).await?
-                // return Err(format!("UTXO detail not found for index: {}", index));
-            }
-        };
+        let utxo_detail = self
+            .utxo_details
+            .get(&index)
+            .ok_or("UTXO detail not found")?;
         let input = utxo_detail.get_input()?;
         let tx_wallet = create_private_transfer_tx_single(
             self.get_secret_key(index),
@@ -440,45 +518,31 @@ impl OrderWallet {
         })
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
-        debug!("response: {:?}", response);
+        debug!("trading_to_trading response: {:?}", response);
+
         let utxo_detail = fetch_utxo_details_with_retry(
             self.zk_accounts.get_account_address(&new_account_index)?,
             IOType::Coin,
         )
         .await?;
 
-        self.utxo_details
-            .insert(new_account_index, utxo_detail.clone());
-        self.utxo_details.remove(&index);
+        self.cache_utxo(new_account_index, utxo_detail.clone());
+        self.uncache_utxo(index);
 
-        // Sync to database
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        {
-            if let Err(e) = self.sync_utxo_detail_to_db(new_account_index, &utxo_detail) {
-                error!("Failed to sync UTXO detail to database: {}", e);
-            }
-            if let Err(e) = self.remove_utxo_detail_from_db(index) {
-                error!("Failed to remove UTXO detail from database: {}", e);
-            }
-        }
         self.zk_accounts.update_on_chain(&new_account_index, true)?;
         self.zk_accounts.update_on_chain(&index, false)?;
         self.zk_accounts.update_balance(&index, 0u64)?;
         let account = utxo_detail.output.to_quisquis_account()?;
-
         self.zk_accounts
             .update_qq_account(&new_account_index, account)?;
         self.zk_accounts
             .update_scalar(&new_account_index, &encrypt_scalar)?;
 
+        self.try_update_account_in_db(&new_account_index);
+        self.try_update_account_in_db(&index);
+
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         {
-            if let Ok(account) = self.zk_accounts.get_account(&new_account_index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
             let tx_hash = match &response {
                 Ok(hash) => Some(hash.as_str()),
                 Err(_) => None,
@@ -498,16 +562,18 @@ impl OrderWallet {
     pub async fn trading_to_funding(&mut self, old_index: AccountIndex) -> Result<(), String> {
         self.ensure_coin_onchain(old_index)?;
         let index = self.trading_to_trading(old_index).await?;
-        let sender_account = self.zk_accounts.get_account(&index)?;
-        let amount = sender_account.balance;
 
-        let sk = self.get_secret_key(index);
+        self.sync_account_state(index).await?;
         let input = self
             .utxo_details
             .get(&index)
             .ok_or("UTXO detail not found")?
             .get_input()?;
+
+        let sender_account = self.zk_accounts.get_account(&index)?;
+        let amount = sender_account.balance;
         let encrypt_scalar = sender_account.scalar.clone();
+        let sk = self.get_secret_key(index);
         let tx_hex = create_burn_message_transaction(
             input,
             amount,
@@ -529,11 +595,6 @@ impl OrderWallet {
             IOType::Coin,
         )
         .await?;
-
-        self.wallet
-            .update_account_info()
-            .await
-            .map_err(|e| e.to_string())?;
 
         // Sync nonce manager and acquire a sequence number
         self.nonce_manager
@@ -560,19 +621,17 @@ impl OrderWallet {
         }
         self.zk_accounts.update_on_chain(&index, false)?;
         self.zk_accounts.update_balance(&index, 0)?;
+        self.try_update_account_in_db(&index);
+
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        {
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
-            self.log_transfer_history(
-                "trade_to_fund",
-                Some(old_index),
-                None,
-                amount,
-                Some(&result.tx_hash),
-            );
-        }
+        self.log_transfer_history(
+            "trade_to_fund",
+            Some(old_index),
+            None,
+            amount,
+            Some(&result.tx_hash),
+        );
+
         Ok(())
     }
     /// Split a single Coin account into multiple new Coin accounts as specified by `balances`.
@@ -588,11 +647,14 @@ impl OrderWallet {
     ) -> Result<Vec<AccountBalance>, String> {
         self.ensure_coin_onchain(sender_account_index)?;
         let sk = self.get_secret_key(sender_account_index);
+
+        self.sync_account_state(sender_account_index).await?;
         let input_sender = self
             .utxo_details
             .get(&sender_account_index)
             .ok_or("UTXO detail not found")?
             .get_input()?;
+
         let mut new_account_balances = Vec::new();
         let mut commitment_scalar_vec = Vec::new();
         let mut receiver_vec = Vec::new();
@@ -628,15 +690,6 @@ impl OrderWallet {
             sender_account.get_qq_account()?,
             receiver_vec,
         )];
-        // debug!("sender_array: {:?}", sender_array);
-        // debug!("input_sender: {:?}", input_sender);
-        // debug!("updated_sender_balance: {:?}", updated_sender_balance);
-        // debug!(
-        //     "updated_reciever_balance_vec: {:?}",
-        //     updated_reciever_balance_vec
-        // );
-        // debug!("commitment_scalar_vec: {:?}", commitment_scalar_vec);
-        // debug!("sender_transfering_amt: {:?}", sender_transfering_amt);
         let tx_wallet = create_private_transfer_transaction_single_source_multiple_recievers(
             sender_array,
             input_sender,
@@ -658,16 +711,20 @@ impl OrderWallet {
         .await
         .map_err(|e| format!("Failed to send RPC request: {}", e))?;
 
-        debug!("response: {:?}", response);
-        let mut i = 0;
-        for (new_account_index, balance) in new_account_balances.iter() {
+        debug!(
+            "trading_to_trading_multiple_accounts response: {:?}",
+            response
+        );
+        if let Err(e) = response {
+            return Err(format!("Failed to send RPC request: {}", e));
+        }
+        for (i, (new_account_index, balance)) in new_account_balances.iter().enumerate() {
             let utxo_detail = fetch_utxo_details_with_retry(
                 self.zk_accounts.get_account_address(new_account_index)?,
                 IOType::Coin,
             )
             .await?;
-            self.utxo_details
-                .insert(*new_account_index, utxo_detail.clone());
+            self.cache_utxo(*new_account_index, utxo_detail.clone());
             self.zk_accounts.update_on_chain(new_account_index, true)?;
             self.zk_accounts
                 .update_balance(new_account_index, *balance)?;
@@ -683,11 +740,7 @@ impl OrderWallet {
                     .get_owner_address()
                     .ok_or("Failed to get owner address")?,
             )?;
-            i += 1;
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Ok(account) = self.zk_accounts.get_account(new_account_index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
+            self.try_update_account_in_db(new_account_index);
         }
 
         if updated_sender_balance > 0 {
@@ -699,32 +752,17 @@ impl OrderWallet {
                 IOType::Coin,
             )
             .await?;
-            self.utxo_details
-                .insert(sender_account_index, utxo_detail.clone());
             let account = utxo_detail.output.to_quisquis_account()?;
             self.zk_accounts
                 .update_qq_account(&sender_account_index, account)?;
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Ok(account) = self.zk_accounts.get_account(&sender_account_index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Err(e) = self.sync_utxo_detail_to_db(sender_account_index, &utxo_detail) {
-                error!("Failed to sync UTXO detail to database: {}", e);
-            }
+            self.cache_utxo(sender_account_index, utxo_detail);
+            self.try_update_account_in_db(&sender_account_index);
         } else {
             self.zk_accounts.update_balance(&sender_account_index, 0)?;
             self.zk_accounts
                 .update_on_chain(&sender_account_index, false)?;
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Ok(account) = self.zk_accounts.get_account(&sender_account_index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
-            self.utxo_details.remove(&sender_account_index);
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Err(e) = self.remove_utxo_detail_from_db(sender_account_index) {
-                error!("Failed to remove UTXO detail from database: {}", e);
-            }
+            self.try_update_account_in_db(&sender_account_index);
+            self.uncache_utxo(sender_account_index);
         }
 
         Ok(new_account_balances)
@@ -848,14 +886,12 @@ impl OrderWallet {
             return Err("Leverage must be greater than 0".to_string());
         }
 
+        let _ = self.sync_account_state(index).await?;
         // Pre-validate against the risk engine before submitting
         let initial_margin = self.zk_accounts.get_account(&index)?.balance;
         self.validate_open_order(&order_side, initial_margin, leverage)
             .await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let _utxo_detail =
-            fetch_utxo_details_with_retry(account_address.clone(), IOType::Coin).await?;
-
         let secret_key = self.get_secret_key(index);
         let r_scalar = self.zk_accounts.get_account(&index)?.get_scalar()?;
         let initial_margin = self.zk_accounts.get_account(&index)?.balance;
@@ -886,48 +922,26 @@ impl OrderWallet {
             "inserting request_id: {:?} for account index: {:?}",
             request_id, index
         );
-        self.request_ids.insert(index, request_id.clone());
+        self.cache_request_id(index, &request_id);
 
-        // Sync to database
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Err(e) = self.sync_request_id_to_db(index, &request_id) {
-            error!("Failed to sync request ID to database: {}", e);
-        }
-
-        if order_type == OrderType::LIMIT {
-        } else {
-            let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Memo).await?;
-
-            self.utxo_details.insert(index, utxo_detail.clone());
-
-            // Sync to database
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
-                error!("Failed to sync UTXO detail to database: {}", e);
-            }
-        }
-
-        self.zk_accounts.update_io_type(&index, IOType::Memo)?;
+        self.zk_accounts
+            .update_io_type(&index, IOType::Memo, Some(TXType::ORDERTX))?;
+        self.try_update_account_in_db(&index);
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        {
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
-            self.log_order_history(
-                index,
-                &request_id,
-                "open",
-                &format!("{:?}", order_type),
-                Some(&order_side_str),
-                initial_margin,
-                Some(entry_price as f64),
-                Some(leverage),
-                None,
-                "submitted",
-                None,
-            );
-        }
+        self.log_order_history(
+            index,
+            &request_id,
+            "open",
+            &format!("{:?}", order_type),
+            Some(&order_side_str),
+            initial_margin,
+            Some(entry_price as f64),
+            Some(leverage),
+            None,
+            "submitted",
+            None,
+        );
 
         Ok(request_id)
     }
@@ -943,6 +957,12 @@ impl OrderWallet {
         let secret_key = self.get_secret_key(index);
         let trader_order = self.query_trader_order(index).await?;
         if trader_order.order_status != OrderStatus::FILLED {
+            if trader_order.order_status == OrderStatus::LIQUIDATE
+                || trader_order.order_status == OrderStatus::SETTLED
+            {
+                let (_, request_id) = self.unlock_trader_order(index).await?;
+                return Ok(request_id);
+            }
             return Err(format!(
                 "Order is not filled, status: {}",
                 trader_order.order_status.to_str()
@@ -953,6 +973,8 @@ impl OrderWallet {
         let output = tx_hash.get_output()?;
 
         let order_type_str = format!("{:?}", order_type);
+        self.sync_account_state(index).await?;
+
         let request_id = close_trader_order_internal(
             output,
             &secret_key,
@@ -963,83 +985,22 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-        let tx_hash;
-        if order_type == OrderType::MARKET {
-            tx_hash = fetch_tx_hash_with_retry_with_close_order(
-                &request_id,
-                &self.relayer_api_client,
-                OrderType::MARKET,
-            )
-            .await?;
-        } else {
-            tx_hash = fetch_tx_hash_with_retry_with_close_order(
-                &request_id,
-                &self.relayer_api_client,
-                OrderType::LIMIT,
-            )
-            .await?;
-        }
-        if tx_hash.order_status != OrderStatus::SETTLED {
-            // order_type is LIMIT , so we need to wait for the order to be settled
-            if tx_hash.order_status == OrderStatus::LimitPriceAdded
-                || tx_hash.order_status == OrderStatus::LimitPriceUpdated
-            {
-                info!("Limit request submitted");
-                return Ok(request_id);
-            } else {
-                return Err(format!(
-                    "Invalid request, order status is {}, reason: {}, request id: {}",
-                    tx_hash.order_status.to_str(),
-                    tx_hash.reason.unwrap_or_default(),
-                    &request_id
-                ));
-            }
-        }
-        if order_type == OrderType::LIMIT {
-            info!("Limit order is settled on Market Price due to mark price hit limit price");
-        }
 
-        let trader_order = self.query_trader_order(index).await?;
-        info!(
-            "PnL: {:?}, Net PnL: {:?}, Available Margin: {:?}",
-            trader_order.unrealized_pnl,
-            trader_order.available_margin - trader_order.initial_margin,
-            trader_order.available_margin
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        self.log_order_history(
+            index,
+            &request_id,
+            "close",
+            &order_type_str,
+            Some(&format!("{:?}", trader_order.position_type)),
+            trader_order.available_margin as u64,
+            Some(execution_price),
+            Some(trader_order.leverage as u64),
+            Some(trader_order.unrealized_pnl),
+            "submitted",
+            None,
         );
-        self.zk_accounts
-            .update_balance(&index, trader_order.available_margin as u64)?;
 
-        self.zk_accounts.update_io_type(&index, IOType::Coin)?;
-        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
-        self.utxo_details.insert(index, utxo_detail.clone());
-
-        // Sync to database
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
-            error!("Failed to sync UTXO detail to database: {}", e);
-        }
-
-        let account = utxo_detail.output.to_quisquis_account()?;
-        self.zk_accounts.update_qq_account(&index, account)?;
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        {
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
-            self.log_order_history(
-                index,
-                &request_id,
-                "close",
-                &order_type_str,
-                Some(&format!("{:?}", trader_order.position_type)),
-                trader_order.available_margin as u64,
-                Some(execution_price),
-                Some(trader_order.leverage as u64),
-                Some(trader_order.unrealized_pnl),
-                "settled",
-                None,
-            );
-        }
         Ok(request_id)
     }
 
@@ -1056,11 +1017,18 @@ impl OrderWallet {
         let secret_key = self.get_secret_key(index);
         let trader_order = self.query_trader_order(index).await?;
         if trader_order.order_status != OrderStatus::FILLED {
+            if trader_order.order_status == OrderStatus::LIQUIDATE
+                || trader_order.order_status == OrderStatus::SETTLED
+            {
+                let (_, request_id) = self.unlock_trader_order(index).await?;
+                return Ok(request_id);
+            }
             return Err(format!(
                 "Invalid request, order status is {}",
                 trader_order.order_status.to_str()
             ));
         }
+
         let request_id = self.request_id(index)?;
         let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
         let output = tx_hash.get_output()?;
@@ -1078,122 +1046,66 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-        let tx_hash = fetch_tx_hash_with_retry_with_close_order(
-            &request_id,
-            &self.relayer_api_client,
-            OrderType::SLTP,
-        )
-        .await?;
-        if tx_hash.order_status != OrderStatus::SETTLED {
-            // SLTP orders are conditional — they stay pending until the market
-            // price hits the stop-loss or take-profit level.  We only need to
-            // confirm the order was accepted (tx hash exists), not that it has
-            // already settled.
-            if tx_hash.order_status == OrderStatus::StopLossAdded
-                || tx_hash.order_status == OrderStatus::TakeProfitAdded
-                || tx_hash.order_status == OrderStatus::TakeProfitUpdated
-                || tx_hash.order_status == OrderStatus::StopLossUpdated
-            {
-                info!("SLTP request submitted");
-            } else {
-                return Err(format!(
-                    "Invalid request, order status is {}, reason: {}, request id: {}",
-                    tx_hash.order_status.to_str(),
-                    tx_hash.reason.unwrap_or_default(),
-                    &request_id
-                ));
-            }
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            {
-                // let trader_order = self.query_trader_order(index).await.ok();
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        {
+            if stop_loss_price.is_some() {
                 self.log_order_history(
                     index,
                     &request_id,
-                    "close_sltp",
+                    "close_sl",
                     &order_type_str,
                     Some(&format!("{:?}", trader_order.position_type)),
                     trader_order.available_margin as u64,
-                    Some(execution_price),
+                    stop_loss_price,
                     Some(trader_order.leverage as u64),
                     Some(trader_order.unrealized_pnl),
-                    &tx_hash.order_status.to_str(),
+                    "submitted",
                     None,
                 );
             }
-        } else {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            let trader_order = self.query_trader_order(index).await?;
-            info!("Order settled on Market Price due to mark price hit SLTP price");
-            info!(
-                "PnL: {:?}, Net PnL: {:?}, Available Margin: {:?}",
-                trader_order.unrealized_pnl,
-                trader_order.available_margin - trader_order.initial_margin,
-                trader_order.available_margin
+        }
+        if take_profit_price.is_some() {
+            self.log_order_history(
+                index,
+                &request_id,
+                "close_tp",
+                &order_type_str,
+                Some(&format!("{:?}", trader_order.position_type)),
+                trader_order.available_margin as u64,
+                take_profit_price,
+                Some(trader_order.leverage as u64),
+                Some(trader_order.unrealized_pnl),
+                "submitted",
+                None,
             );
-
-            let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
-            self.utxo_details.insert(index, utxo_detail.clone());
-
-            // Sync to database
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
-                error!("Failed to sync UTXO detail to database: {}", e);
-            }
-
-            let trader_order = self.query_trader_order(index).await?;
-            self.zk_accounts
-                .update_balance(&index, trader_order.available_margin as u64)?;
-            debug!(
-                "trader_order available_margin: {:?}",
-                trader_order.available_margin as u64
-            );
-            self.zk_accounts.update_io_type(&index, IOType::Coin)?;
-            let account = utxo_detail.output.to_quisquis_account()?;
-            self.zk_accounts.update_qq_account(&index, account)?;
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            {
-                if let Ok(account) = self.zk_accounts.get_account(&index) {
-                    let _ = self.update_zk_account_in_db(&account);
-                }
-                self.log_order_history(
-                    index,
-                    &request_id,
-                    "close_sltp",
-                    &order_type_str,
-                    Some(&format!("{:?}", trader_order.position_type)),
-                    trader_order.available_margin as u64,
-                    Some(execution_price),
-                    Some(trader_order.leverage as u64),
-                    Some(trader_order.unrealized_pnl),
-                    "settled",
-                    Some(&tx_hash.tx_hash),
-                );
-            }
         }
         Ok(request_id)
     }
 
     pub async fn query_trader_order(&mut self, index: AccountIndex) -> Result<TraderOrder, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_secret_key(index);
-        debug!(
-            "query_trader_order: account_address: {:?} for account index: {:?}",
-            account_address, index
-        );
-        let query_order = query_trader_order_zkos(
-            account_address.clone(),
-            &secret_key,
-            account_address.clone(),
-            "PENDING".to_string(),
-        );
-        let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
-        let response = self
-            .relayer_api_client
-            .trader_order_info(query_order_zkos)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        Ok(response)
+        debug!("query_trader_order for account index: {:?}", index);
+        let query = self.build_trader_query(index)?;
+        match self.relayer_api_client.trader_order_info(query).await {
+            Ok(order) => Ok(order),
+            Err(e) => {
+                let request_id = self.request_id(index)?;
+                let tx_hash = fetch_tx_hash_with_once(request_id, &self.relayer_api_client).await?;
+                if tx_hash.order_status != OrderStatus::PENDING
+                    && tx_hash.order_status != OrderStatus::FILLED
+                    && tx_hash.order_status != OrderStatus::LIQUIDATE
+                {
+                    self.unlock_failed_order(index).await?;
+                    return Err(format!(
+                        "Lend order failed, status: {}, reason: {}",
+                        tx_hash.order_status.to_str(),
+                        tx_hash.reason.unwrap_or_default()
+                    ));
+                } else {
+                    return Err(e.to_string());
+                }
+            }
+        }
     }
 
     /// Query enhanced trader order info (v1) with settle_limit, take_profit, stop_loss, funding_applied.
@@ -1201,21 +1113,27 @@ impl OrderWallet {
         &mut self,
         index: AccountIndex,
     ) -> Result<super::relayer_types::TraderOrderV1, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_secret_key(index);
-        let query_order = query_trader_order_zkos(
-            account_address.clone(),
-            &secret_key,
-            account_address.clone(),
-            "PENDING".to_string(),
-        );
-        let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
-        let response = self
-            .relayer_api_client
-            .trader_order_info_v1(query_order_zkos)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(response)
+        let query = self.build_trader_query(index)?;
+        match self.relayer_api_client.trader_order_info_v1(query).await {
+            Ok(order) => Ok(order),
+            Err(e) => {
+                let request_id = self.request_id(index)?;
+                let tx_hash = fetch_tx_hash_with_once(request_id, &self.relayer_api_client).await?;
+                if tx_hash.order_status != OrderStatus::PENDING
+                    && tx_hash.order_status != OrderStatus::FILLED
+                    && tx_hash.order_status != OrderStatus::LIQUIDATE
+                {
+                    self.unlock_failed_order(index).await?;
+                    return Err(format!(
+                        "Lend order failed, status: {}, reason: {}",
+                        tx_hash.order_status.to_str(),
+                        tx_hash.reason.unwrap_or_default()
+                    ));
+                } else {
+                    return Err(e.to_string());
+                }
+            }
+        }
     }
 
     /// Query enhanced lend order info (v1) with unrealised profit and APR.
@@ -1223,21 +1141,26 @@ impl OrderWallet {
         &mut self,
         index: AccountIndex,
     ) -> Result<super::relayer_types::LendOrderV1, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_secret_key(index);
-        let query_order = query_lend_order_zkos(
-            account_address.clone(),
-            &secret_key,
-            account_address.clone(),
-            OrderStatus::LENDED.to_str(),
-        );
-        let query_order_zkos = QueryLendOrderZkos::decode_from_hex_string(query_order)?;
-        let response = self
-            .relayer_api_client
-            .lend_order_info_v1(query_order_zkos)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(response)
+        let query = self.build_lend_query(index)?;
+        match self.relayer_api_client.lend_order_info_v1(query).await {
+            Ok(order) => Ok(order),
+            Err(e) => {
+                let request_id = self.request_id(index)?;
+                let tx_hash = fetch_tx_hash_with_once(request_id, &self.relayer_api_client).await?;
+                if tx_hash.order_status != OrderStatus::SETTLED
+                    && tx_hash.order_status != OrderStatus::FILLED
+                {
+                    self.unlock_failed_order(index).await?;
+                    return Err(format!(
+                        "Lend order failed, status: {}, reason: {}",
+                        tx_hash.order_status.to_str(),
+                        tx_hash.reason.unwrap_or_default()
+                    ));
+                } else {
+                    return Err(e.to_string());
+                }
+            }
+        }
     }
 
     /// Query historical trader orders for an account.
@@ -1245,17 +1168,9 @@ impl OrderWallet {
         &mut self,
         index: AccountIndex,
     ) -> Result<Vec<TraderOrder>, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_secret_key(index);
-        let query_order = query_trader_order_zkos(
-            account_address.clone(),
-            &secret_key,
-            account_address.clone(),
-            "PENDING".to_string(),
-        );
-        let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
+        let query = self.build_trader_query(index)?;
         self.relayer_api_client
-            .historical_trader_order_info(query_order_zkos)
+            .historical_trader_order_info(query)
             .await
             .map_err(|e| e.to_string())
     }
@@ -1265,17 +1180,9 @@ impl OrderWallet {
         &mut self,
         index: AccountIndex,
     ) -> Result<Vec<LendOrder>, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_secret_key(index);
-        let query_order = query_lend_order_zkos(
-            account_address.clone(),
-            &secret_key,
-            account_address.clone(),
-            OrderStatus::LENDED.to_str(),
-        );
-        let query_order_zkos = QueryLendOrderZkos::decode_from_hex_string(query_order)?;
+        let query = self.build_lend_query(index)?;
         self.relayer_api_client
-            .historical_lend_order_info(query_order_zkos)
+            .historical_lend_order_info(query)
             .await
             .map_err(|e| e.to_string())
     }
@@ -1285,17 +1192,9 @@ impl OrderWallet {
         &mut self,
         index: AccountIndex,
     ) -> Result<Vec<super::relayer_types::FundingHistoryEntry>, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_secret_key(index);
-        let query_order = query_trader_order_zkos(
-            account_address.clone(),
-            &secret_key,
-            account_address.clone(),
-            "PENDING".to_string(),
-        );
-        let query_order_zkos = QueryTraderOrderZkos::decode_from_hex_string(query_order)?;
+        let query = self.build_trader_query(index)?;
         self.relayer_api_client
-            .order_funding_history(query_order_zkos)
+            .order_funding_history(query)
             .await
             .map_err(|e| e.to_string())
     }
@@ -1328,13 +1227,12 @@ impl OrderWallet {
             ));
         }
 
-        self.zk_accounts.update_io_type(&index, IOType::Coin)?;
+        self.zk_accounts
+            .update_io_type(&index, IOType::Coin, None)?;
+        self.try_update_account_in_db(&index);
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         {
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
             let balance = self.zk_accounts.get_balance(&index).unwrap_or(0);
             self.log_order_history(
                 index,
@@ -1358,18 +1256,26 @@ impl OrderWallet {
     /// unlock the account by refreshing its UTXO, balance, and IO type back to `Coin`.
     ///
     /// Returns the current `OrderStatus` so the caller can decide what to do next.
-    pub async fn unlock_settled_order(
+    pub async fn unlock_trader_order(
         &mut self,
         index: AccountIndex,
-    ) -> Result<OrderStatus, String> {
+    ) -> Result<(OrderStatus, String), String> {
         let trader_order = self.query_trader_order(index).await?;
 
         if trader_order.order_status != OrderStatus::SETTLED
             && trader_order.order_status != OrderStatus::LIQUIDATE
         {
-            return Ok(trader_order.order_status);
+            return Err(format!(
+                "Order is not settled or liquidated, status: {}",
+                trader_order.order_status.to_str()
+            ));
         }
-
+        info!(
+            "PnL: {:?}, Net PnL: {:?}, Available Margin: {:?}",
+            trader_order.unrealized_pnl,
+            trader_order.available_margin - trader_order.initial_margin,
+            trader_order.available_margin
+        );
         let account_address = self.zk_accounts.get_account_address(&index)?.to_string();
         let tx_hash = fetch_tx_hash_with_account_address_retry(
             &account_address,
@@ -1379,48 +1285,88 @@ impl OrderWallet {
         .await?;
         let request_id = tx_hash.request_id.unwrap_or_default();
         let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
-        self.utxo_details.insert(index, utxo_detail.clone());
+        self.settle_to_coin(index, trader_order.available_margin as u64, utxo_detail)?;
 
-        // Sync to database
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
-            error!("Failed to sync UTXO detail to database: {}", e);
-        }
-
-        // let trader_order = self.query_trader_order(index).await?;
-        self.zk_accounts
-            .update_balance(&index, trader_order.available_margin as u64)?;
-        debug!(
-            "trader_order available_margin: {:?}",
-            trader_order.available_margin as u64
+        self.log_order_history(
+            index,
+            &request_id.to_string(),
+            "close",
+            "MARKET",
+            Some(&format!("{:?}", trader_order.position_type)),
+            trader_order.available_margin as u64,
+            Some(0.0),
+            Some(trader_order.leverage as u64),
+            Some(trader_order.unrealized_pnl),
+            &format!("{}", trader_order.order_status.to_str()),
+            Some(&tx_hash.tx_hash.clone()),
         );
-        self.zk_accounts.update_io_type(&index, IOType::Coin)?;
-        let account = utxo_detail.output.to_quisquis_account()?;
-        self.zk_accounts.update_qq_account(&index, account)?;
+
+        Ok((trader_order.order_status, request_id))
+    }
+    /// Check if a previously closed lend order has settled and, if so,
+    /// unlock the account by refreshing its UTXO, balance, and IO type back to `Coin`.
+    ///
+    /// Returns the current `OrderStatus` so the caller can decide what to do next.
+    pub async fn unlock_lend_order(
+        &mut self,
+        index: AccountIndex,
+    ) -> Result<(OrderStatus, String), String> {
+        let lend_order = self.query_lend_order(index).await?;
+
+        if lend_order.order_status != OrderStatus::SETTLED {
+            return Err(format!(
+                "Order is not settled, status: {}",
+                lend_order.order_status.to_str()
+            ));
+        }
+        info!(
+            "PnL: {:?}, Available Margin: {:?}",
+            lend_order.new_lend_state_amount - lend_order.deposit,
+            lend_order.new_lend_state_amount
+        );
+        let account_address = self.zk_accounts.get_account_address(&index)?.to_string();
+        let tx_hash = fetch_tx_hash_with_account_address_retry(
+            &account_address,
+            Some(lend_order.order_status.clone()),
+            &self.relayer_api_client,
+        )
+        .await?;
+        let request_id = tx_hash.request_id.unwrap_or_default();
+        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
+        self.settle_to_coin(index, lend_order.new_lend_state_amount as u64, utxo_detail)?;
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        {
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
-            self.log_order_history(
-                index,
-                &request_id.to_string(),
-                "close",
-                "MARKET",
-                Some(&format!("{:?}", trader_order.position_type)),
-                trader_order.available_margin as u64,
-                Some(0.0),
-                Some(trader_order.leverage as u64),
-                Some(trader_order.unrealized_pnl),
-                &format!("{}", trader_order.order_status.to_str()),
-                None,
-            );
-        }
+        self.log_order_history(
+            index,
+            &request_id.to_string(),
+            "close",
+            "LEND",
+            None,
+            lend_order.new_lend_state_amount as u64,
+            None,
+            None,
+            Some(lend_order.new_lend_state_amount - lend_order.deposit),
+            &format!("{}", lend_order.order_status.to_str()),
+            Some(&tx_hash.tx_hash.clone()),
+        );
 
-        Ok(trader_order.order_status)
+        Ok((lend_order.order_status, request_id))
     }
 
+    pub async fn unlock_failed_order(&mut self, index: AccountIndex) -> Result<(), String> {
+        let account_address = self.zk_accounts.get_account_address(&index)?.to_string();
+        let balance = self.zk_accounts.get_balance(&index).unwrap_or(0);
+        let utxo_detail = fetch_utxo_details_with_once(account_address, IOType::Coin).await?;
+        self.zk_accounts.update_balance(&index, balance)?;
+        self.zk_accounts
+            .update_io_type(&index, IOType::Coin, None)?;
+        let account = utxo_detail.output.to_quisquis_account()?;
+        self.zk_accounts.update_qq_account(&index, account)?;
+        self.cache_utxo(index, utxo_detail);
+        self.try_update_account_in_db(&index);
+        Ok(())
+    }
     // -------------------------
     // Lend Order Operations
     // -------------------------
@@ -1429,9 +1375,9 @@ impl OrderWallet {
         self.validate_market_not_halted().await?;
         self.ensure_coin_onchain(index)?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
-        let _utxo_detail =
-            fetch_utxo_details_with_retry(account_address.clone(), IOType::Coin).await?;
-
+        // let _utxo_detail =
+        //     fetch_utxo_details_with_retry(account_address.clone(), IOType::Coin).await?;
+        self.sync_account_state(index).await?;
         let secret_key = self.get_secret_key(index);
         let scalar_hex: String = self.zk_accounts.get_account(&index)?.scalar.clone();
         let amount = self.zk_accounts.get_account(&index)?.balance;
@@ -1445,80 +1391,73 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-        self.request_ids.insert(index, request_id.clone());
+        self.cache_request_id(index, &request_id);
 
-        // Sync to database
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Err(e) = self.sync_request_id_to_db(index, &request_id) {
-            error!("Failed to sync request ID to database: {}", e);
-        }
-
-        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Memo).await?;
-
-        self.utxo_details.insert(index, utxo_detail.clone());
-
-        // Sync to database
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
-            error!("Failed to sync UTXO detail to database: {}", e);
-        }
-
-        self.zk_accounts.update_io_type(&index, IOType::Memo)?;
+        // let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Memo).await?;
+        // self.cache_utxo(index, utxo_detail);
+        self.zk_accounts
+            .update_io_type(&index, IOType::Memo, Some(TXType::LENDTX))?;
+        self.try_update_account_in_db(&index);
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        {
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
-            self.log_order_history(
-                index,
-                &request_id,
-                "open",
-                "LEND",
-                None,
-                amount,
-                None,
-                None,
-                None,
-                "submitted",
-                None,
-            );
-        }
+        self.log_order_history(
+            index,
+            &request_id,
+            "open",
+            "LEND",
+            None,
+            amount,
+            None,
+            None,
+            None,
+            "submitted",
+            None,
+        );
 
         Ok(request_id)
     }
 
     pub async fn query_lend_order(&mut self, index: AccountIndex) -> Result<LendOrder, String> {
-        let account_address = self.zk_accounts.get_account_address(&index)?;
-        let secret_key = self.get_secret_key(index);
-        let query_order = query_lend_order_zkos(
-            account_address.clone(),
-            &secret_key,
-            account_address.clone(),
-            OrderStatus::LENDED.to_str(),
-        );
-        let query_order_zkos = QueryLendOrderZkos::decode_from_hex_string(query_order)?;
-        let response = self
-            .relayer_api_client
-            .lend_order_info(query_order_zkos)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        Ok(response)
+        let query = self.build_lend_query(index)?;
+        match self.relayer_api_client.lend_order_info(query).await {
+            Ok(order) => Ok(order),
+            Err(e) => {
+                let request_id = self.request_id(index)?;
+                let tx_hash = fetch_tx_hash_with_once(request_id, &self.relayer_api_client).await?;
+                if tx_hash.order_status != OrderStatus::SETTLED
+                    && tx_hash.order_status != OrderStatus::FILLED
+                {
+                    self.unlock_failed_order(index).await?;
+                    return Err(format!(
+                        "Lend order failed, status: {}, reason: {}",
+                        tx_hash.order_status.to_str(),
+                        tx_hash.reason.unwrap_or_default()
+                    ));
+                } else {
+                    return Err(e.to_string());
+                }
+            }
+        }
     }
 
     pub async fn close_lend_order(&mut self, index: AccountIndex) -> Result<String, String> {
         self.validate_market_not_halted().await?;
+        self.sync_account_state(index).await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
-        let request_id = self.request_id(index)?;
-        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
-        if tx_hash.order_status != OrderStatus::FILLED {
+        let lend_order = self.query_lend_order(index).await?;
+        if lend_order.order_status == OrderStatus::SETTLED {
+            let (_, request_id) = self.unlock_lend_order(index).await?;
+            return Ok(request_id);
+        }
+        if lend_order.order_status != OrderStatus::FILLED {
             return Err(format!(
                 "Order is not filled, status: {}",
-                tx_hash.order_status.to_str()
+                lend_order.order_status.to_str()
             ));
         }
+        let request_id = self.request_id(index)?;
+        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
         let output = tx_hash.get_output()?;
         let request_id = close_lend_order(
             output,
@@ -1529,35 +1468,9 @@ impl OrderWallet {
             &self.relayer_api_client,
         )
         .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
-        if tx_hash.order_status != OrderStatus::SETTLED {
-            return Err(format!(
-                "Order is not settled, status: {}",
-                tx_hash.order_status.to_str()
-            ));
-        }
-        let utxo_detail = fetch_utxo_details_with_retry(account_address, IOType::Coin).await?;
-        self.utxo_details.insert(index, utxo_detail.clone());
-
-        // Sync to database
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        if let Err(e) = self.sync_utxo_detail_to_db(index, &utxo_detail) {
-            error!("Failed to sync UTXO detail to database: {}", e);
-        }
-
-        let lend_order = self.query_lend_order(index).await?;
-        let balance = lend_order.new_lend_state_amount as u64;
-        self.zk_accounts.update_balance(&index, balance)?;
-        debug!("lend_order balance: {:?}", balance);
-        self.zk_accounts.update_io_type(&index, IOType::Coin)?;
-        let account = utxo_detail.output.to_quisquis_account()?;
-        self.zk_accounts.update_qq_account(&index, account)?;
 
         #[cfg(any(feature = "sqlite", feature = "postgresql"))]
         {
-            if let Ok(account) = self.zk_accounts.get_account(&index) {
-                let _ = self.update_zk_account_in_db(&account);
-            }
             let pnl = lend_order.new_lend_state_amount - lend_order.deposit;
             self.log_order_history(
                 index,
@@ -1565,11 +1478,11 @@ impl OrderWallet {
                 "close",
                 "LEND",
                 None,
-                balance,
+                lend_order.new_lend_state_amount as u64,
                 None,
                 None,
                 Some(pnl),
-                "settled",
+                "submitted",
                 None,
             );
         }
@@ -1950,6 +1863,7 @@ impl OrderWallet {
         let mut closed_trader_positions = Vec::new();
         let mut liquidated_trader_positions = Vec::new();
         let mut lend_positions = Vec::new();
+        let mut closed_lend_positions = Vec::new();
         let mut on_chain_count = 0;
 
         let accounts: Vec<_> = self
@@ -1972,81 +1886,108 @@ impl OrderWallet {
                     }
                 }
                 IOType::Memo => {
-                    // Try trader order first, fall back to lend order
-                    match self.query_trader_order_v1(account.index).await {
-                        Ok(order_v1) => {
-                            if order_v1.order.order_status == OrderStatus::SETTLED {
-                                // Build summary using the relayer's PnL (realised)
-                                let mut summary =
-                                    super::portfolio::PositionSummary::from_trader_order_v1(
-                                        account.index,
-                                        &order_v1,
-                                        current_price,
+                    match account.tx_type {
+                        Some(TXType::LENDTX) => {
+                            // Lend order
+                            if let Ok(order_v1) = self.query_lend_order_v1(account.index).await {
+                                if order_v1.order.order_status == OrderStatus::SETTLED {
+                                    let summary =
+                                        super::portfolio::LendPositionSummary::from_lend_order_v1(
+                                            account.index,
+                                            &order_v1,
+                                        );
+
+                                    match self.unlock_lend_order(account.index).await {
+                                        Ok(_) => {
+                                            info!(
+                                                "Unlocked settled lend account {} during portfolio scan",
+                                                account.index
+                                            );
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "Failed to unlock settled lend account {}: {}",
+                                                account.index, e
+                                            );
+                                        }
+                                    }
+
+                                    closed_lend_positions.push(summary);
+                                } else {
+                                    lend_positions.push(
+                                        super::portfolio::LendPositionSummary::from_lend_order_v1(
+                                            account.index,
+                                            &order_v1,
+                                        ),
                                     );
-                                // Use the relayer-reported unrealized_pnl as realised PnL
-                                summary.unrealized_pnl = order_v1.order.unrealized_pnl;
-
-                                // Unlock the settled account (refresh UTXO, restore to Coin)
-                                match self.unlock_settled_order(account.index).await {
-                                    Ok(_) => {
-                                        info!(
-                                            "Unlocked settled account {} during portfolio scan",
-                                            account.index
-                                        );
-                                    }
-                                    Err(e) => {
-                                        error!(
-                                            "Failed to unlock settled account {}: {}",
-                                            account.index, e
-                                        );
-                                    }
                                 }
-
-                                closed_trader_positions.push(summary);
-                            } else if order_v1.order.order_status == OrderStatus::LIQUIDATE {
-                                let summary =
-                                    super::portfolio::PositionSummary::from_trader_order_v1(
-                                        account.index,
-                                        &order_v1,
-                                        current_price,
-                                    );
-
-                                // Unlock the liquidated account (refresh UTXO, restore to Coin)
-                                match self.unlock_settled_order(account.index).await {
-                                    Ok(_) => {
-                                        info!(
-                                            "Unlocked liquidated account {} during portfolio scan",
-                                            account.index
-                                        );
-                                    }
-                                    Err(e) => {
-                                        error!(
-                                            "Failed to unlock liquidated account {}: {}",
-                                            account.index, e
-                                        );
-                                    }
-                                }
-
-                                liquidated_trader_positions.push(summary);
-                            } else {
-                                trader_positions.push(
-                                    super::portfolio::PositionSummary::from_trader_order_v1(
-                                        account.index,
-                                        &order_v1,
-                                        current_price,
-                                    ),
-                                );
                             }
                         }
-                        Err(_) => {
-                            // Not a trader order — try lend
-                            if let Ok(order_v1) = self.query_lend_order_v1(account.index).await {
-                                lend_positions.push(
-                                    super::portfolio::LendPositionSummary::from_lend_order_v1(
-                                        account.index,
-                                        &order_v1,
-                                    ),
-                                );
+                        Some(TXType::ORDERTX) | None => {
+                            // Trader order (None for backward compatibility)
+                            match self.query_trader_order_v1(account.index).await {
+                                Ok(order_v1) => {
+                                    if order_v1.order.order_status == OrderStatus::SETTLED {
+                                        let mut summary =
+                                            super::portfolio::PositionSummary::from_trader_order_v1(
+                                                account.index,
+                                                &order_v1,
+                                                current_price,
+                                            );
+                                        summary.unrealized_pnl = order_v1.order.unrealized_pnl;
+
+                                        match self.unlock_trader_order(account.index).await {
+                                            Ok(_) => {
+                                                info!(
+                                                    "Unlocked settled account {} during portfolio scan",
+                                                    account.index
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to unlock settled account {}: {}",
+                                                    account.index, e
+                                                );
+                                            }
+                                        }
+
+                                        closed_trader_positions.push(summary);
+                                    } else if order_v1.order.order_status == OrderStatus::LIQUIDATE
+                                    {
+                                        let summary =
+                                            super::portfolio::PositionSummary::from_trader_order_v1(
+                                                account.index,
+                                                &order_v1,
+                                                current_price,
+                                            );
+
+                                        match self.unlock_trader_order(account.index).await {
+                                            Ok(_) => {
+                                                info!(
+                                                    "Unlocked liquidated account {} during portfolio scan",
+                                                    account.index
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to unlock liquidated account {}: {}",
+                                                    account.index, e
+                                                );
+                                            }
+                                        }
+
+                                        liquidated_trader_positions.push(summary);
+                                    } else {
+                                        trader_positions.push(
+                                            super::portfolio::PositionSummary::from_trader_order_v1(
+                                                account.index,
+                                                &order_v1,
+                                                current_price,
+                                            ),
+                                        );
+                                    }
+                                }
+                                Err(_) => {}
                             }
                         }
                     }
@@ -2069,6 +2010,7 @@ impl OrderWallet {
             closed_trader_positions,
             liquidated_trader_positions,
             lend_positions,
+            closed_lend_positions,
             total_accounts,
             on_chain_count,
         ))

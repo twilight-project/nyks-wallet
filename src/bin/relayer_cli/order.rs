@@ -1,6 +1,6 @@
 #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
-use nyks_wallet::relayer_module::relayer_types::OrderStatus;
+// use nyks_wallet::relayer_module::relayer_types::OrderStatus;
 
 use crate::commands::OrderCmd;
 use crate::helpers::{parse_datetime, parse_order_status, parse_order_type, parse_position_type};
@@ -205,7 +205,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             Ok(())
         }
 
-        OrderCmd::UnlockTrade {
+        OrderCmd::UnlockCloseOrder {
             account_index,
             wallet_id,
             password,
@@ -215,25 +215,83 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
             let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
 
-            let status = ow.unlock_settled_order(account_index).await?;
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::json!({"account_index": account_index, "status": format!("{:?}", status)})
-                );
-            } else {
-                match status {
-                    OrderStatus::SETTLED => {
+            let tx_type = ow.zk_accounts.get_account(&account_index)?.tx_type.clone();
+
+            let result = match tx_type {
+                Some(twilight_client_sdk::relayer_types::TXType::LENDTX) => {
+                    if !json_output {
+                        println!("Unlocking settled lend order on account {account_index}...");
+                    }
+                    ow.unlock_lend_order(account_index).await
+                }
+                Some(twilight_client_sdk::relayer_types::TXType::ORDERTX) | None => {
+                    if !json_output {
+                        println!("Unlocking settled trader order on account {account_index}...");
+                    }
+                    ow.unlock_trader_order(account_index).await
+                }
+            };
+
+            match result {
+                Ok((order_status, request_id)) => {
+                    if json_output {
                         println!(
-                            "Account {} unlocked successfully (order settled).",
-                            account_index
+                            "{}",
+                            serde_json::json!({"account_index": account_index, "order_status": format!("{:?}", order_status), "request_id": request_id})
+                        );
+                    } else {
+                        println!(
+                            "Account {} unlocked successfully, order status: {:?}. Request ID: {}",
+                            account_index, order_status, request_id
                         );
                     }
-                    _ => {
+                }
+                Err(e) => {
+                    if json_output {
                         println!(
-                            "Account {} not yet settled (current status: {:?}). No changes made.",
-                            account_index, status
+                            "{}",
+                            serde_json::json!({"account_index": account_index, "error": e})
                         );
+                    } else {
+                        println!("Error: {}", e);
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        OrderCmd::UnlockFailedOrder {
+            account_index,
+            wallet_id,
+            password,
+        } => {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            if !json_output {
+                println!("Unlocking failed order on account {account_index}...");
+            }
+            match ow.unlock_failed_order(account_index).await {
+                Ok(()) => {
+                    if json_output {
+                        println!(
+                            "{}",
+                            serde_json::json!({"account_index": account_index, "status": "unlocked"})
+                        );
+                    } else {
+                        println!("Account {} unlocked successfully (failed order cleared)", account_index);
+                    }
+                }
+                Err(e) => {
+                    if json_output {
+                        println!(
+                            "{}",
+                            serde_json::json!({"account_index": account_index, "error": e})
+                        );
+                    } else {
+                        println!("Error: {}", e);
                     }
                 }
             }

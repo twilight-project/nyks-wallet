@@ -17,8 +17,8 @@ COMMANDS:
     bitcoin-wallet  On-chain BTC operations (balance, transfer, receive, history)
     zkaccount       ZkOS account operations (fund, withdraw, transfer, split)
     order           Trading and lending orders (open/close/cancel/query trade & lend,
-                    unlock-trade, history-trade, history-lend, funding-history,
-                    account-summary, tx-hashes)
+                    unlock-close-order, unlock-failed-order, history-trade,
+                    history-lend, funding-history, account-summary, tx-hashes)
     market          Market data (price, orderbook, funding-rate, fee-rate, recent-trades,
                     position-size, lend-pool, pool-share-value, last-day-apy,
                     open-interest, market-stats, server-time, history-price,
@@ -56,7 +56,7 @@ SUBCOMMANDS:
     list                List all wallets in the database
     balance             Show wallet balance (on-chain query)
     info                Show wallet info (no chain calls)
-    accounts            List all ZkOS accounts for a wallet
+    accounts            List all ZkOS accounts for a wallet (INDEX, BALANCE, ON-CHAIN, IO-TYPE, TX-TYPE, ACCOUNT)
     export              Export wallet to a JSON file
     backup              Full database backup to JSON
     restore             Restore wallet from backup JSON
@@ -129,7 +129,8 @@ TRADING:
     close-trade         Close a position (MARKET/LIMIT/SLTP)
     cancel-trade        Cancel a pending order
     query-trade         Query current order status
-    unlock-trade        Reclaim account after SLTP/LIMIT settlement
+    unlock-close-order  Unlock a settled order (trade or lend) based on account's TXType
+    unlock-failed-order Unlock a failed order (reclaim account when submission failed)
 
 LENDING:
     open-lend           Open a lend order

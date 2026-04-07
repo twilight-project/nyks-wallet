@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::security::SecurePassword;
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use twilight_client_sdk::{relayer_rpcclient::method::UtxoDetailResponse, zkvm::IOType};
+use twilight_client_sdk::{relayer_rpcclient::method::UtxoDetailResponse, relayer_types::TXType, zkvm::IOType};
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 fn current_network_type() -> String {
@@ -37,6 +37,7 @@ pub struct DbZkAccount {
     pub scalar: String,
     pub io_type_value: i32,
     pub on_chain: bool,
+    pub tx_type: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }
@@ -54,6 +55,7 @@ pub struct NewDbZkAccount {
     pub scalar: String,
     pub io_type_value: i32,
     pub on_chain: bool,
+    pub tx_type: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }
@@ -99,6 +101,7 @@ impl DbZkAccount {
             scalar: zk_account.scalar.clone(),
             io_type_value: zk_account.io_type.clone() as i32,
             on_chain: zk_account.on_chain,
+            tx_type: zk_account.tx_type.as_ref().map(|t| format!("{:?}", t)),
             created_at: now,
             updated_at: now,
         }
@@ -111,6 +114,8 @@ impl DbZkAccount {
             _ => return Err(format!("Invalid io_type_value: {}", self.io_type_value)),
         };
 
+        let tx_type = self.tx_type.as_deref().and_then(TXType::from_str);
+
         Ok(ZkAccount {
             qq_address: self.qq_address.clone(),
             balance: self.balance as u64,
@@ -119,6 +124,7 @@ impl DbZkAccount {
             index: self.account_index as u64,
             io_type,
             on_chain: self.on_chain,
+            tx_type,
         })
     }
 
@@ -126,6 +132,7 @@ impl DbZkAccount {
         self.balance = zk_account.balance as i64;
         self.io_type_value = zk_account.io_type.clone() as i32;
         self.on_chain = zk_account.on_chain;
+        self.tx_type = zk_account.tx_type.as_ref().map(|t| format!("{:?}", t));
         self.updated_at = chrono::Utc::now().naive_utc();
     }
 }

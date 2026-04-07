@@ -14,6 +14,7 @@ diesel::table! {
         scalar -> Text,
         io_type_value -> Integer,
         on_chain -> Bool,
+        tx_type -> Nullable<Text>,
         created_at -> Timestamp,
         updated_at -> Timestamp,
     }

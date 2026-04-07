@@ -156,6 +156,30 @@ pub async fn fetch_utxo_details_with_retry(
         sleep(retry_delay(attempts)).await;
     }
 }
+pub async fn fetch_utxo_details_with_once(
+    account_id: String,
+    io_type: IOType,
+) -> Result<UtxoDetailResponse, String> {
+    let account_id_clone = account_id.clone();
+    match tokio::task::spawn_blocking(move || {
+        twilight_client_sdk::chain::get_utxo_details_by_address(account_id_clone, io_type)
+    })
+    .await
+    {
+        Ok(response) => match response {
+            Ok(utxo_detail) => {
+                debug!("utxo_detail: {:?}, account_id: {}", utxo_detail, account_id);
+                return Ok(utxo_detail);
+            }
+            Err(err) => {
+                return Err(format!("Failed to get utxo details: {}", err));
+            }
+        },
+        Err(e) => {
+            return Err(format!("Failed to spawn blocking task: {}", e));
+        }
+    }
+}
 
 pub async fn fetch_tx_hash_with_retry(
     request_id: &str,
@@ -191,6 +215,33 @@ pub async fn fetch_tx_hash_with_retry(
         }
     }
 }
+pub async fn fetch_tx_hash_with_once(
+    request_id: &str,
+    relayer_api_client: &RelayerJsonRpcClient,
+) -> Result<TxHash, String> {
+    let response = relayer_api_client
+        .transaction_hashes(TransactionHashArgs::RequestId {
+            id: request_id.to_string(),
+            status: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    if response.is_empty() {
+        return Err(
+            "Failed to get tx hash, Order may be in the queue, try again later".to_string(),
+        );
+    } else {
+        let latest_tx = response
+            .iter()
+            .max_by_key(|tx| (tx.datetime.trim().parse::<i64>().unwrap_or(i64::MIN), tx.id))
+            .unwrap_or(&response[0]);
+
+        return Ok(latest_tx.clone());
+    }
+}
+
 pub async fn fetch_tx_hash_with_retry_with_close_order(
     request_id: &str,
     relayer_api_client: &RelayerJsonRpcClient,
@@ -310,7 +361,7 @@ pub async fn fetch_removed_utxo_details_with_retry(
     io_type: IOType,
 ) -> Result<(), String> {
     let mut attempts = 0;
-    info!(
+    debug!(
         "fetch_removed_utxo_details_with_retry: account_id: {}",
         account_id
     );
@@ -330,6 +381,9 @@ pub async fn fetch_removed_utxo_details_with_retry(
                     }
                 }
                 Ok(_) => {
+                    if attempts == 0 {
+                        sleep(Duration::from_secs(2)).await;
+                    }
                     attempts += 1;
                     if attempts >= DEFAULT_UTXO_ATTEMPTS {
                         return Err(format!(

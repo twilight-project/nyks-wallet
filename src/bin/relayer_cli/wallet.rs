@@ -251,17 +251,21 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                 println!("No ZkOS accounts found");
             } else {
                 println!(
-                    "{:<8} {:<12} {:<10} {:<10} {:<44}",
-                    "INDEX", "BALANCE", "ON-CHAIN", "IO-TYPE", "ACCOUNT"
+                    "{:<8} {:<12} {:<10} {:<10} {:<10} {:<44}",
+                    "INDEX", "BALANCE", "ON-CHAIN", "IO-TYPE", "TX-TYPE", "ACCOUNT"
                 );
-                println!("{}", "-".repeat(90));
+                println!("{}", "-".repeat(100));
                 for acc in accounts {
+                    let tx_type_str = acc.tx_type.as_ref()
+                        .map(|t| format!("{:?}", t))
+                        .unwrap_or_else(|| "-".to_string());
                     println!(
-                        "{:<8} {:<12} {:<10} {:<10} {:<44}",
+                        "{:<8} {:<12} {:<10} {:<10} {:<10} {:<44}",
                         acc.index,
                         acc.balance,
                         acc.on_chain,
                         format!("{:?}", acc.io_type),
+                        tx_type_str,
                         &acc.account[..std::cmp::min(44, acc.account.len())],
                     );
                 }

@@ -93,7 +93,7 @@ relayer-cli [--json] <COMMAND>
 - `wallet` — create, import, load, list, balance, accounts, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send, register-btc, deposit-btc, reserves, deposit-status, withdraw-btc, withdraw-status, faucet
 - `bitcoin-wallet` — balance, transfer, receive, history (on-chain BTC operations)
 - `zkaccount` — fund, withdraw, transfer, split
-- `order` — open/close/cancel/query trader and lend orders, unlock-trade, history-trade, history-lend, funding-history, account-summary, tx-hashes
+- `order` — open/close/cancel/query trader and lend orders, unlock-close-order, unlock-failed-order, history-trade, history-lend, funding-history, account-summary, tx-hashes
 - `market` — query prices, orderbook, rates, historical data, candles, APY charts
 - `history` — view order and transfer history (requires DB)
 - `portfolio` — portfolio summary, balances (with unit conversion), liquidation risks
@@ -216,7 +216,7 @@ relayer-cli wallet accounts --on-chain-only
 | `--password <PASS>` | DB encryption password                    |
 | `--on-chain-only`   | Only show accounts where on-chain is true |
 
-Output columns: `INDEX`, `BALANCE`, `ON-CHAIN`, `IO-TYPE`, `ACCOUNT`.
+Output columns: `INDEX`, `BALANCE`, `ON-CHAIN`, `IO-TYPE`, `TX-TYPE`, `ACCOUNT`. The `TX-TYPE` column shows `ORDERTX` for trade orders, `LENDTX` for lend orders, or `-` when the account is in Coin state.
 
 ### `wallet backup`
 
@@ -682,13 +682,28 @@ Query the status of a trader order. Outputs JSON.
 relayer-cli order query-trade --account-index 0
 ```
 
-### `order unlock-trade`
+### `order unlock-close-order`
 
-Unlock a settled trader order. Use this to reclaim a ZkOS account after an SLTP (stop-loss/take-profit) order has been settled by the relayer. If the order is not yet settled, no changes are made.
+Unlock a settled order (trade or lend). Automatically detects the order type from the account's `TX-TYPE` field (`ORDERTX` or `LENDTX`) and calls the appropriate unlock method. Use this to reclaim a ZkOS account after an order has been settled by the relayer. If the order is not yet settled, no changes are made.
 
 ```bash
-relayer-cli order unlock-trade --account-index 0
-relayer-cli order unlock-trade --account-index 0 --wallet-id my-wallet --password s3cret
+relayer-cli order unlock-close-order --account-index 0
+relayer-cli order unlock-close-order --account-index 0 --wallet-id my-wallet --password s3cret
+```
+
+| Flag                  | Description                      |
+| --------------------- | -------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index |
+| `--wallet-id <ID>`    | Load wallet from DB              |
+| `--password <PASS>`   | DB encryption password           |
+
+### `order unlock-failed-order`
+
+Unlock a failed order. Use this to reclaim a ZkOS account when an order submission failed and the account is stuck in Memo state. Restores the account back to Coin state by fetching the current UTXO.
+
+```bash
+relayer-cli order unlock-failed-order --account-index 0
+relayer-cli order unlock-failed-order --account-index 0 --wallet-id my-wallet --password s3cret
 ```
 
 | Flag                  | Description                      |

@@ -59,6 +59,7 @@ pub(crate) async fn handle_portfolio(cmd: PortfolioCmd, json_output: bool) -> Re
             );
             println!("  Lend value:          {:.2}", portfolio.total_lend_value);
             println!("  Lend PnL:            {:.2}", portfolio.lend_pnl);
+            println!("  Realised Lend PnL:   {:.2}", portfolio.realised_lend_pnl);
             println!();
             println!("  Total accounts:      {}", portfolio.total_accounts);
             println!("  On-chain accounts:   {}", portfolio.on_chain_accounts);
@@ -216,6 +217,29 @@ pub(crate) async fn handle_portfolio(cmd: PortfolioCmd, json_output: bool) -> Re
                         p.pool_share,
                     );
                 }
+            }
+
+            if !portfolio.closed_lend_positions.is_empty() {
+                println!("\nClosed Lend Positions (Settled & Unlocked)");
+                println!("{}", "-".repeat(75));
+                println!(
+                    "  {:<6} {:>12} {:>12} {:>12} {:>16}",
+                    "ACCT", "DEPOSIT", "VALUE", "PnL", "SHARES"
+                );
+                for p in &portfolio.closed_lend_positions {
+                    println!(
+                        "  {:<6} {:>12.2} {:>12.2} {:>12.2} {:>16.4}",
+                        p.account_index,
+                        p.deposit,
+                        p.current_value,
+                        p.pnl,
+                        p.pool_share,
+                    );
+                }
+                println!(
+                    "\n  Total Realised Lend PnL: {:.2}",
+                    portfolio.realised_lend_pnl
+                );
             }
             Ok(())
         }

@@ -520,8 +520,23 @@ pub(crate) enum OrderCmd {
         password: Option<String>,
     },
 
-    /// Unlock a settled trader order (reclaim account after SLTP settlement)
-    UnlockTrade {
+    /// Unlock a settled order (trade or lend) based on account's TXType
+    UnlockCloseOrder {
+        /// ZkOS account index
+        #[arg(long)]
+        account_index: u64,
+
+        /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password (falls back to NYKS_WALLET_PASSPHRASE env var)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Unlock a failed order (reclaim account when order submission failed)
+    UnlockFailedOrder {
         /// ZkOS account index
         #[arg(long)]
         account_index: u64,

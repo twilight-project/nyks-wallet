@@ -7,9 +7,10 @@ use std::collections::HashMap;
 use twilight_client_sdk::{
     address::Network,
     quisquislib::{
-        Account, ElGamalCommitment, RistrettoSecretKey, keys::PublicKey,
-        ristretto::RistrettoPublicKey,
+        keys::PublicKey, ristretto::RistrettoPublicKey, Account, ElGamalCommitment,
+        RistrettoSecretKey,
     },
+    relayer_types::TXType,
     zkvm::{IOType, Input, Utxo},
 };
 
@@ -22,6 +23,7 @@ pub struct ZkAccount {
     pub index: u64,
     pub io_type: IOType,
     pub on_chain: bool,
+    pub tx_type: Option<TXType>,
 }
 impl ZkAccount {
     pub fn new(
@@ -39,6 +41,7 @@ impl ZkAccount {
             index,
             io_type: IOType::Coin,
             on_chain: false,
+            tx_type: None,
         }
     }
 
@@ -221,14 +224,12 @@ impl ZkAccountDB {
             Err(e) => Err(format!("Failed to export to json: {}", e)),
         }
     }
-    pub fn update_io_type(&mut self, index: &u64, io_type: IOType) -> Result<(), String> {
-        // if !self.accounts.contains_key(&index) {
-        //     return Err(format!("Account with index {} does not exist", index));
-        // }
-        self.accounts
+    pub fn update_io_type(&mut self, index: &u64, io_type: IOType, tx_type: Option<TXType>) -> Result<(), String> {
+        let account = self.accounts
             .get_mut(index)
-            .ok_or(format!("Account with index {} does not exist", index))?
-            .io_type = io_type;
+            .ok_or(format!("Account with index {} does not exist", index))?;
+        account.io_type = io_type;
+        account.tx_type = tx_type;
         Ok(())
     }
     pub fn update_scalar(&mut self, index: &u64, scalar: &str) -> Result<(), String> {
