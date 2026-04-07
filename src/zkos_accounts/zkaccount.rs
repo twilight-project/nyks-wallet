@@ -224,12 +224,20 @@ impl ZkAccountDB {
             Err(e) => Err(format!("Failed to export to json: {}", e)),
         }
     }
-    pub fn update_io_type(&mut self, index: &u64, io_type: IOType, tx_type: Option<TXType>) -> Result<(), String> {
-        let account = self.accounts
+    pub fn update_io_type(
+        &mut self,
+        index: &u64,
+        io_type: IOType,
+        tx_type: Option<TXType>,
+    ) -> Result<(), String> {
+        let account = self
+            .accounts
             .get_mut(index)
             .ok_or(format!("Account with index {} does not exist", index))?;
         account.io_type = io_type;
-        account.tx_type = tx_type;
+        if tx_type.is_some() {
+            account.tx_type = tx_type;
+        }
         Ok(())
     }
     pub fn update_scalar(&mut self, index: &u64, scalar: &str) -> Result<(), String> {
