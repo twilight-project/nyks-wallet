@@ -20,6 +20,33 @@ pub fn is_btc_mainnet() -> bool {
     *BTC_NETWORK_TYPE == "mainnet"
 }
 
+pub static BTC_ESPLORA_PRIMARY_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_btc_mainnet() {
+        "https://blockstream.info/api".to_string()
+    } else {
+        "https://blockstream.info/testnet/api".to_string()
+    };
+    std::env::var("BTC_ESPLORA_PRIMARY_URL").unwrap_or(default)
+});
+
+pub static BTC_ESPLORA_FALLBACK_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_btc_mainnet() {
+        "https://mempool.space/api".to_string()
+    } else {
+        "https://mempool.space/testnet4/api".to_string()
+    };
+    std::env::var("BTC_ESPLORA_FALLBACK_URL").unwrap_or(default)
+});
+
+/// Returns `(primary, fallback)` Esplora API endpoints for BTC queries.
+/// Overridable via `BTC_ESPLORA_PRIMARY_URL` and `BTC_ESPLORA_FALLBACK_URL` env vars.
+pub fn esplora_endpoints() -> (&'static str, &'static str) {
+    (
+        BTC_ESPLORA_PRIMARY_URL.as_str(),
+        BTC_ESPLORA_FALLBACK_URL.as_str(),
+    )
+}
+
 pub static FAUCET_BASE_URL: LazyLock<String> = LazyLock::new(|| {
     let default = if is_mainnet() {
         "".to_string()

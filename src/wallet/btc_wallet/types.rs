@@ -31,6 +31,16 @@ pub struct BtcDepositDetail {
     pub creation_block_height: i64,
 }
 
+/// Proposed reserve info parsed from sweep address proposal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtcProposedReserve {
+    pub reserve_address: String,
+    pub unlock_height: u64,
+    pub reserve_id: String,
+    pub round_id: String,
+    pub judge_address: String,
+}
+
 /// On-chain BTC withdrawal request status from LCD.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtcWithdrawStatus {

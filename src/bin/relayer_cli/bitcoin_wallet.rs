@@ -87,13 +87,11 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             .count();
 
             if provided == 0 {
-                return Err(
-                    "No amount specified. Provide one of:\n  \
+                return Err("No amount specified. Provide one of:\n  \
                      --amount <sats>          Amount in satoshis\n  \
                      --amount-mbtc <mbtc>     Amount in milli-BTC (1 mBTC = 100,000 sats)\n  \
                      --amount-btc <btc>       Amount in BTC (1 BTC = 100,000,000 sats)"
-                        .to_string(),
-                );
+                    .to_string());
             }
             if provided > 1 {
                 eprintln!(
@@ -224,19 +222,29 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
                 "Unknown"
             };
 
-            println!("Bitcoin Receive Address");
-            println!("{}", "-".repeat(50));
-            println!("  Address:      {}", ow.wallet.btc_address);
-            println!("  Network:      {}", network);
-            println!("  Address type: {}", address_type);
-            println!("  Registered:   {}", ow.wallet.btc_address_registered);
+            // Build text info lines
+            let mut info_lines = vec![
+                "Bitcoin Receive Address".to_string(),
+                "-".repeat(50),
+                format!("  Address:      {}", ow.wallet.btc_address),
+                format!("  Network:      {}", network),
+                format!("  Address type: {}", address_type),
+                format!("  Registered:   {}", ow.wallet.btc_address_registered),
+            ];
 
             if let Some(ref _btc_wallet) = ow.wallet.btc_wallet {
-                println!("  BTC wallet:   available (keys loaded)");
-                println!("  Derivation:   {}", nyks_wallet::wallet::btc_wallet::BTC_DERIVATION_PATH);
+                info_lines.push("  BTC wallet:   available (keys loaded)".to_string());
+                info_lines.push(format!(
+                    "  Derivation:   {}",
+                    nyks_wallet::wallet::btc_wallet::BTC_DERIVATION_PATH
+                ));
             } else {
-                println!("  BTC wallet:   not available (created from private key)");
+                info_lines
+                    .push("  BTC wallet:   not available (created from private key)".to_string());
             }
+
+            // Render info + QR code (side-by-side if terminal is wide enough)
+            crate::helpers::print_with_qr(&info_lines, &ow.wallet.btc_address);
 
             println!("\nSend BTC to this address to deposit into your wallet.");
             if !ow.wallet.btc_address_registered {
@@ -264,9 +272,8 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             }
 
             // Derive new BTC wallet from the mnemonic
-            let btc_wallet =
-                nyks_wallet::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic)
-                    .map_err(|e| format!("Invalid mnemonic: {}", e))?;
+            let btc_wallet = nyks_wallet::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic)
+                .map_err(|e| format!("Invalid mnemonic: {}", e))?;
 
             let new_address = btc_wallet.address.clone();
 
@@ -290,19 +297,26 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             }
 
             // Check if the new BTC address is already linked to another twilight address
-            if let Some(info) = ow
+            match ow
                 .wallet
                 .fetch_registered_btc_by_address(&new_address)
                 .await
-                .map_err(|e| format!("Failed to check BTC address registration: {}", e))?
             {
-                if info.twilight_address != twilight_address {
-                    return Err(format!(
-                        "Cannot update BTC wallet: the new BTC address ({}) is already \
-                         linked to a different twilight address ({}).\n\
-                         A BTC address can only be linked to one twilight address.",
-                        new_address, info.twilight_address
-                    ));
+                Ok(Some(info)) => {
+                    if info.twilight_address != twilight_address {
+                        return Err(format!(
+                            "Cannot update BTC wallet: the new BTC address ({}) is already \
+                             linked to a different twilight address ({}).\n\
+                             A BTC address can only be linked to one twilight address.",
+                            new_address, info.twilight_address
+                        ));
+                    } else {
+                        ow.wallet.btc_address_registered = true;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("Warning: Could not check BTC address registration ({e}). Proceeding anyway...");
                 }
             }
 
@@ -311,12 +325,12 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             ow.wallet.btc_wallet = Some(btc_wallet);
 
             // Persist to DB
-            let db = ow.get_db_manager().ok_or(
-                "Database not available. Rebuild with --features sqlite".to_string(),
-            )?;
-            let wallet_password = ow.get_wallet_password().ok_or(
-                "No wallet password available for re-encryption".to_string(),
-            )?;
+            let db = ow
+                .get_db_manager()
+                .ok_or("Database not available. Rebuild with --features sqlite".to_string())?;
+            let wallet_password = ow
+                .get_wallet_password()
+                .ok_or("No wallet password available for re-encryption".to_string())?;
             db.save_encrypted_wallet(&ow.wallet, wallet_password)
                 .map_err(|e| format!("Failed to save updated wallet: {}", e))?;
 
@@ -348,9 +362,51 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             limit,
         } => {
             let ow = resolve_order_wallet(wallet_id, password).await?;
-            let db = ow.get_db_manager().ok_or(
-                "Database not available. Rebuild with --features sqlite".to_string(),
-            )?;
+            let db = ow
+                .get_db_manager()
+                .ok_or("Database not available. Rebuild with --features sqlite".to_string())?;
+
+            // Update confirmation status for pending/broadcast transfers
+            {
+                let pending = db.load_btc_transfers()?;
+                let to_check: Vec<_> = pending
+                    .iter()
+                    .filter(|t| t.status == "broadcast" || t.status == "pending")
+                    .filter(|t| t.tx_id.is_some())
+                    .collect();
+
+                if !to_check.is_empty() {
+                    println!(
+                        "Checking confirmation status for {} pending transfer(s)...",
+                        to_check.len()
+                    );
+                    for t in &to_check {
+                        let txid = t.tx_id.as_deref().unwrap();
+                        match nyks_wallet::wallet::btc_wallet::balance::fetch_tx_confirmations(
+                            txid,
+                        )
+                        .await
+                        {
+                            Ok((true, confs)) => {
+                                if let Some(id) = t.id {
+                                    let _ = db.update_btc_transfer_status(
+                                        id,
+                                        "confirmed",
+                                        confs as i32,
+                                    );
+                                }
+                            }
+                            Ok((false, _)) => {
+                                // Still unconfirmed — leave as is
+                            }
+                            Err(_) => {
+                                // Network error — skip silently
+                            }
+                        }
+                    }
+                    println!();
+                }
+            }
 
             let transfers = if let Some(ref s) = status {
                 db.load_btc_transfers_by_status(s)?

@@ -41,6 +41,8 @@ Used by the on-chain wallet for balance queries, transaction broadcasting, and f
 | `NYKS_LCD_BASE_URL` | Nyks chain LCD (REST API) endpoint         | `https://lcd.twilight.org`                      | `https://lcd.twilight.rest`                      |
 | `FAUCET_BASE_URL`   | Faucet endpoint for requesting test tokens | empty string (disabled by default)              | `https://faucet-rpc.twilight.rest`               |
 | `TWILIGHT_INDEXER_URL` | Twilight indexer base URL (BTC block height, account queries) | `https://indexer.twilight.org` | `https://indexer.twilight.rest` |
+| `BTC_ESPLORA_PRIMARY_URL` | Primary Esplora API for BTC balance, fee estimation, and broadcasting | `https://blockstream.info/api` | `https://blockstream.info/testnet/api` |
+| `BTC_ESPLORA_FALLBACK_URL` | Fallback Esplora API (used when primary is unreachable) | `https://mempool.space/api` | `https://mempool.space/testnet4/api` |
 
 ### Order-Wallet Endpoints (feature: `order-wallet`)
 
@@ -91,7 +93,7 @@ relayer-cli [--json] <COMMAND>
 ### Command Groups
 
 - `wallet` — create, import, load, list, balance, accounts, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send, register-btc, deposit-btc, reserves, deposit-status, withdraw-btc, withdraw-status, faucet
-- `bitcoin-wallet` — balance, transfer, receive, history (on-chain BTC operations)
+- `bitcoin-wallet` — balance, transfer, receive, update-bitcoin-wallet, history (on-chain BTC operations)
 - `zkaccount` — fund, withdraw, transfer, split
 - `order` — open/close/cancel/query trader and lend orders, unlock-close-order, unlock-failed-order, history-trade, history-lend, funding-history, account-summary, tx-hashes
 - `market` — query prices, orderbook, rates, historical data, candles, APY charts
@@ -374,7 +376,10 @@ relayer-cli wallet send --to twilight1abc... --amount 1000 --wallet-id my-wallet
 
 1. **Checks if the BTC address is already registered** — if it is registered to your wallet, you are told to use `wallet deposit-btc` instead. If registered to another wallet, registration is blocked.
 2. **Checks reserve status** — if all reserves are CRITICAL or EXPIRED, registration is blocked with an ETA for the next available reserve.
-3. **Registers on-chain** and saves a deposit record to the database.
+3. **Estimates transaction fee** — if a BTC wallet is available, the CLI dry-runs the transaction via BDK to get the real fee estimate (falls back to a 2,000 sat buffer if estimation fails).
+4. **Checks BTC balance** — confirms the wallet has enough confirmed sats to cover `amount + estimated fee`.
+5. **Registers on-chain** and saves a deposit record (including the target reserve ID) to the database.
+6. **Auto-pays to the best reserve** — if a BTC wallet is available, automatically sends the deposit amount to the reserve with the latest expiry. If no BTC wallet is available, shows reserve addresses and manual instructions.
 
 ```bash
 # Register for a 50,000 sat deposit
@@ -391,21 +396,23 @@ relayer-cli wallet register-btc --amount 100000 --staking-amount 10000
 | `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID`)             |
 | `--password <PASS>`    | DB encryption password                                 |
 
-After successful registration, the CLI shows only ACTIVE/WARNING reserves and guides you to the next step:
+**Behavior after registration depends on BTC wallet availability:**
 
-```
-wallet deposit-btc --reserve-address <RESERVE_ADDRESS>
-```
+- **BTC wallet available** (wallet created/imported from mnemonic): The CLI automatically sends the deposit to the best reserve (latest expiry, non-critical). The deposit is saved with status `sent` and the reserve ID.
+- **BTC wallet not available** (wallet created from private key or manual BTC address): The CLI lists ACTIVE/WARNING reserves. If only one active reserve exists, it is pre-selected and saved in the deposit record. Otherwise you must pick one manually:
+  ```
+  wallet deposit-btc --reserve-address <RESERVE_ADDRESS>
+  ```
 
 ### `wallet deposit-btc`
 
-**Mainnet only.** Record a BTC deposit after your address has been registered on-chain. Requires an amount (in sats, mBTC, or BTC). Verifies that your BTC address is registered, validates the chosen reserve, saves the deposit to the database, and tells you where to send BTC.
+**Mainnet only.** Send a BTC deposit to a reserve after your address has been registered on-chain. Requires an amount (in sats, mBTC, or BTC). Verifies that your BTC address is registered, resolves a target reserve, and either auto-sends or provides manual instructions.
 
 ```bash
-# Record deposit with amount in satoshis, list active reserves
+# Deposit with amount in satoshis (auto-selects best reserve)
 relayer-cli wallet deposit-btc --amount 50000
 
-# Record deposit with a specific reserve address
+# Deposit with a specific reserve address
 relayer-cli wallet deposit-btc --amount 50000 --reserve-address bc1q...
 
 # Amount in milli-BTC (1 mBTC = 100,000 sats)
@@ -420,7 +427,7 @@ relayer-cli wallet deposit-btc --amount-btc 0.0005
 | `--amount <SATS>`           | Amount in satoshis (priority 1)                                                |
 | `--amount-mbtc <MBTC>`     | Amount in milli-BTC (1 mBTC = 100,000 sats, priority 2)                       |
 | `--amount-btc <BTC>`       | Amount in BTC (1 BTC = 100,000,000 sats, priority 3)                          |
-| `--reserve-address <ADDR>`  | Reserve address to send BTC to. If omitted, lists all active reserves          |
+| `--reserve-address <ADDR>`  | Reserve address to send BTC to. If omitted, auto-selects the best reserve      |
 | `--wallet-id <ID>`          | Wallet ID (falls back to `NYKS_WALLET_ID`)                                    |
 | `--password <PASS>`         | DB encryption password                                                         |
 
@@ -428,22 +435,25 @@ At least one amount flag is required. If multiple are provided, priority is: `--
 
 **Pre-checks:**
 - Verifies your BTC address is registered on-chain (errors if not — run `wallet register-btc` first)
-- If a reserve address is provided, validates it exists and is ACTIVE or WARNING (rejects CRITICAL/EXPIRED)
+- If `--reserve-address` is provided, validates it exists and is ACTIVE or WARNING (rejects CRITICAL/EXPIRED)
+- If omitted, auto-selects the best reserve (latest expiry, non-critical)
 
-The deposit is saved to the local database with status `pending`. Use `wallet deposit-status` to track confirmation progress.
+**Behavior depends on BTC wallet availability:**
+
+- **BTC wallet available**: Estimates the real transaction fee via BDK, checks that confirmed balance covers `amount + fee`, then automatically sends BTC to the target reserve. The deposit is saved with status `sent` and the reserve ID.
+- **BTC wallet not available**: Saves the deposit with status `pending` and shows the reserve address to send BTC to manually.
 
 **Important:** You **must** send BTC from your registered BTC address only. Sending from any other address will not be credited to your account.
 
 **Full deposit flow:**
-1. Run `wallet register-btc --amount <sats>` to register your BTC address on-chain
-2. Run `wallet deposit-btc --amount <sats> --reserve-address <addr>` to pick a reserve and record the deposit
-3. Send BTC from your registered address to the chosen reserve address
-4. Wait for Bitcoin confirmation (~10 min) and then validator confirmation (can take 1+ hours)
-5. Check status with `wallet deposit-status`
+1. Run `wallet register-btc --amount <sats>` to register your BTC address on-chain (auto-sends if BTC wallet available)
+2. If not auto-sent: run `wallet deposit-btc --amount <sats>` to send to a reserve (auto-sends if BTC wallet available, otherwise manual)
+3. Wait for Bitcoin confirmation (~10 min) and then validator confirmation (can take 1+ hours)
+4. Check status with `wallet deposit-status`
 
 ### `wallet reserves`
 
-Show all BTC reserve addresses on-chain. Fetches the current Bitcoin block height to display real-time expiry status for each reserve.
+Show all BTC reserve addresses on-chain. Fetches the current Bitcoin block height to display real-time expiry status for each reserve. Also shows a QR code for the recommended reserve (latest-expiring active reserve), displayed side-by-side with the info if the terminal is wide enough.
 
 ```bash
 relayer-cli wallet reserves
@@ -1206,7 +1216,7 @@ On success, displays the transaction ID, fee paid, and a block explorer link.
 
 ### `bitcoin-wallet receive`
 
-Show the wallet's BTC receive address with network and address type details.
+Show the wallet's BTC receive address with network and address type details, along with a scannable QR code. The QR code is displayed side-by-side with the text info when the terminal is wide enough, otherwise below.
 
 ```bash
 relayer-cli bitcoin-wallet receive
@@ -1219,11 +1229,35 @@ relayer-cli bitcoin-wallet receive --wallet-id my-wallet --password s3cret
 | `--password <PASS>` | DB encryption password                             |
 
 Output includes:
-- BTC address
+- BTC address with QR code
 - Network (mainnet/testnet)
 - Address type (Native SegWit P2WPKH / Taproot P2TR)
 - On-chain registration status
 - BTC wallet availability and derivation path
+
+### `bitcoin-wallet update-bitcoin-wallet`
+
+Update the BTC wallet by providing a new mnemonic phrase. Re-derives BIP-84 keys and updates the wallet's BTC address and keys. Requires `sqlite` or `postgresql` feature.
+
+```bash
+# Prompt for mnemonic securely (recommended)
+relayer-cli bitcoin-wallet update-bitcoin-wallet
+
+# Pass mnemonic on command line
+relayer-cli bitcoin-wallet update-bitcoin-wallet --mnemonic "word1 word2 ... word24"
+```
+
+| Flag                  | Description                                                   |
+| --------------------- | ------------------------------------------------------------- |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID` env var)            |
+| `--password <PASS>`   | DB encryption password                                        |
+| `--mnemonic <PHRASE>` | 24-word BIP-39 mnemonic. If omitted, prompts securely via TTY |
+
+**Pre-checks:**
+- Mnemonic must not be empty
+- Current BTC address must **not** be registered on-chain (cannot change if registered)
+- New BTC address derived from the mnemonic must not be linked to a different twilight address
+- If the new address is already registered to your own twilight address, `btc_address_registered` is set to `true` automatically
 
 ### `bitcoin-wallet history`
 

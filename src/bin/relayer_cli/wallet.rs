@@ -1,5 +1,6 @@
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 use nyks_wallet::wallet::btc_wallet::validation::validate_btc_segwit_address;
+use nyks_wallet::wallet::btc_wallet::BtcReserve;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::commands::WalletCmd;
@@ -10,6 +11,75 @@ use crate::helpers::{
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::helpers::resolve_order_wallet;
+
+/// How many blocks remain before a reserve's unlock window closes.
+fn reserve_blocks_left(reserve: &BtcReserve, btc_height: u64) -> u64 {
+    if btc_height > 0 && reserve.unlock_height + 144 > btc_height {
+        reserve.unlock_height + 144 - btc_height
+    } else {
+        0
+    }
+}
+
+/// Human-readable status label for a reserve given its remaining blocks.
+/// Returns `None` for CRITICAL/EXPIRED reserves (blocks_left <= 4).
+fn reserve_status_label(blocks_left: u64) -> Option<&'static str> {
+    if blocks_left > 72 {
+        Some("ACTIVE")
+    } else if blocks_left > 4 {
+        Some("WARNING")
+    } else {
+        None // CRITICAL or EXPIRED
+    }
+}
+
+/// Pick the best reserve: non-critical, non-expired, with the latest expiry.
+fn find_best_reserve(reserves: &[BtcReserve], btc_height: u64) -> Option<(BtcReserve, u64)> {
+    reserves
+        .iter()
+        .filter_map(|r| {
+            let bl = reserve_blocks_left(r, btc_height);
+            if bl > 4 { Some((r.clone(), bl)) } else { None }
+        })
+        .max_by_key(|(_, bl)| *bl)
+}
+
+/// Save a BTC deposit record to the database (best-effort, logs warnings on failure).
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+fn save_deposit_record(
+    ow: &OrderWallet,
+    btc_addr: &str,
+    tw_addr: &str,
+    reserve_address: Option<String>,
+    reserve_id: Option<u64>,
+    amount: u64,
+    staking_amount: u64,
+    registration_tx_hash: Option<String>,
+    btc_tx_hash: Option<String>,
+    status: &str,
+) {
+    if let Some(db_manager) = ow.get_db_manager() {
+        let now = chrono::Utc::now().naive_utc();
+        let deposit_entry = nyks_wallet::database::models::NewDbBtcDeposit {
+            wallet_id: db_manager.get_wallet_id().to_string(),
+            network_type: nyks_wallet::config::NETWORK_TYPE.to_string(),
+            btc_address: btc_addr.to_string(),
+            twilight_address: tw_addr.to_string(),
+            reserve_address,
+            reserve_id: reserve_id.map(|id| id as i64),
+            amount: amount as i64,
+            staking_amount: staking_amount as i64,
+            registration_tx_hash,
+            btc_tx_hash,
+            status: status.to_string(),
+            created_at: now,
+            updated_at: now,
+        };
+        if let Err(e) = db_manager.save_btc_deposit(deposit_entry) {
+            eprintln!("Warning: Could not save deposit to database: {e}");
+        }
+    }
+}
 
 pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
     match cmd {
@@ -513,19 +583,24 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             let twilight_address = ow.wallet.twilightaddress.clone();
 
             // Check if the new BTC address is already linked to another twilight address
-            if let Some(info) = ow
+            match ow
                 .wallet
                 .fetch_registered_btc_by_address(&btc_address)
                 .await
-                .map_err(|e| format!("Failed to check BTC address registration: {}", e))?
             {
-                if info.twilight_address != twilight_address {
-                    return Err(format!(
-                        "Cannot update BTC address: the new BTC address ({}) is already \
-                         linked to a different twilight address ({}).\n\
-                         A BTC address can only be linked to one twilight address.",
-                        btc_address, info.twilight_address
-                    ));
+                Ok(Some(info)) => {
+                    if info.twilight_address != twilight_address {
+                        return Err(format!(
+                            "Cannot update BTC address: the new BTC address ({}) is already \
+                             linked to a different twilight address ({}).\n\
+                             A BTC address can only be linked to one twilight address.",
+                            btc_address, info.twilight_address
+                        ));
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("Warning: Could not check BTC address registration ({e}). Proceeding anyway...");
                 }
             }
 
@@ -612,7 +687,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                             "BTC address {btc_addr} is already registered to another twilight address: {}\n\n\
                              If this is not your BTC address, you can:\n  \
                              - Update the BTC address:  `wallet update-btc-address --btc-address <new_address>`\n  \
-                             - Update the BTC wallet:   `bitcoin-wallet update`",
+                             - Update the BTC wallet:   `bitcoin-wallet update-bitcoin-wallet --mnemonic <phrase>`",
                             info.twilight_address
                         ));
                     }
@@ -629,7 +704,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                 }
             }
 
-            // 2. Check reserves status — warn if all are CRITICAL or EXPIRED
+            // 2. Check reserves status — reject if all are CRITICAL or EXPIRED
             println!("Checking BTC reserve status...");
             let reserves = ow
                 .wallet
@@ -648,140 +723,282 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                 .await
                 .unwrap_or(0);
 
-            if btc_height > 0 {
-                let has_active = reserves.iter().any(|r| {
-                    let blocks_left = if r.unlock_height + 144 > btc_height {
-                        r.unlock_height + 144 - btc_height
-                    } else {
-                        0
-                    };
-                    blocks_left > 4
-                });
+            let best_reserve = find_best_reserve(&reserves, btc_height);
 
-                if !has_active {
-                    // All reserves are CRITICAL or EXPIRED
-                    let any_expired = reserves.iter().any(|r| r.unlock_height + 144 <= btc_height);
-                    if any_expired {
-                        let max_unlock =
-                            reserves.iter().map(|r| r.unlock_height).max().unwrap_or(0);
-                        let new_reserve_at = max_unlock + 148;
-                        if new_reserve_at > btc_height {
-                            let blocks_until = new_reserve_at - btc_height;
-                            return Err(format!(
-                                "All reserves are expired or critical. A new reserve address will be \
-                                 available in ~{blocks_until} BTC blocks (~{} min). Try again later.",
-                                blocks_until * 10
-                            ));
-                        }
-                    } else {
-                        return Err(
-                            "All reserves are in CRITICAL status (less than 4 blocks remaining). \
-                             Wait for the next reserve rotation before registering."
-                                .to_string(),
-                        );
+            if btc_height > 0 && best_reserve.is_none() {
+                let any_expired = reserves
+                    .iter()
+                    .any(|r| reserve_blocks_left(r, btc_height) == 0);
+                if any_expired {
+                    let max_unlock = reserves.iter().map(|r| r.unlock_height).max().unwrap_or(0);
+                    let new_reserve_at = max_unlock + 148;
+                    if new_reserve_at > btc_height {
+                        let blocks_until = new_reserve_at - btc_height;
+                        return Err(format!(
+                            "All reserves are expired or critical. A new reserve address will be \
+                             available in ~{blocks_until} BTC blocks (~{} min). Try again later.",
+                            blocks_until * 10
+                        ));
                     }
+                } else {
+                    return Err(
+                        "All reserves are in CRITICAL status (less than 4 blocks remaining). \
+                         Wait for the next reserve rotation before registering."
+                            .to_string(),
+                    );
                 }
             }
 
-            // 3. Check BTC balance is sufficient for the deposit amount
+            // 3. Estimate fee (real estimate when btc_wallet available, 0 otherwise)
+            let estimated_fee: u64 =
+                if let (Some(btc_w), Some((target, _))) =
+                    (&ow.wallet.btc_wallet, &best_reserve)
+                {
+                    println!("Estimating transaction fee...");
+                    match nyks_wallet::wallet::btc_wallet::send::estimate_btc_fee(
+                        &nyks_wallet::wallet::btc_wallet::send::SendBtcParams {
+                            btc_wallet: btc_w,
+                            destination: target.reserve_address.clone(),
+                            amount_sats: amount,
+                            fee_rate_sat_vb: None,
+                        },
+                    )
+                    .await
+                    {
+                        Ok(fee) => {
+                            println!("  Estimated fee: {fee} sats");
+                            fee
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "  Warning: Could not estimate fee ({e}), using 2000 sat buffer"
+                            );
+                            2_000
+                        }
+                    }
+                } else {
+                    0
+                };
+
+            // 4. Check BTC balance covers amount + fee
+            let required_sats = amount + estimated_fee;
             println!("Checking BTC balance for {btc_addr}...");
             let btc_balance = nyks_wallet::wallet::wallet::fetch_btc_balance(&btc_addr)
                 .await
                 .map_err(|e| format!("Failed to fetch BTC balance: {e}"))?;
 
-            if btc_balance.confirmed_sats < amount {
+            if btc_balance.confirmed_sats < required_sats {
+                let fee_note = if estimated_fee > 0 {
+                    format!(
+                        "\n  (Amount: {amount} sats + estimated fee: {estimated_fee} sats = {required_sats} sats needed)"
+                    )
+                } else {
+                    "\n\n  Note: This amount excludes BTC transaction fees. \
+                     Ensure you maintain additional balance to cover network fees."
+                        .to_string()
+                };
                 return Err(format!(
-                    "Insufficient BTC balance. You need at least {amount} sats but your address \
-                     has only {} confirmed sats.\n\n\
+                    "Insufficient BTC balance. You need at least {required_sats} sats but your address \
+                     has only {} confirmed sats.{fee_note}\n\n\
                      Please send at least {} more sats to your BTC address:\n  {btc_addr}\n\n\
-                     Note: This amount is excluding BTC transaction fees. \
-                     Ensure you maintain additional balance to cover network fees.\n\n\
                      If this is not your BTC address, you can:\n  \
                      - Update the BTC address:  `wallet update-btc-address --btc-address <new_address>`\n  \
-                     - Update the BTC wallet:   `bitcoin-wallet update`\n\n\
+                     - Update the BTC wallet:   `bitcoin-wallet update-bitcoin-wallet --mnemonic <phrase>`\n\n\
                      Then try again.",
                     btc_balance.confirmed_sats,
-                    amount - btc_balance.confirmed_sats,
+                    required_sats - btc_balance.confirmed_sats,
                 ));
             }
             println!(
-                "  Balance OK: {} confirmed sats (need {amount} sats)\n",
-                btc_balance.confirmed_sats
+                "  Balance OK: {} confirmed sats (need {required_sats} sats{})\n",
+                btc_balance.confirmed_sats,
+                if estimated_fee > 0 {
+                    " incl. estimated fee"
+                } else {
+                    ""
+                }
             );
 
-            // 4. Register on-chain
+            // 5. Register on-chain
             println!("Registering BTC deposit address on-chain");
             println!("  Twilight address: {tw_addr}");
             println!("  BTC address:      {btc_addr}");
             println!("  Deposit amount:   {amount} sats");
             println!("  Staking amount:   {staking_amount}");
 
-            match ow.wallet.register_btc_deposit(amount, staking_amount).await {
-                Ok(tx_hash) => {
-                    println!("\nRegistration submitted successfully");
-                    println!("  TX Hash: {tx_hash}");
+            let tx_hash = ow
+                .wallet
+                .register_btc_deposit(amount, staking_amount)
+                .await
+                .map_err(|e| format!("Registration failed: {e}"))?;
 
-                    // Persist the updated btc_address_registered flag
-                    if let Some(db_manager) = ow.get_db_manager() {
-                        if let Some(wallet_password) = ow.get_wallet_password() {
-                            let _ = db_manager.save_encrypted_wallet(&ow.wallet, wallet_password);
-                        }
+            println!("\nRegistration submitted successfully");
+            println!("  TX Hash: {tx_hash}");
 
-                        // Save deposit record to database
-                        let now = chrono::Utc::now().naive_utc();
-                        let deposit_entry = nyks_wallet::database::models::NewDbBtcDeposit {
-                            wallet_id: db_manager.get_wallet_id().to_string(),
-                            network_type: nyks_wallet::config::NETWORK_TYPE.to_string(),
-                            btc_address: btc_addr.clone(),
-                            twilight_address: tw_addr.clone(),
-                            reserve_address: None,
-                            amount: amount as i64,
-                            staking_amount: staking_amount as i64,
-                            registration_tx_hash: Some(tx_hash.clone()),
-                            status: "registered".to_string(),
-                            created_at: now,
-                            updated_at: now,
-                        };
-                        if let Err(e) = db_manager.save_btc_deposit(deposit_entry) {
-                            eprintln!("Warning: Could not save deposit to database: {e}");
+            // Persist the updated btc_address_registered flag
+            if let Some(db_manager) = ow.get_db_manager() {
+                if let Some(wallet_password) = ow.get_wallet_password() {
+                    let _ = db_manager.save_encrypted_wallet(&ow.wallet, wallet_password);
+                }
+            }
+
+            // 6. Pay to reserve — auto if btc_wallet available, manual otherwise
+            if let (Some(btc_wallet), Some((target_reserve, blocks_left))) =
+                (&ow.wallet.btc_wallet, &best_reserve)
+            {
+                let status = reserve_status_label(*blocks_left).unwrap_or("UNKNOWN");
+                println!("\nBTC wallet detected. Auto-sending to best reserve...");
+                println!(
+                    "  Reserve:      {} (ID: {})",
+                    target_reserve.reserve_address, target_reserve.reserve_id
+                );
+                println!(
+                    "  Status:       {status} (~{blocks_left} blocks / ~{} min remaining)",
+                    blocks_left * 10
+                );
+                println!("  Amount:       {amount} sats");
+
+                match nyks_wallet::wallet::btc_wallet::send::send_btc(
+                    nyks_wallet::wallet::btc_wallet::send::SendBtcParams {
+                        btc_wallet,
+                        destination: target_reserve.reserve_address.clone(),
+                        amount_sats: amount,
+                        fee_rate_sat_vb: None,
+                    },
+                )
+                .await
+                {
+                    Ok(result) => {
+                        println!("\nBTC payment sent successfully!");
+                        println!("  TX ID: {}", result.txid);
+                        println!("  Fee:   {} sats", result.fee_sats);
+                        save_deposit_record(
+                            &ow,
+                            &btc_addr,
+                            &tw_addr,
+                            Some(target_reserve.reserve_address.clone()),
+                            Some(target_reserve.reserve_id),
+                            amount,
+                            staking_amount,
+                            Some(tx_hash.clone()),
+                            Some(result.txid.clone()),
+                            "sent",
+                        );
+                        // Save BTC transfer record for bitcoin-wallet history
+                        if let Some(db) = ow.get_db_manager() {
+                            let record = nyks_wallet::database::models::NewDbBtcTransfer {
+                                wallet_id: db.get_wallet_id().to_string(),
+                                network_type: nyks_wallet::config::BTC_NETWORK_TYPE.clone(),
+                                from_address: btc_addr.clone(),
+                                to_address: target_reserve.reserve_address.clone(),
+                                amount: amount as i64,
+                                fee: result.fee_sats as i64,
+                                tx_id: Some(result.txid.clone()),
+                                status: "broadcast".to_string(),
+                                confirmations: 0,
+                                created_at: chrono::Utc::now().naive_utc(),
+                                updated_at: chrono::Utc::now().naive_utc(),
+                            };
+                            if let Err(e) = db.save_btc_transfer(record) {
+                                eprintln!("Warning: Failed to save transfer to DB: {e}");
+                            }
                         }
+                        println!("\nCheck status with: wallet deposit-status");
                     }
-
-                    // Show active reserves
-                    println!("\nActive reserve addresses to send {amount} sats to:");
-                    println!(
-                        "\n{:<6} {:<50} {:<15} {:<10}",
-                        "ID", "RESERVE ADDRESS", "TOTAL VALUE", "STATUS"
-                    );
-                    println!("{}", "-".repeat(85));
-                    for r in &reserves {
-                        let blocks_left = if btc_height > 0 && r.unlock_height + 144 > btc_height {
-                            r.unlock_height + 144 - btc_height
-                        } else {
-                            0
-                        };
-                        let status = if blocks_left > 72 {
-                            "ACTIVE"
-                        } else if blocks_left > 4 {
-                            "WARNING"
-                        } else {
-                            continue; // skip CRITICAL/EXPIRED
-                        };
-                        println!(
-                            "{:<6} {:<50} {:<15} {:<10}",
-                            r.reserve_id, r.reserve_address, r.total_value, status
+                    Err(e) => {
+                        eprintln!("\nFailed to auto-send BTC: {e}");
+                        eprintln!("You can send manually instead:");
+                        eprintln!(
+                            "  Send {amount} sats from {btc_addr} to {}",
+                            target_reserve.reserve_address
+                        );
+                        eprintln!(
+                            "  Or run: wallet deposit-btc --reserve-address {}",
+                            target_reserve.reserve_address
+                        );
+                        save_deposit_record(
+                            &ow,
+                            &btc_addr,
+                            &tw_addr,
+                            None,
+                            None,
+                            amount,
+                            staking_amount,
+                            Some(tx_hash.clone()),
+                            None,
+                            "registered",
                         );
                     }
+                }
+            } else {
+                // No BTC wallet — manual flow
+                println!("\nNote: BTC wallet not loaded — manual payment required.");
+                println!("  To enable auto-pay, load a mnemonic:");
+                println!("  bitcoin-wallet update-bitcoin-wallet --mnemonic <phrase>\n");
 
+                // Collect active reserves for display
+                let active_reserves: Vec<_> = reserves
+                    .iter()
+                    .filter(|r| reserve_blocks_left(r, btc_height) > 4)
+                    .collect();
+
+                // If exactly one active reserve, record it in the deposit
+                let (rec_addr, rec_id) = if active_reserves.len() == 1 {
+                    let r = active_reserves[0];
+                    (
+                        Some(r.reserve_address.clone()),
+                        Some(r.reserve_id),
+                    )
+                } else {
+                    (None, None)
+                };
+
+                save_deposit_record(
+                    &ow,
+                    &btc_addr,
+                    &tw_addr,
+                    rec_addr,
+                    rec_id,
+                    amount,
+                    staking_amount,
+                    Some(tx_hash.clone()),
+                    None,
+                    "registered",
+                );
+
+                println!("\nActive reserve addresses to send {amount} sats to:");
+                println!(
+                    "\n{:<6} {:<50} {:<15} {:<10}",
+                    "ID", "RESERVE ADDRESS", "TOTAL VALUE", "STATUS"
+                );
+                println!("{}", "-".repeat(85));
+                for r in &active_reserves {
+                    let bl = reserve_blocks_left(r, btc_height);
+                    let status = reserve_status_label(bl).unwrap_or("UNKNOWN");
+                    println!(
+                        "{:<6} {:<50} {:<15} {:<10}",
+                        r.reserve_id, r.reserve_address, r.total_value, status
+                    );
+                }
+
+                if active_reserves.len() == 1 {
+                    let r = active_reserves[0];
+                    println!("\nOnly one active reserve — send {amount} sats to:");
+                    println!("  Address:    {}", r.reserve_address);
+                    println!("  Reserve ID: {}", r.reserve_id);
+                    println!(
+                        "\n  From: {btc_addr}  (your registered BTC address)"
+                    );
+                    println!("  Check status with: wallet deposit-status");
+                } else {
                     println!("\nNext steps:");
                     println!("  1. Pick an ACTIVE reserve address above");
                     println!("  2. Run: wallet deposit-btc --reserve-address <reserve_addr>");
                     println!("  3. Send {amount} sats from your registered BTC address ({btc_addr}) to the reserve");
                     println!("  4. Check status with: wallet deposit-status");
-                    Ok(())
                 }
-                Err(e) => Err(format!("Registration failed: {e}")),
             }
+            Ok(())
         }
 
         #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
@@ -867,6 +1084,22 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                         println!("  EXPIRED  - Reserve is sweeping, do NOT send (new address available ~4 blocks after expiry)");
                         println!("\nReserve addresses rotate every ~144 BTC blocks (~24 hours).");
                         println!("The reserve must still be ACTIVE when your BTC transaction confirms on Bitcoin.");
+
+                        // Show QR code for the best reserve address
+                        if let Some((best, bl)) = find_best_reserve(&reserves, btc_height) {
+                            let status = reserve_status_label(bl).unwrap_or("UNKNOWN");
+                            let info_lines = vec![
+                                String::new(),
+                                "Recommended reserve (latest expiry):".to_string(),
+                                format!("  Address: {}", best.reserve_address),
+                                format!("  ID:      {}", best.reserve_id),
+                                format!(
+                                    "  Status:  {status} (~{bl} blocks / ~{} min remaining)",
+                                    bl * 10
+                                ),
+                            ];
+                            crate::helpers::print_with_qr(&info_lines, &best.reserve_address);
+                        }
                     }
                     Ok(())
                 }
@@ -995,20 +1228,35 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                         println!("\n  Total confirmed withdrawals: {total_withdrawn} sats ({w_confirmed} confirmed, {w_pending} pending)");
                     }
 
-                    // Update local DB: mark deposits as confirmed if they appear on the indexer
+                    // Update local DB: mark deposits as confirmed if they appear on the indexer.
+                    // Match by btc_tx_hash (Bitcoin TX ID) when available for exact matching.
+                    // Fall back to amount-based matching for older records without a tx hash.
                     if let Some(db_manager) = ow.get_db_manager() {
                         let local_deposits = db_manager.load_btc_deposits().unwrap_or_default();
-                        let confirmed_amounts: std::collections::HashSet<i64> = info
+
+                        // Build a set of confirmed BTC tx hashes from the indexer
+                        let confirmed_btc_hashes: std::collections::HashSet<String> = info
                             .deposits
                             .iter()
-                            .filter(|d| d.confirmed)
-                            .filter_map(|d| d.deposit_amount.parse::<i64>().ok())
+                            .filter(|d| d.confirmed && !d.btc_hash.is_empty())
+                            .map(|d| d.btc_hash.to_lowercase())
                             .collect();
+
                         for dep in &local_deposits {
-                            if dep.status != "confirmed" && confirmed_amounts.contains(&dep.amount)
-                            {
+                            if dep.status == "confirmed" {
+                                continue;
+                            }
+                            let should_confirm =
+                                if let Some(ref local_hash) = dep.btc_tx_hash {
+                                    // Exact match by Bitcoin TX hash
+                                    confirmed_btc_hashes.contains(&local_hash.to_lowercase())
+                                } else {
+                                    false
+                                };
+                            if should_confirm {
                                 if let Some(id) = dep.id {
-                                    let _ = db_manager.update_btc_deposit_status(id, "confirmed");
+                                    let _ =
+                                        db_manager.update_btc_deposit_status(id, "confirmed");
                                 }
                             }
                         }
@@ -1044,6 +1292,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                         let status_display = match d.status.as_str() {
                             "registered" => "REGISTERED",
                             "pending" => "PENDING",
+                            "sent" => "SENT",
                             other => other,
                         };
                         println!(
@@ -1376,7 +1625,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
             // 1. Check if BTC address is registered on-chain
             println!("Checking BTC registration status...");
-            let registration = match ow.wallet.fetch_registered_btc_by_address(&btc_addr).await {
+            match ow.wallet.fetch_registered_btc_by_address(&btc_addr).await {
                 Ok(Some(info)) => {
                     if info.twilight_address != tw_addr {
                         return Err(format!(
@@ -1385,7 +1634,9 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                             info.twilight_address
                         ));
                     }
-                    info
+                    println!("BTC address is registered:");
+                    println!("  BTC address:      {}", info.btc_deposit_address);
+                    println!("  Twilight address: {}", info.twilight_address);
                 }
                 Ok(None) => {
                     return Err(format!(
@@ -1394,13 +1645,9 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                     ));
                 }
                 Err(e) => {
-                    return Err(format!("Failed to check registration: {e}"));
+                    eprintln!("Warning: Could not check registration status ({e}). Proceeding anyway...");
                 }
-            };
-
-            println!("BTC address is registered:");
-            println!("  BTC address:      {}", registration.btc_deposit_address);
-            println!("  Twilight address: {}", registration.twilight_address);
+            }
             println!("  Deposit amount:   {amount_sats} sats");
 
             // 2. Show reserve addresses (or the one user chose)
@@ -1414,145 +1661,187 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                 .await
                 .unwrap_or(0);
 
-            if let Some(ref chosen_reserve) = reserve_address {
-                // Validate the chosen reserve exists and is active
+            // 3. Resolve target reserve
+            let target_reserve = if let Some(ref chosen) = reserve_address {
+                // User explicitly chose a reserve — validate it
                 let found = reserves
                     .iter()
-                    .find(|r| r.reserve_address == *chosen_reserve);
-                match found {
-                    Some(r) => {
-                        let blocks_left = if btc_height > 0 && r.unlock_height + 144 > btc_height {
-                            r.unlock_height + 144 - btc_height
-                        } else {
-                            0
-                        };
-                        if blocks_left <= 4 {
-                            return Err(format!(
-                                "Reserve {} is CRITICAL or EXPIRED. Pick a different reserve with more time remaining.",
-                                chosen_reserve
-                            ));
-                        }
-                        let status = if blocks_left > 72 {
-                            "ACTIVE"
-                        } else {
-                            "WARNING"
-                        };
-                        println!("\nSelected reserve:");
-                        println!("  Address:       {chosen_reserve}");
-                        println!("  Reserve ID:    {}", r.reserve_id);
-                        println!(
-                            "  Status:        {status} (~{blocks_left} blocks / ~{} min remaining)",
-                            blocks_left * 10
-                        );
+                    .find(|r| r.reserve_address == *chosen)
+                    .ok_or_else(|| {
+                        format!("Reserve address {chosen} not found. Run `wallet reserves` to see available reserves.")
+                    })?;
+                let bl = reserve_blocks_left(found, btc_height);
+                if bl <= 4 {
+                    return Err(format!(
+                        "Reserve {} is CRITICAL or EXPIRED. Pick a different reserve with more time remaining.",
+                        chosen
+                    ));
+                }
+                (found.clone(), bl)
+            } else if let Some(best) = find_best_reserve(&reserves, btc_height) {
+                best
+            } else {
+                return Err(
+                    "No active reserves available. Wait for reserve rotation.".to_string(),
+                );
+            };
 
-                        // Save deposit to DB
-                        if let Some(db_manager) = ow.get_db_manager() {
-                            let now = chrono::Utc::now().naive_utc();
-                            let deposit_entry = nyks_wallet::database::models::NewDbBtcDeposit {
-                                wallet_id: db_manager.get_wallet_id().to_string(),
-                                network_type: nyks_wallet::config::NETWORK_TYPE.to_string(),
-                                btc_address: btc_addr.clone(),
-                                twilight_address: tw_addr.clone(),
-                                reserve_address: Some(chosen_reserve.clone()),
+            let (ref reserve, blocks_left) = target_reserve;
+            let status = reserve_status_label(blocks_left).unwrap_or("UNKNOWN");
+            println!("\nTarget reserve:");
+            println!("  Address:  {} (ID: {})", reserve.reserve_address, reserve.reserve_id);
+            println!(
+                "  Status:   {status} (~{blocks_left} blocks / ~{} min remaining)",
+                blocks_left * 10
+            );
+
+            // 4. Auto-pay if btc_wallet available, otherwise manual instructions
+            if let Some(ref btc_wallet) = ow.wallet.btc_wallet {
+                // Estimate fee
+                println!("\nEstimating transaction fee...");
+                let estimated_fee = match nyks_wallet::wallet::btc_wallet::send::estimate_btc_fee(
+                    &nyks_wallet::wallet::btc_wallet::send::SendBtcParams {
+                        btc_wallet,
+                        destination: reserve.reserve_address.clone(),
+                        amount_sats,
+                        fee_rate_sat_vb: None,
+                    },
+                )
+                .await
+                {
+                    Ok(fee) => {
+                        println!("  Estimated fee: {fee} sats");
+                        fee
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "  Warning: Could not estimate fee ({e}), using 2000 sat buffer"
+                        );
+                        2_000
+                    }
+                };
+
+                let required_sats = amount_sats + estimated_fee;
+                println!("Checking BTC balance for {btc_addr}...");
+                let btc_balance = nyks_wallet::wallet::wallet::fetch_btc_balance(&btc_addr)
+                    .await
+                    .map_err(|e| format!("Failed to fetch BTC balance: {e}"))?;
+
+                if btc_balance.confirmed_sats < required_sats {
+                    return Err(format!(
+                        "Insufficient BTC balance. You need at least {required_sats} sats but your address \
+                         has only {} confirmed sats.\n  \
+                         (Amount: {amount_sats} sats + estimated fee: {estimated_fee} sats = {required_sats} sats needed)\n\n\
+                         Please send at least {} more sats to your BTC address:\n  {btc_addr}",
+                        btc_balance.confirmed_sats,
+                        required_sats - btc_balance.confirmed_sats,
+                    ));
+                }
+                println!(
+                    "  Balance OK: {} confirmed sats (need {required_sats} sats incl. estimated fee)\n",
+                    btc_balance.confirmed_sats
+                );
+
+                // Send
+                println!("Sending {amount_sats} sats to reserve...");
+                match nyks_wallet::wallet::btc_wallet::send::send_btc(
+                    nyks_wallet::wallet::btc_wallet::send::SendBtcParams {
+                        btc_wallet,
+                        destination: reserve.reserve_address.clone(),
+                        amount_sats,
+                        fee_rate_sat_vb: None,
+                    },
+                )
+                .await
+                {
+                    Ok(result) => {
+                        println!("\nBTC payment sent successfully!");
+                        println!("  TX ID: {}", result.txid);
+                        println!("  Fee:   {} sats", result.fee_sats);
+                        save_deposit_record(
+                            &ow,
+                            &btc_addr,
+                            &tw_addr,
+                            Some(reserve.reserve_address.clone()),
+                            Some(reserve.reserve_id),
+                            amount_sats,
+                            0,
+                            None,
+                            Some(result.txid.clone()),
+                            "sent",
+                        );
+                        // Save BTC transfer record for bitcoin-wallet history
+                        if let Some(db) = ow.get_db_manager() {
+                            let record = nyks_wallet::database::models::NewDbBtcTransfer {
+                                wallet_id: db.get_wallet_id().to_string(),
+                                network_type: nyks_wallet::config::BTC_NETWORK_TYPE.clone(),
+                                from_address: btc_addr.clone(),
+                                to_address: reserve.reserve_address.clone(),
                                 amount: amount_sats as i64,
-                                staking_amount: 0,
-                                registration_tx_hash: None,
-                                status: "pending".to_string(),
-                                created_at: now,
-                                updated_at: now,
+                                fee: result.fee_sats as i64,
+                                tx_id: Some(result.txid.clone()),
+                                status: "broadcast".to_string(),
+                                confirmations: 0,
+                                created_at: chrono::Utc::now().naive_utc(),
+                                updated_at: chrono::Utc::now().naive_utc(),
                             };
-                            if let Err(e) = db_manager.save_btc_deposit(deposit_entry) {
-                                eprintln!("Warning: Could not save deposit to database: {e}");
-                            } else {
-                                println!("\nDeposit recorded in database (status: pending).");
+                            if let Err(e) = db.save_btc_transfer(record) {
+                                eprintln!("Warning: Failed to save transfer to DB: {e}");
                             }
                         }
-
-                        println!(
-                            "\nSend {amount_sats} sats from your registered BTC address ONLY:"
-                        );
-                        println!("  From: {btc_addr}");
-                        println!("  To:   {chosen_reserve}");
-                        println!(
-                            "\nIMPORTANT: You MUST send from {btc_addr} (the registered address)."
-                        );
-                        println!(
-                            "Sending from any other address will NOT be credited to your account."
-                        );
-                        println!("\nAfter sending, check status with: wallet deposit-status");
+                        println!("\nCheck status with: wallet deposit-status");
                     }
-                    None => {
-                        return Err(format!(
-                            "Reserve address {chosen_reserve} not found. Run `wallet reserves` to see available reserves."
-                        ));
+                    Err(e) => {
+                        eprintln!("\nFailed to send BTC: {e}");
+                        eprintln!("You can retry or send manually:");
+                        eprintln!(
+                            "  Send {amount_sats} sats from {btc_addr} to {}",
+                            reserve.reserve_address
+                        );
+                        save_deposit_record(
+                            &ow,
+                            &btc_addr,
+                            &tw_addr,
+                            Some(reserve.reserve_address.clone()),
+                            Some(reserve.reserve_id),
+                            amount_sats,
+                            0,
+                            None,
+                            None,
+                            "pending",
+                        );
                     }
                 }
             } else {
-                // No reserve specified — save deposit intent and show all active reserves
-                if reserves.is_empty() {
-                    return Err("No BTC reserves found on chain.".to_string());
-                }
+                // No btc_wallet — manual flow
+                println!("\nNote: BTC wallet not loaded — manual payment required.");
+                println!("  To enable auto-pay, load a mnemonic:");
+                println!("  bitcoin-wallet update-bitcoin-wallet --mnemonic <phrase>\n");
 
-                // Save deposit intent to DB (no reserve yet)
-                if let Some(db_manager) = ow.get_db_manager() {
-                    let now = chrono::Utc::now().naive_utc();
-                    let deposit_entry = nyks_wallet::database::models::NewDbBtcDeposit {
-                        wallet_id: db_manager.get_wallet_id().to_string(),
-                        network_type: nyks_wallet::config::NETWORK_TYPE.to_string(),
-                        btc_address: btc_addr.clone(),
-                        twilight_address: tw_addr.clone(),
-                        reserve_address: None,
-                        amount: amount_sats as i64,
-                        staking_amount: 0,
-                        registration_tx_hash: None,
-                        status: "pending".to_string(),
-                        created_at: now,
-                        updated_at: now,
-                    };
-                    if let Err(e) = db_manager.save_btc_deposit(deposit_entry) {
-                        eprintln!("Warning: Could not save deposit to database: {e}");
-                    } else {
-                        println!(
-                            "\nDeposit intent recorded ({amount_sats} sats, status: pending)."
-                        );
-                    }
-                }
-
-                println!("\nActive reserve addresses — pick one to send {amount_sats} sats to:");
-                println!(
-                    "\n{:<6} {:<50} {:<15} {:<10} {:<12}",
-                    "ID", "RESERVE ADDRESS", "TOTAL VALUE", "STATUS", "BLOCKS LEFT"
+                save_deposit_record(
+                    &ow,
+                    &btc_addr,
+                    &tw_addr,
+                    Some(reserve.reserve_address.clone()),
+                    Some(reserve.reserve_id),
+                    amount_sats,
+                    0,
+                    None,
+                    None,
+                    "pending",
                 );
-                println!("{}", "-".repeat(95));
-                let mut any_active = false;
-                for r in &reserves {
-                    let blocks_left = if btc_height > 0 && r.unlock_height + 144 > btc_height {
-                        r.unlock_height + 144 - btc_height
-                    } else {
-                        0
-                    };
-                    if blocks_left <= 4 {
-                        continue; // skip CRITICAL/EXPIRED
-                    }
-                    any_active = true;
-                    let status = if blocks_left > 72 {
-                        "ACTIVE"
-                    } else {
-                        "WARNING"
-                    };
-                    println!(
-                        "{:<6} {:<50} {:<15} {:<10} {:<12}",
-                        r.reserve_id, r.reserve_address, r.total_value, status, blocks_left
-                    );
-                }
 
-                if !any_active {
-                    println!("  No active reserves available. Wait for reserve rotation.");
-                    return Ok(());
-                }
-
-                println!("\nSend {amount_sats} sats from {btc_addr} to any ACTIVE reserve above.");
-                println!("IMPORTANT: Send ONLY from your registered BTC address ({btc_addr}).");
+                println!(
+                    "\nSend {amount_sats} sats from your registered BTC address ONLY:"
+                );
+                println!("  From: {btc_addr}");
+                println!("  To:   {}", reserve.reserve_address);
+                println!(
+                    "\nIMPORTANT: You MUST send from {btc_addr} (the registered address)."
+                );
+                println!(
+                    "Sending from any other address will NOT be credited to your account."
+                );
                 println!("\nAfter sending, check status with: wallet deposit-status");
             }
             Ok(())

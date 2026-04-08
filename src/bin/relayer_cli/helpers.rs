@@ -271,3 +271,96 @@ pub(crate) async fn resolve_order_wallet(
     let pwd = resolve_password(password);
     load_order_wallet_from_db(&wid, pwd, None)
 }
+
+// ---------------------------------------------------------------------------
+// QR code display
+// ---------------------------------------------------------------------------
+
+/// Visible width of a string after stripping ANSI escape sequences.
+fn visible_width(s: &str) -> usize {
+    let mut width = 0;
+    let mut in_escape = false;
+    for c in s.chars() {
+        if in_escape {
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else if c == '\x1b' {
+            in_escape = true;
+        } else {
+            width += 1;
+        }
+    }
+    width
+}
+
+/// Get the terminal width using libc ioctl, falling back to `$COLUMNS`.
+fn get_terminal_width() -> Option<u16> {
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
+            return Some(ws.ws_col);
+        }
+    }
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+}
+
+/// Print a QR code for `data` alongside `info_lines`.
+///
+/// If the terminal is wide enough the QR code is rendered to the right of the
+/// text; otherwise it is printed below.  Gracefully degrades when the QR
+/// library fails or the terminal width cannot be determined.
+pub(crate) fn print_with_qr(info_lines: &[String], data: &str) {
+    match qr2term::generate_qr_string(data) {
+        Ok(qr) => {
+            let qr_lines: Vec<&str> = qr.lines().collect();
+            let qr_width = qr_lines
+                .iter()
+                .map(|l| visible_width(l))
+                .max()
+                .unwrap_or(0);
+            let text_width = info_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+            let gap = 4;
+            let term_width = get_terminal_width().unwrap_or(80) as usize;
+
+            if text_width + gap + qr_width <= term_width {
+                // Side-by-side: text on the left, QR on the right
+                let total_rows = std::cmp::max(info_lines.len(), qr_lines.len());
+                for i in 0..total_rows {
+                    let text_part = if i < info_lines.len() {
+                        &info_lines[i]
+                    } else {
+                        ""
+                    };
+                    let qr_part = if i < qr_lines.len() {
+                        qr_lines[i]
+                    } else {
+                        ""
+                    };
+                    println!(
+                        "{:<width$}{}{}",
+                        text_part,
+                        " ".repeat(gap),
+                        qr_part,
+                        width = text_width
+                    );
+                }
+            } else {
+                // Stacked: text first, then QR below
+                for line in info_lines {
+                    println!("{line}");
+                }
+                println!();
+                print!("{qr}");
+            }
+        }
+        Err(e) => {
+            for line in info_lines {
+                println!("{line}");
+            }
+            eprintln!("\n  (Could not render QR code: {e})");
+        }
+    }
+}

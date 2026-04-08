@@ -103,6 +103,7 @@ bdk_esplora = { version = "0.22", default-features = false, features = ["async-h
 aes-gcm = "0.10"
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
+qr2term = "0.3"
 
 # ---- Database (feature-gated) ----------------------------------------------
 diesel = { version = "2.1", features = ["chrono", "r2d2"], optional = true }

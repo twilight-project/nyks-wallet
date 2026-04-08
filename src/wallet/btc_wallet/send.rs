@@ -28,6 +28,58 @@ pub struct SendBtcResult {
     pub fee_sats: u64,
 }
 
+/// Estimate the fee for a BTC transaction without signing or broadcasting.
+///
+/// Syncs the wallet, builds the transaction, and returns the estimated fee in sats.
+pub async fn estimate_btc_fee(params: &SendBtcParams<'_>) -> anyhow::Result<u64> {
+    let mut wallet = params.btc_wallet.create_bdk_wallet()?;
+    let network = params.btc_wallet.network;
+
+    let (primary, fallback) = crate::config::esplora_endpoints();
+
+    let client = match esplora_client::Builder::new(primary).build_async() {
+        Ok(c) => c,
+        Err(_) => esplora_client::Builder::new(fallback)
+            .build_async()
+            .map_err(|e| anyhow!("Failed to create Esplora client: {e}"))?,
+    };
+
+    let request = wallet.start_full_scan().build();
+    let update = client
+        .full_scan(request, 5, 5)
+        .await
+        .map_err(|e| anyhow!("Failed to sync wallet UTXOs: {e}"))?;
+    wallet.apply_update(update)?;
+
+    let dest_addr = Address::from_str(&params.destination)
+        .map_err(|e| anyhow!("Invalid destination address: {e}"))?
+        .require_network(network.to_bitcoin_network())
+        .map_err(|e| anyhow!("Address network mismatch: {e}"))?;
+
+    let mut tx_builder = wallet.build_tx();
+    tx_builder.add_recipient(dest_addr.script_pubkey(), Amount::from_sat(params.amount_sats));
+
+    if let Some(rate) = params.fee_rate_sat_vb {
+        let rate_u64 = (rate.ceil()) as u64;
+        tx_builder.fee_rate(bdk_wallet::bitcoin::FeeRate::from_sat_per_vb(rate_u64).unwrap());
+    }
+
+    match tx_builder.finish() {
+        Ok(psbt) => {
+            let fee_sats = psbt.fee().map(|f| f.to_sat()).unwrap_or(0);
+            Ok(fee_sats)
+        }
+        Err(bdk_wallet::error::CreateTxError::CoinSelection(insufficient)) => {
+            // BDK tells us exactly how much is needed (amount + fee).
+            // Even though the wallet can't fund the tx, we can derive the fee.
+            let needed_sats = insufficient.needed.to_sat();
+            let fee_sats = needed_sats.saturating_sub(params.amount_sats);
+            Ok(fee_sats)
+        }
+        Err(e) => Err(anyhow!("{e}")),
+    }
+}
+
 /// Build, sign, and broadcast a Bitcoin transaction via Esplora.
 ///
 /// 1. Creates a BDK wallet from the BtcWallet key data
@@ -39,18 +91,7 @@ pub async fn send_btc(params: SendBtcParams<'_>) -> anyhow::Result<SendBtcResult
     let mut wallet = params.btc_wallet.create_bdk_wallet()?;
     let network = params.btc_wallet.network;
 
-    // Pick Esplora endpoint
-    let (primary, fallback) = if crate::config::is_btc_mainnet() {
-        (
-            "https://blockstream.info/api",
-            "https://mempool.space/api",
-        )
-    } else {
-        (
-            "https://blockstream.info/testnet/api",
-            "https://mempool.space/testnet4/api",
-        )
-    };
+    let (primary, fallback) = crate::config::esplora_endpoints();
 
     // Try primary, fall back on failure
     let client = match esplora_client::Builder::new(primary).build_async() {

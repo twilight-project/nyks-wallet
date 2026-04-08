@@ -11,6 +11,7 @@ use reqwest::Client;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use tokio::time::{sleep, Duration};
 use zeroize::ZeroizeOnDrop;
 pub const BECH_PREFIX: &str = "twilight";
@@ -234,7 +235,8 @@ impl Wallet {
     pub async fn create_new_with_random_btc_address() -> anyhow::Result<Wallet> {
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
         let keys = derive_keys(&mnemonic)?;
-        let btc_wallet = crate::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic.to_string())?;
+        let btc_wallet =
+            crate::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic.to_string())?;
         let btc_address = btc_wallet.address.clone();
 
         Ok(Wallet {
@@ -335,7 +337,8 @@ impl Wallet {
             btc_address_registered: account_info["btc_address_registered"]
                 .as_bool()
                 .unwrap_or_default(),
-            btc_wallet: account_info.get("btc_wallet")
+            btc_wallet: account_info
+                .get("btc_wallet")
                 .and_then(|v| serde_json::from_value(v.clone()).ok()),
             account_info: None,
             chain_config: WalletEndPointConfig::new(
@@ -539,8 +542,13 @@ impl Wallet {
         let account_number = account_details.account.account_number;
         let sequence = account_details.account.sequence;
 
-        let signed_tx = method_type
-            .sign_msg::<crate::MsgRegisterBtcDepositAddress>(any_msg, pk, sequence, account_number, sk)?;
+        let signed_tx = method_type.sign_msg::<crate::MsgRegisterBtcDepositAddress>(
+            any_msg,
+            pk,
+            sequence,
+            account_number,
+            sk,
+        )?;
 
         let method = Method::broadcast_tx_sync;
         let (tx_send, _): (RpcBody<TxParams>, String) =
@@ -609,8 +617,13 @@ impl Wallet {
         let account_number = account_details.account.account_number;
         let sequence = account_details.account.sequence;
 
-        let signed_tx = method_type
-            .sign_msg::<crate::MsgWithdrawBtcRequest>(any_msg, pk, sequence, account_number, sk)?;
+        let signed_tx = method_type.sign_msg::<crate::MsgWithdrawBtcRequest>(
+            any_msg,
+            pk,
+            sequence,
+            account_number,
+            sk,
+        )?;
 
         let method = Method::broadcast_tx_sync;
         let (tx_send, _): (RpcBody<TxParams>, String) =
@@ -627,7 +640,10 @@ impl Wallet {
                 let tx_hash = result.get_tx_hash();
                 let code = result.get_code();
                 if code == 0 {
-                    info!("Withdrawal request submitted: {} sats to {}", withdraw_amount, withdraw_address);
+                    info!(
+                        "Withdrawal request submitted: {} sats to {}",
+                        withdraw_amount, withdraw_address
+                    );
                     Ok(tx_hash)
                 } else {
                     Err(anyhow!(
@@ -654,7 +670,11 @@ impl Wallet {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("Failed to fetch BTC reserves ({}): {}", status, body));
+            return Err(anyhow!(
+                "Failed to fetch BTC reserves ({}): {}",
+                status,
+                body
+            ));
         }
 
         let json: Value = response.json().await?;
@@ -666,16 +686,64 @@ impl Wallet {
         let mut result = Vec::new();
         for r in reserves {
             result.push(BtcReserve {
-                reserve_id: r.get("ReserveId").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
-                reserve_address: r.get("ReserveAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                judge_address: r.get("JudgeAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                btc_relay_capacity_value: r.get("BtcRelayCapacityValue").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
-                total_value: r.get("TotalValue").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
-                private_pool_value: r.get("PrivatePoolValue").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
-                public_value: r.get("PublicValue").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
-                fee_pool: r.get("FeePool").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
-                unlock_height: r.get("UnlockHeight").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
-                round_id: r.get("RoundId").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                reserve_id: r
+                    .get("ReserveId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                reserve_address: r
+                    .get("ReserveAddress")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                judge_address: r
+                    .get("JudgeAddress")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                btc_relay_capacity_value: r
+                    .get("BtcRelayCapacityValue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                total_value: r
+                    .get("TotalValue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                private_pool_value: r
+                    .get("PrivatePoolValue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                public_value: r
+                    .get("PublicValue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                fee_pool: r
+                    .get("FeePool")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                unlock_height: r
+                    .get("UnlockHeight")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                round_id: r
+                    .get("RoundId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
             });
         }
 
@@ -747,7 +815,11 @@ impl Wallet {
                 return Ok(None);
             }
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("Failed to query deposit status ({}): {}", status, body));
+            return Err(anyhow!(
+                "Failed to query deposit status ({}): {}",
+                status,
+                body
+            ));
         }
 
         let json: Value = response.json().await?;
@@ -786,7 +858,11 @@ impl Wallet {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!("Failed to fetch deposit addresses ({}): {}", status, body));
+            return Err(anyhow!(
+                "Failed to fetch deposit addresses ({}): {}",
+                status,
+                body
+            ));
         }
 
         let json: Value = response.json().await?;
@@ -803,12 +879,34 @@ impl Wallet {
                 .unwrap_or("");
             if twilight_addr == self.twilightaddress {
                 results.push(BtcDepositDetail {
-                    btc_deposit_address: a.get("btcDepositAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    btc_satoshi_amount: a.get("btcSatoshiTestAmount").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
-                    twilight_staking_amount: a.get("twilightStakingAmount").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                    btc_deposit_address: a
+                        .get("btcDepositAddress")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    btc_satoshi_amount: a
+                        .get("btcSatoshiTestAmount")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0),
+                    twilight_staking_amount: a
+                        .get("twilightStakingAmount")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0),
                     twilight_address: twilight_addr.to_string(),
-                    is_confirmed: a.get("isConfirmed").and_then(|v| v.as_bool()).unwrap_or(false),
-                    creation_block_height: a.get("CreationTwilightBlockHeight").and_then(|v| v.as_str()).unwrap_or("0").parse().unwrap_or(0),
+                    is_confirmed: a
+                        .get("isConfirmed")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    creation_block_height: a
+                        .get("CreationTwilightBlockHeight")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0),
                 });
             }
         }
@@ -905,12 +1003,30 @@ impl Wallet {
 
         let json: Value = response.json().await?;
 
-        let account = json.get("account").ok_or_else(|| anyhow!("Missing account field"))?;
-        let address = account.get("address").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let balance = account.get("balance").and_then(|v| v.as_str()).unwrap_or("0").to_string();
+        let account = json
+            .get("account")
+            .ok_or_else(|| anyhow!("Missing account field"))?;
+        let address = account
+            .get("address")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let balance = account
+            .get("balance")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0")
+            .to_string();
         let tx_count = account.get("txCount").and_then(|v| v.as_u64()).unwrap_or(0);
-        let first_seen = account.get("firstSeen").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let last_seen = account.get("lastSeen").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let first_seen = account
+            .get("firstSeen")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let last_seen = account
+            .get("lastSeen")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let balances = json
             .get("balances")
@@ -918,8 +1034,16 @@ impl Wallet {
             .map(|arr| {
                 arr.iter()
                     .map(|b| IndexerBalance {
-                        denom: b.get("denom").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        amount: b.get("amount").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
+                        denom: b
+                            .get("denom")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        amount: b
+                            .get("amount")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
                     })
                     .collect()
             })
@@ -932,15 +1056,42 @@ impl Wallet {
                 arr.iter()
                     .map(|d| IndexerDeposit {
                         id: d.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
-                        tx_hash: d.get("txHash").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        tx_hash: d
+                            .get("txHash")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         block_height: d.get("blockHeight").and_then(|v| v.as_u64()).unwrap_or(0),
-                        reserve_address: d.get("reserveAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        deposit_amount: d.get("depositAmount").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
-                        btc_height: d.get("btcHeight").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
-                        btc_hash: d.get("btcHash").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        reserve_address: d
+                            .get("reserveAddress")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        deposit_amount: d
+                            .get("depositAmount")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
+                        btc_height: d
+                            .get("btcHeight")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
+                        btc_hash: d
+                            .get("btcHash")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         votes: d.get("votes").and_then(|v| v.as_u64()).unwrap_or(0),
-                        confirmed: d.get("confirmed").and_then(|v| v.as_bool()).unwrap_or(false),
-                        created_at: d.get("createdAt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        confirmed: d
+                            .get("confirmed")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                        created_at: d
+                            .get("createdAt")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                     })
                     .collect()
             })
@@ -953,14 +1104,40 @@ impl Wallet {
                 arr.iter()
                     .map(|w| IndexerWithdrawal {
                         id: w.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
-                        withdraw_identifier: w.get("withdrawIdentifier").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                        withdraw_address: w.get("withdrawAddress").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        withdraw_reserve_id: w.get("withdrawReserveId").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
-                        withdraw_amount: w.get("withdrawAmount").and_then(|v| v.as_str()).unwrap_or("0").to_string(),
-                        is_confirmed: w.get("isConfirmed").and_then(|v| v.as_bool()).unwrap_or(false),
+                        withdraw_identifier: w
+                            .get("withdrawIdentifier")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32,
+                        withdraw_address: w
+                            .get("withdrawAddress")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        withdraw_reserve_id: w
+                            .get("withdrawReserveId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
+                        withdraw_amount: w
+                            .get("withdrawAmount")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
+                        is_confirmed: w
+                            .get("isConfirmed")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
                         block_height: w.get("blockHeight").and_then(|v| v.as_u64()).unwrap_or(0),
-                        created_at: w.get("createdAt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        updated_at: w.get("updatedAt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        created_at: w
+                            .get("createdAt")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        updated_at: w
+                            .get("updatedAt")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                     })
                     .collect()
             })
@@ -994,11 +1171,143 @@ impl Wallet {
             .get_signature(),
         ))
     }
+
+    /// Fetch proposed BTC reserves from sweep address proposals.
+    /// The `limit` parameter controls how many recent records to return.
+    /// Parses each btcScript to extract the CLTV unlock height and returns
+    /// the reserve address (btcAddress) along with the unlock height.
+    pub async fn fetch_btc_proposed_reserve(
+        &self,
+        limit: u64,
+    ) -> anyhow::Result<Vec<BtcProposedReserve>> {
+        let url = format!(
+            "{}/twilight-project/nyks/bridge/propose_sweep_addresses_all/{}",
+            self.chain_config.lcd_endpoint, limit
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to fetch proposed sweep addresses ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let json: Value = response.json().await?;
+        let msgs = json
+            .get("proposeSweepAddressMsgs")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow!("Missing proposeSweepAddressMsgs in response"))?;
+
+        let mut results = Vec::new();
+        for msg in msgs {
+            let btc_address = msg
+                .get("btcAddress")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing btcAddress in proposal"))?
+                .to_string();
+
+            let btc_script_hex = msg
+                .get("btcScript")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing btcScript in proposal"))?;
+
+            let reserve_id = msg
+                .get("reserveId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string();
+
+            let round_id = msg
+                .get("roundId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string();
+
+            let judge_address = msg
+                .get("judgeAddress")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let unlock_height = parse_cltv_from_script(btc_script_hex)?;
+
+            results.push(BtcProposedReserve {
+                reserve_address: btc_address,
+                unlock_height,
+                reserve_id,
+                round_id,
+                judge_address,
+            });
+        }
+
+        // For each unique reserve_id, keep only the entry with the highest round_id.
+        let mut best_by_reserve: HashMap<String, BtcProposedReserve> = HashMap::new();
+        for entry in results {
+            let round: u64 = entry.round_id.parse().unwrap_or(0);
+            let existing = best_by_reserve.get(&entry.reserve_id);
+            let replace = match existing {
+                None => true,
+                Some(prev) => round > prev.round_id.parse::<u64>().unwrap_or(0),
+            };
+            if replace {
+                best_by_reserve.insert(entry.reserve_id.clone(), entry);
+            }
+        }
+
+        Ok(best_by_reserve.into_values().collect())
+    }
+}
+
+/// Parse the CLTV (CheckLockTimeVerify) unlock height from a hex-encoded BTC script.
+/// Looks for the pattern: OP_CHECKMULTISIG (0xae/0xaf) followed by a push opcode + locktime + OP_CLTV (0xb1).
+fn parse_cltv_from_script(hex_script: &str) -> anyhow::Result<u64> {
+    let script_bytes =
+        hex::decode(hex_script).map_err(|e| anyhow!("Invalid hex in btcScript: {}", e))?;
+
+    // Find OP_CHECKLOCKTIMEVERIFY (0xb1) and read the pushed value before it.
+    // The pattern is: <push_opcode> <locktime_bytes> OP_CLTV(0xb1) OP_DROP(0x75)
+    for i in 0..script_bytes.len() {
+        if script_bytes[i] == 0xb1 {
+            // The bytes before 0xb1 are the locktime push
+            // push opcode tells us the length: 0x01..0x4b = direct push of N bytes
+            // We need to find the push opcode that starts this sequence
+            if i < 2 {
+                continue;
+            }
+            // Walk backwards to find the push length opcode
+            // Common cases: 03 XX XX XX b1 (3-byte push) or 02 XX XX b1 (2-byte push)
+            for push_len in 1u8..=4 {
+                let start = i.checked_sub(push_len as usize + 1);
+                if let Some(start) = start {
+                    if script_bytes[start] == push_len {
+                        let locktime_bytes =
+                            &script_bytes[start + 1..start + 1 + push_len as usize];
+                        let mut value: u64 = 0;
+                        for (j, &byte) in locktime_bytes.iter().enumerate() {
+                            value |= (byte as u64) << (8 * j);
+                        }
+                        return Ok(value);
+                    }
+                }
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "Could not find OP_CHECKLOCKTIMEVERIFY in btcScript"
+    ))
 }
 
 pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
     if crate::config::NETWORK_TYPE.as_str() == "mainnet" {
-        return Err(anyhow!("get_test_tokens is only available on testnet. Use register-btc for mainnet deposits."));
+        return Err(anyhow!(
+            "get_test_tokens is only available on testnet. Use register-btc for mainnet deposits."
+        ));
     }
 
     let balance = wallet.update_balance().await?;
@@ -1097,5 +1406,51 @@ mod tests {
         println!("Wallet address:     {}", wallet.twilightaddress);
         println!("Wallet BTC address: {}", wallet.btc_address);
         println!("Public key hex:     {}", hex::encode(&wallet.public_key));
+    }
+
+    #[test]
+    fn test_parse_cltv_from_script() {
+        // Real script from propose_sweep_addresses_all response
+        let script = "542103bb383539f308f0b7e4b927385228367849eb7bcac29b3910258dabd580754f1f2103c376a184b351986910aa3dfdbfff794852850ba9f2e50cc43e6b34c5e81cbb15210392cee64c6886601943f83c38e9a566c08404d580bae1e5f93aa81e87c66aa169210267d9a474a97e50e02d7de4108a7e22499b85c205bd37ee883abf91df9c61b8b02102f6b205458790818994b85400bc311a053db17d43c83c9f03401057838ede691a21036beca3c8d5987b592f31e159d569d6ba1773367e795642fc1e421572c72995ce56af0300690eb1";
+        let height = parse_cltv_from_script(script).expect("Failed to parse CLTV");
+        // 0x0e6900 little-endian = 944384
+        assert_eq!(height, 944384);
+        println!("Parsed unlock height: {}", height);
+    }
+
+    #[test]
+    fn test_parse_cltv_invalid_script() {
+        // Script with no OP_CHECKLOCKTIMEVERIFY
+        let result = parse_cltv_from_script("5221deadbeef52ae");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_cltv_invalid_hex() {
+        let result = parse_cltv_from_script("not_valid_hex");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_btc_proposed_reserve() {
+        let wallet = Wallet::from_mnemonic(
+            "test test test test test test test test test test test junk",
+            None,
+        )
+        .expect("Failed to create wallet");
+
+        let reserves = wallet
+            .fetch_btc_proposed_reserve(10)
+            .await
+            .expect("Failed to fetch proposed reserves");
+
+        println!("Found {} unique reserves (from 10 records):", reserves.len());
+        for r in &reserves {
+            println!(
+                "  reserve_id: {}, round_id: {}, unlock_height: {}, address: {}, judge: {}",
+                r.reserve_id, r.round_id, r.unlock_height, r.reserve_address, r.judge_address
+            );
+        }
+        assert!(!reserves.is_empty(), "Should have at least one proposed reserve");
     }
 }
