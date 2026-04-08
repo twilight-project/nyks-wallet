@@ -4,8 +4,8 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::commands::WalletCmd;
 use crate::helpers::{
-    load_order_wallet_from_db, resolve_password, resolve_wallet_id,
-    session_clear, session_load, session_save,
+    load_order_wallet_from_db, resolve_password, resolve_wallet_id, session_clear, session_load,
+    session_save,
 };
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -256,7 +256,9 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                 );
                 println!("{}", "-".repeat(100));
                 for acc in accounts {
-                    let tx_type_str = acc.tx_type.as_ref()
+                    let tx_type_str = acc
+                        .tx_type
+                        .as_ref()
                         .map(|t| format!("{:?}", t))
                         .unwrap_or_else(|| "-".to_string());
                     println!(
@@ -359,7 +361,11 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             Ok(())
         }
 
-        WalletCmd::Unlock { wallet_id, password, force } => {
+        WalletCmd::Unlock {
+            wallet_id,
+            password,
+            force,
+        } => {
             // If a session is already active, error unless --force.
             if session_load().is_some() && !force {
                 eprintln!(
@@ -504,7 +510,28 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             }
 
             let old_address = ow.wallet.btc_address.clone();
+            let twilight_address = ow.wallet.twilightaddress.clone();
+
+            // Check if the new BTC address is already linked to another twilight address
+            if let Some(info) = ow
+                .wallet
+                .fetch_registered_btc_by_address(&btc_address)
+                .await
+                .map_err(|e| format!("Failed to check BTC address registration: {}", e))?
+            {
+                if info.twilight_address != twilight_address {
+                    return Err(format!(
+                        "Cannot update BTC address: the new BTC address ({}) is already \
+                         linked to a different twilight address ({}).\n\
+                         A BTC address can only be linked to one twilight address.",
+                        btc_address, info.twilight_address
+                    ));
+                }
+            }
+
             ow.wallet.btc_address = btc_address.clone();
+            // Invalidate the old BTC wallet since the address has changed
+            ow.wallet.btc_wallet = None;
 
             let db_manager = ow
                 .get_db_manager()
@@ -582,7 +609,10 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                         return Ok(());
                     } else {
                         return Err(format!(
-                            "BTC address {btc_addr} is already registered to another twilight address: {}",
+                            "BTC address {btc_addr} is already registered to another twilight address: {}\n\n\
+                             If this is not your BTC address, you can:\n  \
+                             - Update the BTC address:  `wallet update-btc-address --btc-address <new_address>`\n  \
+                             - Update the BTC wallet:   `bitcoin-wallet update`",
                             info.twilight_address
                         ));
                     }
@@ -591,7 +621,10 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                     println!("BTC address not yet registered. Proceeding...\n");
                 }
                 Err(e) => {
-                    eprintln!("Warning: Could not check registration status: {e}");
+                    use log::debug;
+
+                    eprintln!("Warning: Could not check registration status");
+                    debug!("Error: {e}");
                     println!("Proceeding with registration anyway...\n");
                 }
             }
@@ -650,7 +683,33 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                 }
             }
 
-            // 3. Register on-chain
+            // 3. Check BTC balance is sufficient for the deposit amount
+            println!("Checking BTC balance for {btc_addr}...");
+            let btc_balance = nyks_wallet::wallet::wallet::fetch_btc_balance(&btc_addr)
+                .await
+                .map_err(|e| format!("Failed to fetch BTC balance: {e}"))?;
+
+            if btc_balance.confirmed_sats < amount {
+                return Err(format!(
+                    "Insufficient BTC balance. You need at least {amount} sats but your address \
+                     has only {} confirmed sats.\n\n\
+                     Please send at least {} more sats to your BTC address:\n  {btc_addr}\n\n\
+                     Note: This amount is excluding BTC transaction fees. \
+                     Ensure you maintain additional balance to cover network fees.\n\n\
+                     If this is not your BTC address, you can:\n  \
+                     - Update the BTC address:  `wallet update-btc-address --btc-address <new_address>`\n  \
+                     - Update the BTC wallet:   `bitcoin-wallet update`\n\n\
+                     Then try again.",
+                    btc_balance.confirmed_sats,
+                    amount - btc_balance.confirmed_sats,
+                ));
+            }
+            println!(
+                "  Balance OK: {} confirmed sats (need {amount} sats)\n",
+                btc_balance.confirmed_sats
+            );
+
+            // 4. Register on-chain
             println!("Registering BTC deposit address on-chain");
             println!("  Twilight address: {tw_addr}");
             println!("  BTC address:      {btc_addr}");
