@@ -21,8 +21,9 @@ use crate::{
         nonce_manager::NonceManager,
         relayer_api::RelayerJsonRpcClient,
         relayer_order::{
-            cancel_trader_order, close_lend_order, close_trader_order_internal,
-            close_trader_order_sltp_internal, create_lend_order, create_trader_order,
+            cancel_trader_order, cancel_trader_order_sltp, close_lend_order,
+            close_trader_order_internal, close_trader_order_sltp_internal, create_lend_order,
+            create_trader_order,
         },
     },
     wallet::Wallet,
@@ -47,7 +48,7 @@ use twilight_client_sdk::{
     relayer_rpcclient::method::UtxoDetailResponse,
     relayer_types::{
         LendOrder, OrderStatus, OrderType, PositionType, QueryLendOrderZkos, QueryTraderOrderZkos,
-        TXType, TraderOrder,
+        SlTpOrderCancel, TXType, TraderOrder,
     },
     transaction::{Receiver, Sender},
     transfer::{
@@ -1205,52 +1206,147 @@ impl OrderWallet {
         self.validate_market_not_halted().await?;
         let account_address = self.zk_accounts.get_account_address(&index)?;
         let secret_key = self.get_secret_key(index);
-        let request_id = self.request_id(index)?;
-        let tx_hash = fetch_tx_hash_with_retry(request_id, &self.relayer_api_client).await?;
-        if tx_hash.order_status != OrderStatus::PENDING {
+        let trader_orderv1 = self.query_trader_order_v1(index).await?;
+        let trader_order = trader_orderv1.order;
+        let is_pending_limit = trader_order.order_status == OrderStatus::PENDING;
+        let is_close_limit = trader_orderv1.settle_limit.is_some();
+        if !is_pending_limit && !is_close_limit {
             return Err(format!(
-                "Order is not pending, status: {}",
-                tx_hash.order_status.to_str()
+                "Order is not pending or close limit, status: {}",
+                trader_order.order_status.to_str()
             ));
         }
         let request_id = cancel_trader_order(
             account_address.clone(),
             &secret_key,
             account_address.clone(),
-            tx_hash.order_id,
+            trader_order.uuid,
             &self.relayer_api_client,
         )
         .await?;
-        let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
-        if tx_hash.order_status != OrderStatus::CANCELLED {
+        if is_pending_limit {
+            let tx_hash = fetch_tx_hash_with_retry(&request_id, &self.relayer_api_client).await?;
+            if tx_hash.order_status != OrderStatus::CANCELLED {
+                return Err(format!(
+                    "Order is not cancelled, status: {}",
+                    tx_hash.order_status.to_str()
+                ));
+            }
+
+            self.zk_accounts
+                .update_io_type(&index, IOType::Coin, None)?;
+            self.try_update_account_in_db(&index);
+
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            {
+                let balance = self.zk_accounts.get_balance(&index).unwrap_or(0);
+                self.log_order_history(
+                    index,
+                    &request_id,
+                    "cancel_pending",
+                    "LIMIT",
+                    None,
+                    balance,
+                    None,
+                    None,
+                    None,
+                    "cancelled",
+                    None,
+                );
+            }
+        }
+        if is_close_limit {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            {
+                let balance = self.zk_accounts.get_balance(&index).unwrap_or(0);
+                self.log_order_history(
+                    index,
+                    &request_id,
+                    "cancel_close_limit",
+                    "LIMIT",
+                    None,
+                    balance,
+                    None,
+                    None,
+                    None,
+                    "cancelled",
+                    None,
+                );
+            }
+        }
+        Ok(request_id)
+    }
+
+    pub async fn cancel_trader_order_sltp(
+        &mut self,
+        index: AccountIndex,
+        cancel_sl: bool,
+        cancel_tp: bool,
+    ) -> Result<String, String> {
+        self.validate_market_not_halted().await?;
+        let account_address = self.zk_accounts.get_account_address(&index)?;
+        let secret_key = self.get_secret_key(index);
+        let trader_orderv1 = self.query_trader_order_v1(index).await?;
+        let trader_order = trader_orderv1.order;
+        let is_sl_cancellable = trader_orderv1.stop_loss.is_some();
+        let is_tp_cancellable = trader_orderv1.take_profit.is_some();
+        if !is_sl_cancellable && !is_tp_cancellable {
+            return Err("Order is not sl or tp cancellable".to_string());
+        }
+        if trader_order.order_status != OrderStatus::FILLED {
             return Err(format!(
-                "Order is not cancelled, status: {}",
-                tx_hash.order_status.to_str()
+                "Order is not filled, status: {}",
+                trader_order.order_status.to_str()
             ));
         }
-
-        self.zk_accounts
-            .update_io_type(&index, IOType::Coin, None)?;
-        self.try_update_account_in_db(&index);
-
-        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-        {
-            let balance = self.zk_accounts.get_balance(&index).unwrap_or(0);
-            self.log_order_history(
-                index,
-                &request_id,
-                "cancel",
-                "TRADER",
-                None,
-                balance,
-                None,
-                None,
-                None,
-                "cancelled",
-                None,
-            );
+        let sltp_cancel = SlTpOrderCancel::new(cancel_sl, cancel_tp);
+        let request_id = cancel_trader_order_sltp(
+            account_address.clone(),
+            &secret_key,
+            account_address.clone(),
+            trader_order.uuid,
+            sltp_cancel,
+            &self.relayer_api_client,
+        )
+        .await?;
+        if cancel_sl && is_sl_cancellable {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            {
+                let balance = self.zk_accounts.get_balance(&index).unwrap_or(0);
+                self.log_order_history(
+                    index,
+                    &request_id,
+                    "cancel_sl",
+                    "SLTP",
+                    None,
+                    balance,
+                    None,
+                    None,
+                    None,
+                    "sl_cancelled",
+                    None,
+                );
+            }
         }
-
+        if cancel_tp && is_tp_cancellable {
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            {
+                let balance = self.zk_accounts.get_balance(&index).unwrap_or(0);
+                self.log_order_history(
+                    index,
+                    &request_id,
+                    "cancel_tp",
+                    "SLTP",
+                    None,
+                    balance,
+                    None,
+                    None,
+                    None,
+                    "tp_cancelled",
+                    None,
+                );
+            }
+        }
         Ok(request_id)
     }
 

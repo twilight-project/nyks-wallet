@@ -20,7 +20,7 @@ pub type NYKS = u64;
 pub type SATS = u64;
 
 /// Returns the BIP-44 coin type based on `NETWORK_TYPE` env var.
-/// Testnet = 1 (SLIP-44), Mainnet = 118 (Cosmos). Must match Keplr's `slip44`.
+/// Testnet = 118 (SLIP-44), Mainnet = 118 (Cosmos). Must match Keplr's `slip44`.
 fn coin_type() -> u32 {
     use crate::config::NETWORK_TYPE;
     match NETWORK_TYPE.as_str() {
@@ -1444,13 +1444,19 @@ mod tests {
             .await
             .expect("Failed to fetch proposed reserves");
 
-        println!("Found {} unique reserves (from 10 records):", reserves.len());
+        println!(
+            "Found {} unique reserves (from 10 records):",
+            reserves.len()
+        );
         for r in &reserves {
             println!(
                 "  reserve_id: {}, round_id: {}, unlock_height: {}, address: {}, judge: {}",
                 r.reserve_id, r.round_id, r.unlock_height, r.reserve_address, r.judge_address
             );
         }
-        assert!(!reserves.is_empty(), "Should have at least one proposed reserve");
+        assert!(
+            !reserves.is_empty(),
+            "Should have at least one proposed reserve"
+        );
     }
 }

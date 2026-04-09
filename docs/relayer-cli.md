@@ -4,17 +4,51 @@ Command-line interface for managing Twilight wallets, trading orders, lending, p
 
 ## Building
 
+### Prerequisites
+
+- **Rust** — edition 2024 (install via [rustup](https://rustup.rs/))
+- **Protocol Buffers compiler** (`protoc`) — required by `build.rs` for protobuf code generation
+- **pkg-config** and **OpenSSL dev headers** (`libssl-dev`) — required by several dependencies
+- **PostgreSQL client library** (`libpq-dev`) — only if building with the `postgresql` feature
+
+**macOS:**
+
+```bash
+brew install protobuf openssl pkg-config
+# For PostgreSQL backend:
+brew install libpq
+```
+
+**Debian/Ubuntu:**
+
+```bash
+sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+# For PostgreSQL backend:
+sudo apt-get install -y libpq-dev
+```
+
+**Docker:** The included `Dockerfile` uses `rust:1.89` and installs all required dependencies automatically.
+
+### Build
+
 The CLI requires the `order-wallet` feature (enabled by default).
 
 ```bash
-# Default build (SQLite backend)
+# Default build (SQLite backend — bundled libsqlite3, no system dependency)
 cargo build --release --bin relayer-cli
 
-# With PostgreSQL backend instead
+# With PostgreSQL backend instead (requires libpq)
 cargo build --release --bin relayer-cli --no-default-features --features postgresql
 ```
 
 The binary will be at `target/release/relayer-cli`.
+
+### Docker
+
+```bash
+docker build -t relayer-cli .
+docker run -e RUST_LOG=info -e NETWORK_TYPE=testnet relayer-cli wallet balance
+```
 
 ## Environment Variables
 
@@ -23,26 +57,26 @@ If a variable is not set, `src/config.rs` applies code defaults (many are derive
 
 ### Core
 
-| Variable         | Description                                                                               | Default   |
-| ---------------- | ----------------------------------------------------------------------------------------- | --------- |
-| `RUST_LOG`       | Logging level (`info`, `debug`, `trace`)                                                  | —         |
-| `RUST_BACKTRACE` | Enable Rust backtraces for debugging (`1` or `full`)                                      | —         |
-| `CHAIN_ID`       | Blockchain network identifier                                                             | `nyks`    |
-| `NETWORK_TYPE`   | Network type — controls BIP-44 coin type (`testnet` uses coin type 1, `mainnet` uses 118) | `mainnet` |
-| `BTC_NETWORK_TYPE` | Bitcoin network for BTC key derivation, balance queries, and transfers. Falls back to `NETWORK_TYPE` if not set | `mainnet` |
+| Variable           | Description                                                                                                | Default   |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- | --------- |
+| `RUST_LOG`         | Logging level (`info`, `debug`, `trace`)                                                                   | —         |
+| `RUST_BACKTRACE`   | Enable Rust backtraces for debugging (`1` or `full`)                                                       | —         |
+| `CHAIN_ID`         | Blockchain network identifier                                                                              | `nyks`    |
+| `NETWORK_TYPE`     | Network type — controls default endpoint URLs and BIP-44 derivation (coin type 118 for both networks)      | `mainnet` |
+| `BTC_NETWORK_TYPE` | Bitcoin network for BTC key derivation, balance queries, and transfers. Falls back to `mainnet` if not set | `mainnet` |
 
 ### Chain Endpoints
 
 Used by the on-chain wallet for balance queries, transaction broadcasting, and faucet requests. Defaults are selected from `NETWORK_TYPE`.
 
-| Variable            | Description                                | Default (`mainnet`)                             | Default (`testnet`)                              |
-| ------------------- | ------------------------------------------ | ----------------------------------------------- | ------------------------------------------------ |
-| `NYKS_RPC_BASE_URL` | Nyks chain Tendermint RPC endpoint         | `https://rpc.twilight.org`                      | `https://rpc.twilight.rest`                      |
-| `NYKS_LCD_BASE_URL` | Nyks chain LCD (REST API) endpoint         | `https://lcd.twilight.org`                      | `https://lcd.twilight.rest`                      |
-| `FAUCET_BASE_URL`   | Faucet endpoint for requesting test tokens | empty string (disabled by default)              | `https://faucet-rpc.twilight.rest`               |
-| `TWILIGHT_INDEXER_URL` | Twilight indexer base URL (BTC block height, account queries) | `https://indexer.twilight.org` | `https://indexer.twilight.rest` |
-| `BTC_ESPLORA_PRIMARY_URL` | Primary Esplora API for BTC balance, fee estimation, and broadcasting | `https://blockstream.info/api` | `https://blockstream.info/testnet/api` |
-| `BTC_ESPLORA_FALLBACK_URL` | Fallback Esplora API (used when primary is unreachable) | `https://mempool.space/api` | `https://mempool.space/testnet4/api` |
+| Variable                   | Description                                                           | Default (`mainnet`)                | Default (`testnet`)                    |
+| -------------------------- | --------------------------------------------------------------------- | ---------------------------------- | -------------------------------------- |
+| `NYKS_RPC_BASE_URL`        | Nyks chain Tendermint RPC endpoint                                    | `https://rpc.twilight.org`         | `https://rpc.twilight.rest`            |
+| `NYKS_LCD_BASE_URL`        | Nyks chain LCD (REST API) endpoint                                    | `https://lcd.twilight.org`         | `https://lcd.twilight.rest`            |
+| `FAUCET_BASE_URL`          | Faucet endpoint for requesting test tokens                            | empty string (disabled by default) | `https://faucet-rpc.twilight.rest`     |
+| `TWILIGHT_INDEXER_URL`     | Twilight indexer base URL (BTC block height, account queries)         | `https://indexer.twilight.org`     | `https://indexer.twilight.rest`        |
+| `BTC_ESPLORA_PRIMARY_URL`  | Primary Esplora API for BTC balance, fee estimation, and broadcasting | `https://blockstream.info/api`     | `https://blockstream.info/testnet/api` |
+| `BTC_ESPLORA_FALLBACK_URL` | Fallback Esplora API (used when primary is unreachable)               | `https://mempool.space/api`        | `https://mempool.space/testnet/api`    |
 
 ### Order-Wallet Endpoints (feature: `order-wallet`)
 
@@ -95,7 +129,7 @@ relayer-cli [--json] <COMMAND>
 - `wallet` — create, import, load, list, balance, accounts, export, backup, restore, unlock/lock, info, change-password, update-btc-address, sync-nonce, send, register-btc, deposit-btc, reserves, deposit-status, withdraw-btc, withdraw-status, faucet
 - `bitcoin-wallet` — balance, transfer, receive, update-bitcoin-wallet, history (on-chain BTC operations)
 - `zkaccount` — fund, withdraw, transfer, split
-- `order` — open/close/cancel/query trader and lend orders, unlock-close-order, unlock-failed-order, history-trade, history-lend, funding-history, account-summary, tx-hashes
+- `order` — open/close/cancel/query trader and lend orders, unlock-close-order, unlock-failed-order, history-trade, history-lend, funding-history, account-summary, tx-hashes, request-history
 - `market` — query prices, orderbook, rates, historical data, candles, APY charts
 - `history` — view order and transfer history (requires DB)
 - `portfolio` — portfolio summary, balances (with unit conversion), liquidation risks
@@ -125,11 +159,11 @@ relayer-cli wallet create --wallet-id my-wallet --password s3cret
 relayer-cli wallet create --btc-address bc1q...
 ```
 
-| Flag                   | Description                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------------- |
-| `--wallet-id <ID>`     | Wallet ID for DB storage (defaults to the Twilight address)                           |
-| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)                       |
-| `--btc-address <ADDR>` | BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of generating a random one |
+| Flag                   | Description                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------- |
+| `--wallet-id <ID>`     | Wallet ID for DB storage (defaults to the Twilight address)                     |
+| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)                 |
+| `--btc-address <ADDR>` | BTC Native SegWit address (`bc1q...`) to use instead of generating a random one |
 
 ### `wallet import`
 
@@ -146,12 +180,12 @@ relayer-cli wallet import --wallet-id restored --password s3cret
 relayer-cli wallet import --btc-address bc1q...
 ```
 
-| Flag                   | Description                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------------ |
-| `--mnemonic <PHRASE>`  | 24-word BIP-39 mnemonic. If omitted, prompts securely via TTY                        |
-| `--wallet-id <ID>`     | Wallet ID for DB storage (defaults to the Twilight address)                          |
-| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)                      |
-| `--btc-address <ADDR>` | BTC SegWit address (`bc1q...` or `bc1p...`) to use instead of deriving from mnemonic |
+| Flag                   | Description                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------ |
+| `--mnemonic <PHRASE>`  | 24-word BIP-39 mnemonic. If omitted, prompts securely via TTY                  |
+| `--wallet-id <ID>`     | Wallet ID for DB storage (defaults to the Twilight address)                    |
+| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)                |
+| `--btc-address <ADDR>` | BTC Native SegWit address (`bc1q...`) to use instead of deriving from mnemonic |
 
 ### `wallet load`
 
@@ -176,6 +210,11 @@ relayer-cli wallet balance
 relayer-cli wallet balance --wallet-id my-wallet --password s3cret
 ```
 
+| Flag                | Description                                                     |
+| ------------------- | --------------------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>` | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
 ### `wallet list`
 
 List all wallets stored in the database. Requires `sqlite` or `postgresql` feature.
@@ -184,6 +223,10 @@ List all wallets stored in the database. Requires `sqlite` or `postgresql` featu
 relayer-cli wallet list
 relayer-cli wallet list --db-url "sqlite:///path/to/db"
 ```
+
+| Flag             | Description                       |
+| ---------------- | --------------------------------- |
+| `--db-url <URL>` | Override the default database URL |
 
 ### `wallet export`
 
@@ -261,6 +304,11 @@ Sync the transaction nonce/sequence manager from on-chain state. Useful for debu
 relayer-cli wallet sync-nonce --wallet-id my-wallet --password s3cret
 ```
 
+| Flag                | Description                                                     |
+| ------------------- | --------------------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>` | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
 Output shows the next sequence number, cached account number, and count of released (reclaimable) sequences.
 
 ### `wallet unlock`
@@ -290,11 +338,11 @@ relayer-cli wallet unlock --wallet-id my-wallet --password s3cret
 relayer-cli wallet unlock --force
 ```
 
-| Flag               | Description                                            |
-| ------------------ | ------------------------------------------------------ |
-| `--wallet-id <ID>` | Wallet ID to cache (prompts interactively if omitted)  |
-| `--password <PASS>`| Wallet password to cache (prompts interactively if omitted) |
-| `--force`          | Overwrite an existing session without error            |
+| Flag                | Description                                                 |
+| ------------------- | ----------------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID to cache (prompts interactively if omitted)       |
+| `--password <PASS>` | Wallet password to cache (prompts interactively if omitted) |
+| `--force`           | Overwrite an existing session without error                 |
 
 ### `wallet lock`
 
@@ -342,11 +390,11 @@ The address must be a native SegWit address (`bc1q...`). Taproot addresses (`bc1
 relayer-cli wallet update-btc-address --btc-address bc1q... --wallet-id my-wallet
 ```
 
-| Flag                   | Description                                |
-| ---------------------- | ------------------------------------------ |
+| Flag                   | Description                                             |
+| ---------------------- | ------------------------------------------------------- |
 | `--btc-address <ADDR>` | **Required.** New native SegWit BTC address (`bc1q...`) |
-| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID`) |
-| `--password <PASS>`    | DB encryption password                     |
+| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID`)              |
+| `--password <PASS>`    | DB encryption password                                  |
 
 ### `wallet send`
 
@@ -422,14 +470,14 @@ relayer-cli wallet deposit-btc --amount-mbtc 0.5
 relayer-cli wallet deposit-btc --amount-btc 0.0005
 ```
 
-| Flag                        | Description                                                                    |
-| --------------------------- | ------------------------------------------------------------------------------ |
-| `--amount <SATS>`           | Amount in satoshis (priority 1)                                                |
-| `--amount-mbtc <MBTC>`     | Amount in milli-BTC (1 mBTC = 100,000 sats, priority 2)                       |
-| `--amount-btc <BTC>`       | Amount in BTC (1 BTC = 100,000,000 sats, priority 3)                          |
-| `--reserve-address <ADDR>`  | Reserve address to send BTC to. If omitted, auto-selects the best reserve      |
-| `--wallet-id <ID>`          | Wallet ID (falls back to `NYKS_WALLET_ID`)                                    |
-| `--password <PASS>`         | DB encryption password                                                         |
+| Flag                       | Description                                                               |
+| -------------------------- | ------------------------------------------------------------------------- |
+| `--amount <SATS>`          | Amount in satoshis (priority 1)                                           |
+| `--amount-mbtc <MBTC>`     | Amount in milli-BTC (1 mBTC = 100,000 sats, priority 2)                   |
+| `--amount-btc <BTC>`       | Amount in BTC (1 BTC = 100,000,000 sats, priority 3)                      |
+| `--reserve-address <ADDR>` | Reserve address to send BTC to. If omitted, auto-selects the best reserve |
+| `--wallet-id <ID>`         | Wallet ID (falls back to `NYKS_WALLET_ID`)                                |
+| `--password <PASS>`        | DB encryption password                                                    |
 
 At least one amount flag is required. If multiple are provided, priority is: `--amount` > `--amount-mbtc` > `--amount-btc`.
 
@@ -457,13 +505,24 @@ Show all BTC reserve addresses on-chain. Fetches the current Bitcoin block heigh
 
 ```bash
 relayer-cli wallet reserves
+relayer-cli wallet reserves --wallet-id my-wallet --password s3cret
 ```
 
-Output columns: `ID`, `RESERVE ADDRESS`, `TOTAL VALUE`, `BLOCKS LEFT`, `STATUS`.
+| Flag                | Description                                                     |
+| ------------------- | --------------------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>` | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
+Output columns: `ID`, `ROUND`, `BLOCKS LEFT`, `STATUS`, `RESERVE ADDRESS`.
+
+Also shows:
+- Current BTC block height
+- Expired reserve ETA (when a new reserve address will become available)
+- QR code for the recommended reserve (latest-expiring active reserve)
 
 **Status key:**
-- `ACTIVE` — Safe to send BTC
-- `WARNING` — Less than ~12 hours remaining; send only if your BTC tx will confirm quickly
+- `ACTIVE` — Safe to send BTC (72+ blocks remaining)
+- `WARNING` — Less than ~12 hours remaining (4-72 blocks); send only if your BTC tx will confirm quickly
 - `CRITICAL` — Less than 4 blocks remaining; do **not** send
 - `EXPIRED` — Reserve is sweeping; do **not** send
 
@@ -480,7 +539,13 @@ The command also auto-updates local DB records: if a pending deposit appears as 
 
 ```bash
 relayer-cli wallet deposit-status
+relayer-cli wallet deposit-status --wallet-id my-wallet --password s3cret
 ```
+
+| Flag                | Description                                                     |
+| ------------------- | --------------------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>` | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
 
 Output sections:
 
@@ -572,11 +637,13 @@ relayer-cli zkaccount fund --amount-mbtc 1.0
 relayer-cli zkaccount fund --amount-btc 0.001
 ```
 
-| Flag                   | Description                                 |
-| ---------------------- | ------------------------------------------- |
-| `--amount <SATS>`      | Amount in satoshis                          |
-| `--amount-mbtc <MBTC>` | Amount in milli-BTC (1 mBTC = 100,000 sats) |
-| `--amount-btc <BTC>`   | Amount in BTC (1 BTC = 100,000,000 sats)    |
+| Flag                   | Description                                                     |
+| ---------------------- | --------------------------------------------------------------- |
+| `--amount <SATS>`      | Amount in satoshis                                              |
+| `--amount-mbtc <MBTC>` | Amount in milli-BTC (1 mBTC = 100,000 sats)                    |
+| `--amount-btc <BTC>`   | Amount in BTC (1 BTC = 100,000,000 sats)                       |
+| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
 
 At least one amount flag is required. All values are converted to satoshis before funding.
 
@@ -588,9 +655,11 @@ Withdraw from a ZkOS trading account back to the on-chain wallet.
 relayer-cli zkaccount withdraw --account-index 0
 ```
 
-| Flag                  | Description                                       |
-| --------------------- | ------------------------------------------------- |
-| `--account-index <N>` | **Required.** ZkOS account index to withdraw from |
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index to withdraw from               |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
 
 ### `zkaccount transfer`
 
@@ -600,9 +669,11 @@ Transfer funds between ZkOS trading accounts (creates a new destination account)
 relayer-cli zkaccount transfer --account-index 0
 ```
 
-| Flag                  | Description                        |
-| --------------------- | ---------------------------------- |
-| `--account-index <N>` | **Required.** Source account index |
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** Source account index                              |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
 
 ### `zkaccount split`
 
@@ -627,6 +698,8 @@ relayer-cli zkaccount split --account-index 0 --balances-btc "0.00001,0.00002,0.
 | `--balances <LIST>`      | Comma-separated list of balances in **satoshis**. Priority 1 if multiple given |
 | `--balances-mbtc <LIST>` | Comma-separated list of balances in **milli-BTC** (×100,000). Priority 2       |
 | `--balances-btc <LIST>`  | Comma-separated list of balances in **BTC** (×100,000,000). Priority 3         |
+| `--wallet-id <ID>`       | Wallet ID (falls back to `NYKS_WALLET_ID`)                                     |
+| `--password <PASS>`      | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)                |
 
 At least one balance flag is required. All values are converted to satoshis internally. Zero-value balances are rejected.
 
@@ -634,7 +707,7 @@ At least one balance flag is required. All values are converted to satoshis inte
 
 ## Order Commands
 
-Trading and lending order commands. All order commands require a wallet ID and password. Resolution priority: `--flag` > session cache (`wallet unlock`) > env var (`NYKS_WALLET_ID` / `NYKS_WALLET_PASSPHRASE`).
+Trading and lending order commands. Most order commands require a wallet ID and password (exception: `tx-hashes` queries the relayer directly without a wallet). Resolution priority: `--flag` > session cache (`wallet unlock`) > env var (`NYKS_WALLET_ID` / `NYKS_WALLET_PASSPHRASE`).
 
 ### `order open-trade`
 
@@ -648,53 +721,99 @@ relayer-cli order open-trade --account-index 0 --side LONG --entry-price 65000 -
 relayer-cli order open-trade --account-index 1 --order-type LIMIT --side SHORT --entry-price 70000 --leverage 5
 ```
 
-| Flag                   | Description                                |
-| ---------------------- | ------------------------------------------ |
-| `--account-index <N>`  | **Required.** ZkOS account index           |
-| `--side <LONG\|SHORT>` | **Required.** Position direction           |
-| `--entry-price <USD>`  | **Required.** Entry price in USD (integer) |
-| `--leverage <1-50>`    | **Required.** Leverage multiplier          |
-| `--order-type <TYPE>`  | `MARKET` (default) or `LIMIT`              |
+| Flag                   | Description                                                     |
+| ---------------------- | --------------------------------------------------------------- |
+| `--account-index <N>`  | **Required.** ZkOS account index                                |
+| `--side <LONG\|SHORT>` | **Required.** Position direction                                |
+| `--entry-price <USD>`  | **Required.** Entry price in USD (integer)                      |
+| `--leverage <1-50>`    | **Required.** Leverage multiplier                               |
+| `--order-type <TYPE>`  | `MARKET` (default) or `LIMIT`                                   |
+| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
+Output: Request ID. JSON mode (`--json`): `{"request_id": "..."}`.
 
 ### `order close-trade`
 
 Close an open trader position.
 
 ```bash
-# Market close
+# Market close (immediate, at current price)
 relayer-cli order close-trade --account-index 0
 
-# Close with stop-loss / take-profit (uses SLTP order type automatically)
+# Limit close (sets a settle_limit trigger at execution-price)
+relayer-cli order close-trade --account-index 0 --order-type LIMIT --execution-price 70000
+
+# SLTP close with stop-loss and take-profit (uses SLTP order type automatically)
+# Can be used multiple times to update stop-loss and take-profit values
 relayer-cli order close-trade --account-index 0 --stop-loss 60000 --take-profit 75000
+
+# SLTP close with stop-loss only
+relayer-cli order close-trade --account-index 0 --stop-loss 60000
 ```
 
-| Flag                    | Description                                 |
-| ----------------------- | ------------------------------------------- |
-| `--account-index <N>`   | **Required.** ZkOS account index            |
-| `--order-type <TYPE>`   | `MARKET` (default) or `LIMIT`               |
-| `--execution-price <F>` | Execution price (default: `0.0` for market) |
-| `--stop-loss <F>`       | Stop-loss price (triggers SLTP close)       |
-| `--take-profit <F>`     | Take-profit price (triggers SLTP close)     |
+| Flag                    | Description                                                     |
+| ----------------------- | --------------------------------------------------------------- |
+| `--account-index <N>`   | **Required.** ZkOS account index                                |
+| `--order-type <TYPE>`   | `MARKET` (default) or `LIMIT`                                   |
+| `--execution-price <F>` | Execution price (default: `0.0` for market)                     |
+| `--stop-loss <F>`       | Stop-loss price (triggers SLTP close)                           |
+| `--take-profit <F>`     | Take-profit price (triggers SLTP close)                         |
+| `--wallet-id <ID>`      | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`     | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
+> **Note:** `--order-type LIMIT` cannot be combined with `--stop-loss` or `--take-profit`. LIMIT sets a single settle_limit trigger at `--execution-price`, while `--stop-loss` / `--take-profit` use the SLTP close path. Use one or the other.
+
+Output: Request ID. JSON mode (`--json`): `{"request_id": "..."}`.
 
 ### `order cancel-trade`
 
-Cancel a pending trader order.
+Cancel a pending trader order, remove settle limit for filled trader order or cancel stop-loss/take-profit on a filled order.
 
 ```bash
+# Cancel a pending order or remove settle/close limit for filled order
 relayer-cli order cancel-trade --account-index 0
+
+# Cancel stop-loss on a filled order
+relayer-cli order cancel-trade --account-index 0 --stop-loss
+
+# Cancel take-profit on a filled order
+relayer-cli order cancel-trade --account-index 0 --take-profit
+
+# Cancel both stop-loss and take-profit
+relayer-cli order cancel-trade --account-index 0 --stop-loss --take-profit
 ```
+
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index                                |
+| `--stop-loss`         | Cancel stop-loss trigger (enables SLTP cancel)                  |
+| `--take-profit`       | Cancel take-profit trigger (enables SLTP cancel)                |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
+Output: Request ID. JSON mode (`--json`): `{"request_id": "..."}`.
 
 ### `order query-trade`
 
-Query the status of a trader order. Outputs JSON.
+Query the status of a trader order. Outputs JSON (uses v1 endpoint with settle_limit, stop_loss, take_profit, and funding_applied).
 
 ```bash
 relayer-cli order query-trade --account-index 0
+relayer-cli --json order query-trade --account-index 0
 ```
+
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index                                |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
+Output: Pretty-printed JSON of the `TraderOrderV1` object (includes order details, `settle_limit`, `stop_loss`, `take_profit`, `funding_applied`).
 
 ### `order unlock-close-order`
 
-Unlock a settled order (trade or lend). Automatically detects the order type from the account's `TX-TYPE` field (`ORDERTX` or `LENDTX`) and calls the appropriate unlock method. Use this to reclaim a ZkOS account after an order has been settled by the relayer. If the order is not yet settled, no changes are made.
+Unlock a settled order (trade or lend). Automatically detects the order type from the account's `TX-TYPE` field (`ORDERTX` or `LENDTX`) and calls the appropriate unlock method. Use this to reclaim a ZkOS account after an order has been settled by the relayer. Returns an error if the order is not yet settled or liquidated.
 
 ```bash
 relayer-cli order unlock-close-order --account-index 0
@@ -706,6 +825,8 @@ relayer-cli order unlock-close-order --account-index 0 --wallet-id my-wallet --p
 | `--account-index <N>` | **Required.** ZkOS account index |
 | `--wallet-id <ID>`    | Load wallet from DB              |
 | `--password <PASS>`   | DB encryption password           |
+
+Output: Account index, order status, and request ID. JSON mode (`--json`): `{"account_index": N, "order_status": "...", "request_id": "..."}`.
 
 ### `order unlock-failed-order`
 
@@ -722,13 +843,24 @@ relayer-cli order unlock-failed-order --account-index 0 --wallet-id my-wallet --
 | `--wallet-id <ID>`    | Load wallet from DB              |
 | `--password <PASS>`   | DB encryption password           |
 
+Output: Account index and status. JSON mode (`--json`): `{"account_index": N, "status": "unlocked"}`.
+
 ### `order open-lend`
 
-Open a lending order on a ZkOS account.
+Open a lending order on a ZkOS account. The full account balance is deposited into the lending pool.
 
 ```bash
 relayer-cli order open-lend --account-index 0
+relayer-cli order open-lend --account-index 0 --wallet-id my-wallet --password s3cret
 ```
+
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index                                |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
+Output: Request ID. JSON mode (`--json`): `{"request_id": "..."}`.
 
 ### `order close-lend`
 
@@ -736,15 +868,33 @@ Close an active lending order.
 
 ```bash
 relayer-cli order close-lend --account-index 0
+relayer-cli order close-lend --account-index 0 --wallet-id my-wallet --password s3cret
 ```
+
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index                                |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
+Output: Request ID. JSON mode (`--json`): `{"request_id": "..."}`.
 
 ### `order query-lend`
 
-Query the status of a lending order. Outputs JSON.
+Query the status of a lending order. Outputs JSON (uses v1 endpoint).
 
 ```bash
 relayer-cli order query-lend --account-index 0
+relayer-cli --json order query-lend --account-index 0
 ```
+
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index                                |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
+Output: Pretty-printed JSON of the lend order v1 object.
 
 ### `order history-trade`
 
@@ -755,9 +905,11 @@ relayer-cli order history-trade --account-index 0
 relayer-cli --json order history-trade --account-index 0
 ```
 
-| Flag                  | Description                      |
-| --------------------- | -------------------------------- |
-| `--account-index <N>` | **Required.** ZkOS account index |
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index                                |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
 
 Output columns: `UUID`, `STATUS`, `TYPE`, `SIDE`, `ENTRY`, `SIZE`, `LEV`, `MARGIN`, `PnL`.
 
@@ -770,9 +922,11 @@ relayer-cli order history-lend --account-index 0
 relayer-cli --json order history-lend --account-index 0
 ```
 
-| Flag                  | Description                      |
-| --------------------- | -------------------------------- |
-| `--account-index <N>` | **Required.** ZkOS account index |
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index                                |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
 
 Output columns: `UUID`, `STATUS`, `DEPOSIT`, `BALANCE`, `SHARES`, `PAYMENT`.
 
@@ -785,9 +939,11 @@ relayer-cli order funding-history --account-index 0
 relayer-cli --json order funding-history --account-index 0
 ```
 
-| Flag                  | Description                      |
-| --------------------- | -------------------------------- |
-| `--account-index <N>` | **Required.** ZkOS account index |
+| Flag                  | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `--account-index <N>` | **Required.** ZkOS account index                                |
+| `--wallet-id <ID>`    | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>`   | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
 
 Output columns: `TIME`, `SIDE`, `PAYMENT`, `RATE`, `ORDER ID`, plus total funding sum.
 
@@ -801,15 +957,20 @@ relayer-cli order account-summary --from 2024-01-01 --to 2024-12-31
 relayer-cli --json order account-summary
 ```
 
-| Flag             | Description                                     |
-| ---------------- | ----------------------------------------------- |
-| `--from <DATE>`  | Start date filter (RFC3339 or YYYY-MM-DD)       |
-| `--to <DATE>`    | End date filter (RFC3339 or YYYY-MM-DD)         |
-| `--since <DATE>` | Alternative date filter (RFC3339 or YYYY-MM-DD) |
+| Flag                | Description                                                     |
+| ------------------- | --------------------------------------------------------------- |
+| `--from <DATE>`     | Start date filter (RFC3339 or YYYY-MM-DD)                       |
+| `--to <DATE>`       | End date filter (RFC3339 or YYYY-MM-DD)                         |
+| `--since <DATE>`    | Alternative date filter (RFC3339 or YYYY-MM-DD)                 |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>` | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
+Output: Period, filled/settled/liquidated counts and position sizes.
 
 ### `order tx-hashes`
 
 Look up on-chain transaction hashes by request ID, account address, or tx ID.
+Results are grouped by order ID, with the account address displayed above the table.
 
 ```bash
 # By request ID (default)
@@ -823,6 +984,9 @@ relayer-cli order tx-hashes --by tx --id <tx_id>
 
 # Filter by status
 relayer-cli order tx-hashes --id REQID... --status FILLED
+
+# Include reason column
+relayer-cli order tx-hashes --by account --id <account_address> --reason
 ```
 
 | Flag           | Description                                             |
@@ -832,8 +996,39 @@ relayer-cli order tx-hashes --id REQID... --status FILLED
 | `--status <S>` | Filter by order status (PENDING, FILLED, SETTLED, etc.) |
 | `--limit <N>`  | Max results                                             |
 | `--offset <N>` | Pagination offset                                       |
+| `--reason`     | Show reason column after TX HASH                        |
 
-Output columns: `ORDER ID`, `STATUS`, `TYPE`, `TX HASH`, `DATE`.
+Output: Account and Order ID displayed as headers. Table columns: `STATUS`, `TYPE`, `DATE`, `OLD PRICE`, `NEW PRICE`, `TX HASH` (and `REASON` if `--reason` is passed).
+
+### `order request-history`
+
+Look up transaction hashes for a wallet account by account index. Resolves the account address from the wallet automatically.
+
+```bash
+# Basic usage
+relayer-cli order request-history --account-index 0
+
+# With wallet credentials
+relayer-cli order request-history --account-index 0 --wallet-id my-wallet --password s3cret
+
+# Filter by status and paginate
+relayer-cli order request-history --account-index 0 --status FILLED --limit 20
+
+# Include reason column
+relayer-cli order request-history --account-index 0 --reason
+```
+
+| Flag                    | Description                                             |
+| ----------------------- | ------------------------------------------------------- |
+| `--account-index <N>`   | **Required.** Account index to look up                  |
+| `--wallet-id <ID>`      | Wallet ID (falls back to `NYKS_WALLET_ID`)              |
+| `--password <PASS>`     | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+| `--status <S>`          | Filter by order status (PENDING, FILLED, SETTLED, etc.) |
+| `--limit <N>`           | Max results                                             |
+| `--offset <N>`          | Pagination offset                                       |
+| `--reason`              | Show reason column after TX HASH                        |
+
+Output: Same format as `tx-hashes` — account and order ID as headers, results grouped by order ID. Table columns: `STATUS`, `TYPE`, `DATE`, `OLD PRICE`, `NEW PRICE`, `TX HASH` (and `REASON` if `--reason` is passed).
 
 ---
 
@@ -898,6 +1093,11 @@ relayer-cli portfolio summary
 relayer-cli portfolio summary --wallet-id my-wallet --password s3cret
 ```
 
+| Flag                | Description                                                     |
+| ------------------- | --------------------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>` | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
+
 Output includes:
 - Mark price, on-chain and trading balances
 - Total margin used and utilization percentage
@@ -923,9 +1123,11 @@ relayer-cli portfolio balances --unit btc
 relayer-cli portfolio balances --wallet-id my-wallet --password s3cret
 ```
 
-| Flag         | Description                                   |
-| ------------ | --------------------------------------------- |
-| `--unit <U>` | Display unit: `sats` (default), `mbtc`, `btc` |
+| Flag                | Description                                                     |
+| ------------------- | --------------------------------------------------------------- |
+| `--unit <U>`        | Display unit: `sats` (default), `mbtc`, `btc`                   |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>` | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
 
 Output columns: `INDEX`, `BALANCE`, `IO-TYPE`, `ON-CHAIN`, plus a total.
 
@@ -937,6 +1139,11 @@ Show liquidation risk for all open trader positions. Queries live price data fro
 relayer-cli portfolio risks
 relayer-cli portfolio risks --wallet-id my-wallet --password s3cret
 ```
+
+| Flag                | Description                                                     |
+| ------------------- | --------------------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID`)                      |
+| `--password <PASS>` | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`) |
 
 Output columns: `ACCT`, `SIDE`, `CURRENT`, `LIQ PRICE`, `DISTANCE` (% from liquidation), `MARGIN %`.
 
@@ -1031,7 +1238,7 @@ relayer-cli market open-interest
 
 ### `market market-stats`
 
-Get comprehensive market risk statistics including pool equity, exposure, utilization, and risk parameters.
+Get comprehensive market risk statistics including pool equity, exposure, utilization, risk parameters, funding rate and expected funding rate.
 
 ```bash
 relayer-cli market market-stats
@@ -1139,7 +1346,7 @@ Output columns: `TIME`, `APY %`.
 
 On-chain Bitcoin operations: check balance, transfer BTC, and view receive address. These commands query the Bitcoin network directly via [Blockstream Esplora](https://blockstream.info) (with [mempool.space](https://mempool.space) as fallback).
 
-Network selection follows the `BTC_NETWORK_TYPE` env var (falls back to `NETWORK_TYPE`, default: `mainnet`).
+Network selection follows the `BTC_NETWORK_TYPE` env var (default: `mainnet`).
 
 ### `bitcoin-wallet balance`
 
@@ -1200,15 +1407,15 @@ relayer-cli bitcoin-wallet transfer --to bc1q... --amount 50000 --wallet-id my-w
 BTC_NETWORK_TYPE=testnet relayer-cli bitcoin-wallet transfer --to tb1q... --amount 10000
 ```
 
-| Flag                   | Description                                                        |
-| ---------------------- | ------------------------------------------------------------------ |
-| `--to <ADDR>`          | **Required.** Destination BTC address (bc1q.../tb1q...)            |
-| `--amount <SATS>`      | Amount in satoshis (priority 1)                                    |
+| Flag                   | Description                                                       |
+| ---------------------- | ----------------------------------------------------------------- |
+| `--to <ADDR>`          | **Required.** Destination BTC address (bc1q.../tb1q...)           |
+| `--amount <SATS>`      | Amount in satoshis (priority 1)                                   |
 | `--amount-mbtc <MBTC>` | Amount in milli-BTC (1 mBTC = 100,000 sats, priority 2)           |
 | `--amount-btc <BTC>`   | Amount in BTC (1 BTC = 100,000,000 sats, priority 3)              |
-| `--fee-rate <SAT/VB>`  | Fee rate in sat/vB — higher = faster confirmation (default: auto)  |
-| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID` env var)                 |
-| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)    |
+| `--fee-rate <SAT/VB>`  | Fee rate in sat/vB — higher = faster confirmation (default: auto) |
+| `--wallet-id <ID>`     | Wallet ID (falls back to `NYKS_WALLET_ID` env var)                |
+| `--password <PASS>`    | DB encryption password (falls back to `NYKS_WALLET_PASSPHRASE`)   |
 
 At least one amount flag is required. All values are converted to satoshis before sending.
 
@@ -1277,12 +1484,12 @@ relayer-cli bitcoin-wallet history --status confirmed
 relayer-cli bitcoin-wallet history --limit 10
 ```
 
-| Flag                | Description                                          |
-| ------------------- | ---------------------------------------------------- |
-| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID` env var)   |
-| `--password <PASS>` | DB encryption password                               |
+| Flag                | Description                                           |
+| ------------------- | ----------------------------------------------------- |
+| `--wallet-id <ID>`  | Wallet ID (falls back to `NYKS_WALLET_ID` env var)    |
+| `--password <PASS>` | DB encryption password                                |
 | `--status <STATUS>` | Filter by status: `pending`, `broadcast`, `confirmed` |
-| `--limit <N>`       | Max results (default: `50`)                          |
+| `--limit <N>`       | Max results (default: `50`)                           |
 
 Output columns: `ID`, `STATUS`, `FROM`, `TO`, `AMOUNT`, `FEE`, `CONFIRMS`, `NET`, `DATE`.
 

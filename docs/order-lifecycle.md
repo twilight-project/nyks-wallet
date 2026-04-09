@@ -161,39 +161,59 @@ Each ZkOS account tracks three key fields:
 ```
   Coin (ORDERTX: None)
     │
-    ▼  open-trade
-  Memo (ORDERTX)
+    ▼  open-trade (MARKET or LIMIT)
+  Memo (ORDERTX) ── status: PENDING
     │
     ├─── Order fills ──► FILLED (position is live)
-    │                       │
-    │                       ├── close-trade ──► SETTLED ──► unlock-close-order ──► Coin
-    │                       │
-    │                       ├── SLTP triggered ──► SETTLED ──► unlock-close-order ──► Coin
-    │                       │
-    │                       └── Liquidation ──► LIQUIDATE ──► unlock-close-order ──► Coin
+    │       │
+    │       ├── close-trade (MARKET) ──► SETTLED ──► unlock-close-order ──► Coin
+    │       │
+    │       ├── close-trade (LIMIT)
+    │       │     Sets a settle_limit trigger at execution-price.
+    │       │     Relayer settles when price is hit ──► SETTLED ──► unlock-close-order ──► Coin
+    │       │     Can be cancelled with: cancel-trade (removes settle_limit)
+    │       │
+    │       ├── close-trade (SLTP: --stop-loss / --take-profit)
+    │       │     Sets stop_loss and/or take_profit triggers.
+    │       │     Relayer settles when a trigger price is hit ──► SETTLED ──► unlock-close-order ──► Coin
+    │       │     Individual triggers can be cancelled with: cancel-trade --stop-loss / --take-profit
+    │       │
+    │       └── Liquidation ──► LIQUIDATE ──► unlock-close-order ──► Coin
     │
     ├─── Order rejected/failed ──► unlock-failed-order ──► Coin
     │
-    └─── cancel-trade (if PENDING) ──► Coin
+    └─── cancel-trade (if PENDING) ──► CANCELLED ──► Coin
 ```
 
 ### Steps
 
-1. **`open-trade`** — Account must be `Coin` + `on_chain`. Creates a trader order on the relayer. Sets `io_type = Memo`, `tx_type = ORDERTX`.
+1. **`open-trade`** — Account must be `Coin` + `on_chain`. Creates a trader order on the relayer (MARKET or LIMIT). Sets `io_type = Memo`, `tx_type = ORDERTX`. The order starts in `PENDING` status.
 
 2. **Order fills** — The relayer matches the order. Status moves to `FILLED`. The position is now live with entry price, leverage, and margin.
 
-3. **`close-trade`** — Submits a close request (MARKET, LIMIT, or SLTP). The relayer settles the position and computes PnL.
+3. **`close-trade`** — Submits a close request. The close mode depends on the flags:
+   - **MARKET** (`--order-type MARKET`) — Immediate close at current market price. The relayer settles the position and computes PnL.
+   - **LIMIT** (`--order-type LIMIT --execution-price <P>`) — Sets a `settle_limit` trigger. The relayer monitors the position and settles when the limit price is reached. The position remains open until triggered.
+   - **SLTP** (`--stop-loss <P>` and/or `--take-profit <P>`) — Sets stop-loss and/or take-profit trigger prices. The relayer monitors the position and settles automatically when either trigger price is hit.
 
 4. **`unlock-close-order`** — After settlement (`SETTLED` or `LIQUIDATE`), fetches the updated UTXO and restores the account to `Coin` state with the new balance (initial margin +/- PnL). Clears `tx_type`.
 
-5. **`cancel-trade`** — Only works while order is `PENDING` (not yet filled). Restores account to `Coin`.
+5. **`cancel-trade`** — Behaviour depends on order state and flags:
+   - **Pending order** (no flags) — Cancels a `PENDING` order that has not yet filled. Status moves to `CANCELLED`, account is restored to `Coin`.
+   - **Close-limit on filled order** (no flags) — If the order is `FILLED` and has an active `settle_limit` (from a prior LIMIT close), removes the settle_limit trigger. The position stays open.
+   - **SLTP on filled order** (`--stop-loss` and/or `--take-profit`) — Cancels individual stop-loss or take-profit triggers on a `FILLED` order. The position stays open; only the specified triggers are removed.
 
 6. **`unlock-failed-order`** — If the order submission itself failed (relayer rejected it, network error, etc.), the account is stuck in `Memo` but has no active order. This command fetches the UTXO and restores to `Coin`.
 
-### SLTP (Stop-Loss / Take-Profit)
+### Close Triggers (Limit, Stop-Loss, Take-Profit)
 
-When closing with `--stop-loss` or `--take-profit`, the relayer monitors the position and settles automatically when the trigger price is hit. The account remains in `Memo` until settlement, after which `unlock-close-order` reclaims it.
+When closing with LIMIT, the relayer sets a `settle_limit` trigger at the specified execution price. When closing with SLTP flags, `stop_loss` and/or `take_profit` triggers are set. In all cases the relayer monitors the position and settles automatically when a trigger price is hit. The account remains in `Memo` until settlement, after which `unlock-close-order` reclaims it.
+
+Each trigger type can be independently cancelled via `cancel-trade` without closing the position:
+- `cancel-trade --account-index N` (no flags) removes a pending limit close (`settle_limit`)
+- `cancel-trade --account-index N --stop-loss` removes the stop-loss trigger
+- `cancel-trade --account-index N --take-profit` removes the take-profit trigger
+- `cancel-trade --account-index N --stop-loss --take-profit` removes both
 
 ### Important
 

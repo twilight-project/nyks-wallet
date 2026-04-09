@@ -127,7 +127,7 @@ USAGE:
 TRADING:
     open-trade          Open a leveraged position (MARKET/LIMIT)
     close-trade         Close a position (MARKET/LIMIT/SLTP)
-    cancel-trade        Cancel a pending order
+    cancel-trade        Cancel a pending order or cancel SL/TP on a filled order
     query-trade         Query current order status
     unlock-close-order  Unlock a settled order (trade or lend) based on account's TXType
     unlock-failed-order Unlock a failed order (reclaim account when submission failed)
@@ -142,14 +142,18 @@ HISTORY & ANALYTICS (from relayer):
     history-lend        Historical lend orders for an account
     funding-history     Funding payment history for a position
     account-summary     Trading activity summary (fills, settles, liquidations)
-    tx-hashes           Look up on-chain tx hashes by request/account ID
+    tx-hashes           Look up on-chain tx hashes by request/account/tx ID
+    request-history     Look up tx hashes by account index (resolves address from wallet)
 
 EXAMPLES:
     relayer-cli order open-trade --account-index 1 --side LONG --entry-price 65000 --leverage 5
     relayer-cli order close-trade --account-index 1
     relayer-cli order query-trade --account-index 1
     relayer-cli order history-trade --account-index 1
+    relayer-cli order cancel-trade --account-index 1 --stop-loss --take-profit
     relayer-cli order account-summary --from 2024-01-01 --to 2024-12-31
+    relayer-cli order request-history --account-index 0
+    relayer-cli order request-history --account-index 0 --status FILLED --reason
 
 NOTE:
     If the account was previously used for a open/closed order. You must transfer the account

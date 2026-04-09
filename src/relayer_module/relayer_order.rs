@@ -4,13 +4,14 @@ use twilight_client_sdk::{
     programcontroller::ContractManager,
     quisquislib::RistrettoSecretKey,
     relayer::{
-        cancel_trader_order_zkos, create_lend_order_zkos, execute_order_zkos,
-        execute_order_zkos_sltp,
+        cancel_trader_order_zkos, cancel_trader_order_zkos_sltp, create_lend_order_zkos,
+        execute_order_zkos, execute_order_zkos_sltp,
     },
     relayer_types::{
-        CancelTraderOrderZkos, CreateLendOrderZkos, CreateTraderOrderClientZkos,
-        ExecuteLendOrderZkos, ExecuteTraderOrderZkos, ExecuteTraderOrderZkosSlTp, OrderStatus,
-        OrderType, PositionType, SlTpOrder, TXType,
+        CancelTraderOrderZkos, CancelTraderOrderZkosSlTp, CreateLendOrderZkos,
+        CreateTraderOrderClientZkos, ExecuteLendOrderZkos, ExecuteTraderOrderZkos,
+        ExecuteTraderOrderZkosSlTp, OrderStatus, OrderType, PositionType, SlTpOrder,
+        SlTpOrderCancel, TXType,
     },
     util::create_output_memo_for_lender,
     zkvm::Output,
@@ -252,6 +253,32 @@ pub async fn cancel_trader_order(
     );
     let response = relayer_api_client
         .cancel_trader_order(CancelTraderOrderZkos::decode_from_hex_string(
+            request_msg.clone(),
+        )?)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(response.id_key.to_string())
+}
+
+pub async fn cancel_trader_order_sltp(
+    account_address: String,
+    secret_key: &RistrettoSecretKey,
+    account_id: String,
+    uuid: Uuid,
+    sltp_cancel: SlTpOrderCancel,
+    relayer_api_client: &RelayerJsonRpcClient,
+) -> Result<String, String> {
+    let request_msg = cancel_trader_order_zkos_sltp(
+        account_address,
+        secret_key,
+        account_id,
+        uuid,
+        OrderType::SLTP.to_str(),
+        OrderStatus::CANCELLED.to_str(),
+        sltp_cancel,
+    );
+    let response = relayer_api_client
+        .cancel_trader_order_sltp(CancelTraderOrderZkosSlTp::decode_from_hex_string(
             request_msg.clone(),
         )?)
         .await

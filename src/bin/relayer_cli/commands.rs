@@ -490,11 +490,19 @@ pub(crate) enum OrderCmd {
         password: Option<String>,
     },
 
-    /// Cancel a pending trader order
+    /// Cancel a pending trader order, or cancel stop-loss/take-profit on a filled order
     CancelTrade {
         /// ZkOS account index
         #[arg(long)]
         account_index: u64,
+
+        /// Cancel stop-loss (enables SLTP cancel)
+        #[arg(long)]
+        stop_loss: bool,
+
+        /// Cancel take-profit (enables SLTP cancel)
+        #[arg(long)]
+        take_profit: bool,
 
         /// Wallet ID to load from DB (falls back to NYKS_WALLET_ID env var)
         #[arg(long)]
@@ -684,6 +692,41 @@ pub(crate) enum OrderCmd {
         /// Offset for pagination
         #[arg(long)]
         offset: Option<i64>,
+
+        /// Show reason column in output
+        #[arg(long)]
+        reason: bool,
+    },
+
+    /// Look up transaction hashes for a wallet account by account index
+    RequestHistory {
+        /// Account index to look up
+        #[arg(long)]
+        account_index: u64,
+
+        /// Wallet ID for database lookup
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Database encryption password
+        #[arg(long)]
+        password: Option<String>,
+
+        /// Filter by order status (e.g. FILLED, SETTLED, PENDING)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<i64>,
+
+        /// Offset for pagination
+        #[arg(long)]
+        offset: Option<i64>,
+
+        /// Show reason column in output
+        #[arg(long)]
+        reason: bool,
     },
 }
 

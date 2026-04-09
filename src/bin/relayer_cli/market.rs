@@ -226,6 +226,21 @@ pub(crate) async fn handle_market(cmd: MarketCmd, json_output: bool) -> Result<(
             );
             println!("  Max leverage:      {:.0}x", stats.params.max_leverage);
             println!("  MM ratio:          {:.4}", stats.params.mm_ratio);
+            println!("\nFunding Rate");
+            println!("{}", "-".repeat(45));
+            println!("  Funding rate:      {:.6}", stats.funding_rate.funding_rate);
+            println!(
+                "  Estimated rate:    {:.6}",
+                stats.funding_rate.estimated_funding_rate
+            );
+            println!(
+                "  Rate timestamp:    {}",
+                stats.funding_rate.funding_rate_timestamp
+            );
+            println!(
+                "  Est. timestamp:    {}",
+                stats.funding_rate.estimated_funding_rate_timestamp
+            );
         }
 
         MarketCmd::ServerTime => {

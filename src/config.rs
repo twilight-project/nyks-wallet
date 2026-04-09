@@ -11,10 +11,9 @@ pub fn is_mainnet() -> bool {
 }
 
 /// Bitcoin network type: "mainnet" or "testnet".
-/// Falls back to `NETWORK_TYPE` if `BTC_NETWORK_TYPE` is not set.
-pub static BTC_NETWORK_TYPE: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("BTC_NETWORK_TYPE").unwrap_or("mainnet".to_string())
-});
+/// Falls back to `mainnet` if `BTC_NETWORK_TYPE` is not set.
+pub static BTC_NETWORK_TYPE: LazyLock<String> =
+    LazyLock::new(|| std::env::var("BTC_NETWORK_TYPE").unwrap_or("mainnet".to_string()));
 
 pub fn is_btc_mainnet() -> bool {
     *BTC_NETWORK_TYPE == "mainnet"
@@ -33,7 +32,7 @@ pub static BTC_ESPLORA_FALLBACK_URL: LazyLock<String> = LazyLock::new(|| {
     let default = if is_btc_mainnet() {
         "https://mempool.space/api".to_string()
     } else {
-        "https://mempool.space/testnet4/api".to_string()
+        "https://mempool.space/testnet/api".to_string()
     };
     std::env::var("BTC_ESPLORA_FALLBACK_URL").unwrap_or(default)
 });

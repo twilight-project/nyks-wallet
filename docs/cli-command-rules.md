@@ -294,6 +294,385 @@ Use this as a checklist before calling any command.
 
 ---
 
+## ZkOS Account Commands
+
+### `zkaccount fund`
+
+| Requirement | Details |
+|---|---|
+| Flags | At least one of: `--amount`, `--amount-mbtc`, `--amount-btc` (required). `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Amount must be > 0 |
+| | Wallet must have sufficient on-chain sats balance |
+| Action | Funds a new ZkOS trading account from the on-chain wallet |
+
+### `zkaccount withdraw`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Account must exist and be `Coin` + `on_chain` |
+| Action | Withdraws full balance from ZkOS account back to on-chain wallet |
+
+### `zkaccount transfer`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Account must exist and be `Coin` + `on_chain` |
+| Action | Transfers funds to a new ZkOS account (refreshes address for reuse after orders) |
+
+### `zkaccount split`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required). At least one of: `--balances`, `--balances-mbtc`, `--balances-btc`. `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Account must exist and be `Coin` + `on_chain` |
+| | Sum of split balances must not exceed account balance |
+| | No zero-value balances allowed |
+| Action | Splits account into multiple new accounts with specified balances |
+
+---
+
+## Order Commands
+
+### `order open-trade`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index`, `--side`, `--entry-price`, `--leverage` (required). `--order-type` (default: `MARKET`), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Market must not be halted |
+| | Account must be `Coin` + `on_chain` |
+| | Account address must not have been used for a previous order (transfer first) |
+| Action | Creates a trader order on the relayer. Sets account to `Memo` / `ORDERTX` |
+
+### `order close-trade`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required). `--order-type` (default: `MARKET`), `--execution-price` (default: `0.0`), `--stop-loss`, `--take-profit`, `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Market must not be halted |
+| | Order must be `FILLED` (if `SETTLED` or `LIQUIDATE`, auto-unlocks instead) |
+| | `--order-type LIMIT` cannot be combined with `--stop-loss` or `--take-profit` |
+| | If `--order-type LIMIT`: `--execution-price` must be > 0 |
+| Action | **MARKET**: immediate close. **LIMIT**: sets settle_limit trigger. **SLTP** (via `--stop-loss`/`--take-profit`): sets SL/TP triggers |
+
+### `order cancel-trade`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required). `--stop-loss`, `--take-profit`, `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Market must not be halted |
+| | **Without flags**: order must be `PENDING` or have an active `settle_limit` (close limit). If pending, account is restored to `Coin`. If close limit, the settle_limit trigger is removed |
+| | **With `--stop-loss` / `--take-profit`**: order must be `FILLED` and have active stop_loss or take_profit triggers. At least one trigger must exist on the order |
+| Action | **Without flags**: cancels a pending order (restores to Coin) or removes a close limit on a filled order. **With flags**: cancels individual SL/TP triggers on a filled order without closing the position |
+
+### `order query-trade`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Account must have an active order |
+| Action | Queries trader order status via v1 endpoint (includes settle_limit, stop_loss, take_profit, funding_applied) |
+
+### `order unlock-close-order`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Order must be `SETTLED` or `LIQUIDATE` (returns error otherwise) |
+| Action | Fetches updated UTXO and restores account to `Coin` with new balance (initial margin +/- PnL) |
+
+### `order unlock-failed-order`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Account must be stuck in `Memo` with no active order |
+| Action | Fetches UTXO and restores account to `Coin` |
+
+### `order open-lend`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Account must be `Coin` + `on_chain` |
+| | Account address must not have been used for a previous order (transfer first) |
+| Action | Deposits full account balance into lending pool. Sets account to `Memo` / `LENDTX` |
+
+### `order close-lend`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Lend order must be `FILLED` |
+| Action | Submits withdrawal request from lending pool |
+
+### `order query-lend`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Account must have an active lend order |
+| Action | Queries lend order status via v1 endpoint |
+
+### `order history-trade`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable (signs the query) |
+| Action | Queries historical trader orders from the relayer (not local DB) |
+
+### `order history-lend`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable (signs the query) |
+| Action | Queries historical lend orders from the relayer (not local DB) |
+
+### `order funding-history`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| Action | Queries funding payment history for a position from the relayer |
+
+### `order account-summary`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--from`, `--to`, `--since` (optional date filters), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| Action | Queries trading activity summary (fills, settles, liquidations) from the relayer |
+
+### `order tx-hashes`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--id` (required), `--by` (default: `request`), `--status`, `--limit`, `--offset`, `--reason` (optional) |
+| Preconditions | **No wallet required** — queries relayer directly |
+| | `--by` must be one of: `request`, `account`, `tx` |
+| Action | Looks up on-chain transaction hashes by request ID, account address, or tx ID |
+
+### `order request-history`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--account-index` (required), `--wallet-id`, `--password`, `--status`, `--limit`, `--offset`, `--reason` (optional) |
+| Preconditions | Wallet must be loadable (resolves account address from wallet) |
+| Action | Looks up transaction hashes for a wallet account by index (convenience wrapper around `tx-hashes --by account`) |
+
+---
+
+## History Commands
+
+### `history orders`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--wallet-id`, `--password` (required). `--account-index`, `--limit` (default: 50), `--offset` (default: 0) (optional) |
+| Preconditions | Database features must be enabled |
+| | Wallet must be loadable |
+| Action | Displays order history (open, close, cancel events) from local database |
+
+### `history transfers`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--wallet-id`, `--password` (required). `--limit` (default: 50), `--offset` (default: 0) (optional) |
+| Preconditions | Database features must be enabled |
+| | Wallet must be loadable |
+| Action | Displays transfer history (fund, withdraw, transfer events) from local database |
+
+---
+
+## Portfolio Commands
+
+### `portfolio summary`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Relayer must be reachable (queries live positions) |
+| Action | Shows full portfolio: balances, margin, PnL, open positions, lend positions. Auto-unlocks settled/liquidated accounts |
+
+### `portfolio balances`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--unit` (default: `sats`), `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| Action | Shows per-account balance breakdown in chosen unit (sats, mbtc, btc) |
+
+### `portfolio risks`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--wallet-id`, `--password` (optional) |
+| Preconditions | Wallet must be loadable |
+| | Relayer must be reachable (queries live price data) |
+| Action | Shows liquidation risk for all open trader positions |
+
+---
+
+## Market Commands
+
+All market commands query the relayer JSON-RPC API. **No wallet is needed.**
+
+### `market price`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets current BTC/USD price |
+
+### `market orderbook`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets current order book (open limit orders) |
+
+### `market funding-rate`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets current funding rate |
+
+### `market fee-rate`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets current fee rates |
+
+### `market recent-trades`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets recent trade orders |
+
+### `market position-size`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets aggregate long/short position sizes |
+
+### `market lend-pool`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets lending pool information |
+
+### `market pool-share-value`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets current pool share value |
+
+### `market last-day-apy`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets last 24-hour APY |
+
+### `market open-interest`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets open interest (long/short exposure) |
+
+### `market market-stats`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets market risk statistics including funding rate and expected funding rate |
+
+### `market server-time`
+
+| Requirement | Details |
+|---|---|
+| Flags | None |
+| Preconditions | Relayer must be reachable |
+| Action | Gets relayer server UTC time |
+
+### `market history-price`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--from`, `--to` (required). `--limit` (default: 50), `--offset` (default: 0) (optional) |
+| Preconditions | Relayer must be reachable |
+| Action | Queries historical BTC/USD prices over a date range |
+
+### `market candles`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--since` (required). `--interval` (default: `1h`), `--limit` (default: 50), `--offset` (default: 0) (optional) |
+| Preconditions | Relayer must be reachable |
+| Action | Queries OHLCV candlestick data |
+
+### `market history-funding`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--from`, `--to` (required). `--limit` (default: 50), `--offset` (default: 0) (optional) |
+| Preconditions | Relayer must be reachable |
+| Action | Queries historical funding rates |
+
+### `market history-fees`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--from`, `--to` (required). `--limit` (default: 50), `--offset` (default: 0) (optional) |
+| Preconditions | Relayer must be reachable |
+| Action | Queries historical fee rates |
+
+### `market apy-chart`
+
+| Requirement | Details |
+|---|---|
+| Flags | `--range` (default: `7d`), `--step`, `--lookback` (optional) |
+| Preconditions | Relayer must be reachable |
+| Action | Queries APY chart data for the lend pool |
+
+---
+
 ## Quick Reference
 
 ### Network Restrictions

@@ -263,6 +263,15 @@ pub struct RiskParams {
     pub mm_ratio: f64,
 }
 
+/// Funding rate information returned inside `MarketStats`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MarketFundingRate {
+    pub funding_rate: f64,
+    pub estimated_funding_rate: f64,
+    pub funding_rate_timestamp: String,
+    pub estimated_funding_rate_timestamp: String,
+}
+
 /// Comprehensive market risk statistics from `get_market_stats`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct MarketStats {
@@ -281,6 +290,7 @@ pub struct MarketStats {
     pub status: String,
     pub status_reason: Option<String>,
     pub params: RiskParams,
+    pub funding_rate: MarketFundingRate,
 }
 
 /// Parameters for the `apy_chart` endpoint.

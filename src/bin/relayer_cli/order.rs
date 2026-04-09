@@ -73,6 +73,14 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             if !json_output {
                 println!("Closing trader order on account {account_index}...");
             }
+            if order_type == "LIMIT" && (stop_loss.is_some() || take_profit.is_some()) {
+                return Err(
+                    "Cannot combine --order-type LIMIT with --stop-loss or --take-profit. \
+                     Use LIMIT for a limit close at --execution-price, \
+                     or use MARKET (default) with --stop-loss / --take-profit for SLTP triggers."
+                        .to_string(),
+                );
+            }
 
             let request_id = if stop_loss.is_some() || take_profit.is_some() {
                 let ot = parse_order_type("SLTP")?;
@@ -85,6 +93,11 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
                 )
                 .await?
             } else {
+                if order_type == "LIMIT" {
+                    if execution_price == 0.0 {
+                        return Err("Execution price is required for limit orders".to_string());
+                    }
+                }
                 let ot = parse_order_type(&order_type)?;
                 ow.close_trader_order(account_index, ot, execution_price)
                     .await?
@@ -101,6 +114,8 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
 
         OrderCmd::CancelTrade {
             account_index,
+            stop_loss,
+            take_profit,
             wallet_id,
             password,
         } => {
@@ -112,7 +127,14 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             if !json_output {
                 println!("Cancelling trader order on account {account_index}...");
             }
-            let request_id = ow.cancel_trader_order(account_index).await?;
+
+            let request_id = if stop_loss || take_profit {
+                ow.cancel_trader_order_sltp(account_index, stop_loss, take_profit)
+                    .await?
+            } else {
+                ow.cancel_trader_order(account_index).await?
+            };
+
             if json_output {
                 println!("{}", serde_json::json!({"request_id": request_id}));
             } else {
@@ -281,7 +303,10 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
                             serde_json::json!({"account_index": account_index, "status": "unlocked"})
                         );
                     } else {
-                        println!("Account {} unlocked successfully (failed order cleared)", account_index);
+                        println!(
+                            "Account {} unlocked successfully (failed order cleared)",
+                            account_index
+                        );
                     }
                 }
                 Err(e) => {
@@ -511,6 +536,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             status,
             limit,
             offset,
+            reason,
         } => {
             use nyks_wallet::relayer_module::relayer_api::RelayerJsonRpcClient;
             use nyks_wallet::relayer_module::relayer_types::TransactionHashArgs;
@@ -559,23 +585,155 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             } else if hashes.is_empty() {
                 println!("No transaction hashes found");
             } else {
-                println!("Transaction Hashes");
-                println!("{}", "-".repeat(120));
-                println!(
-                    "  {:<36} {:<10} {:<10} {:<64} {:<20}",
-                    "ORDER ID", "STATUS", "TYPE", "TX HASH", "DATE"
-                );
+                // Group hashes by order_id
+                use std::collections::BTreeMap;
+                let mut grouped: BTreeMap<String, Vec<_>> = BTreeMap::new();
                 for h in &hashes {
-                    println!(
-                        "  {:<36} {:<10} {:<10} {:<64} {:<20}",
-                        h.order_id,
-                        format!("{:?}", h.order_status),
-                        format!("{:?}", h.order_type),
-                        h.tx_hash,
-                        &h.datetime[..std::cmp::min(20, h.datetime.len())],
-                    );
+                    grouped.entry(h.order_id.to_string()).or_default().push(h);
                 }
-                println!("\nTotal: {} hash(es)", hashes.len());
+
+                // Show account ID above all tables (same for all records)
+                println!("Account: {}", hashes[0].account_id);
+                println!();
+
+                for (order_id, entries) in &grouped {
+                    println!("Order ID: {}", order_id);
+                    if reason {
+                        println!("{}", "-".repeat(180));
+                        println!(
+                            "  {:<20} {:<10} {:<20} {:>10} {:>10} {:<64} {}",
+                            "STATUS", "TYPE", "DATE", "OLD PRICE", "NEW PRICE", "TX HASH", "REASON"
+                        );
+                    } else {
+                        println!("{}", "-".repeat(140));
+                        println!(
+                            "  {:<20} {:<10} {:<20} {:>10} {:>10} {:<64}",
+                            "STATUS", "TYPE", "DATE", "OLD PRICE", "NEW PRICE", "TX HASH"
+                        );
+                    }
+                    for h in entries {
+                        if reason {
+                            println!(
+                                "  {:<20} {:<10} {:<20} {:>10} {:>10} {:<64} {}",
+                                format!("{:?}", h.order_status),
+                                format!("{:?}", h.order_type),
+                                &h.datetime[..std::cmp::min(20, h.datetime.len())],
+                                h.old_price.map_or("-".to_string(), |p| format!("{:.2}", p)),
+                                h.new_price.map_or("-".to_string(), |p| format!("{:.2}", p)),
+                                h.tx_hash,
+                                h.reason.as_deref().unwrap_or("-"),
+                            );
+                        } else {
+                            println!(
+                                "  {:<20} {:<10} {:<20} {:>10} {:>10} {:<64}",
+                                format!("{:?}", h.order_status),
+                                format!("{:?}", h.order_type),
+                                &h.datetime[..std::cmp::min(20, h.datetime.len())],
+                                h.old_price.map_or("-".to_string(), |p| format!("{:.2}", p)),
+                                h.new_price.map_or("-".to_string(), |p| format!("{:.2}", p)),
+                                h.tx_hash,
+                            );
+                        }
+                    }
+                    println!("  Total: {} hash(es)\n", entries.len());
+                }
+            }
+            Ok(())
+        }
+
+        OrderCmd::RequestHistory {
+            account_index,
+            wallet_id,
+            password,
+            status,
+            limit,
+            offset,
+            reason,
+        } => {
+            use nyks_wallet::relayer_module::relayer_api::RelayerJsonRpcClient;
+            use nyks_wallet::relayer_module::relayer_types::TransactionHashArgs;
+
+            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+            let ow = resolve_order_wallet(wallet_id, password).await?;
+            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+
+            let account_address = ow.zk_accounts.get_account_address(&account_index)?;
+
+            let endpoint = nyks_wallet::config::RELAYER_API_RPC_SERVER_URL.to_string();
+            let client = RelayerJsonRpcClient::new(&endpoint).map_err(|e| e.to_string())?;
+
+            let status = status.map(|s| parse_order_status(&s)).transpose()?;
+            let params = TransactionHashArgs::AccountId {
+                id: account_address.clone(),
+                status,
+                limit,
+                offset,
+            };
+
+            let hashes = client
+                .transaction_hashes(params)
+                .await
+                .map_err(|e| e.to_string())?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&hashes)
+                        .unwrap_or_else(|_| format!("{:?}", hashes))
+                );
+            } else if hashes.is_empty() {
+                println!("No transaction hashes found for account index {account_index}");
+            } else {
+                use std::collections::BTreeMap;
+                let mut grouped: BTreeMap<String, Vec<_>> = BTreeMap::new();
+                for h in &hashes {
+                    grouped.entry(h.order_id.to_string()).or_default().push(h);
+                }
+
+                println!("Account: {}", account_address);
+                println!();
+
+                for (order_id, entries) in &grouped {
+                    println!("Order ID: {}", order_id);
+                    if reason {
+                        println!("{}", "-".repeat(180));
+                        println!(
+                            "  {:<20} {:<10} {:<20} {:>10} {:>10} {:<64} {}",
+                            "STATUS", "TYPE", "DATE", "OLD PRICE", "NEW PRICE", "TX HASH", "REASON"
+                        );
+                    } else {
+                        println!("{}", "-".repeat(140));
+                        println!(
+                            "  {:<20} {:<10} {:<20} {:>10} {:>10} {:<64}",
+                            "STATUS", "TYPE", "DATE", "OLD PRICE", "NEW PRICE", "TX HASH"
+                        );
+                    }
+                    for h in entries {
+                        if reason {
+                            println!(
+                                "  {:<20} {:<10} {:<20} {:>10} {:>10} {:<64} {}",
+                                format!("{:?}", h.order_status),
+                                format!("{:?}", h.order_type),
+                                &h.datetime[..std::cmp::min(20, h.datetime.len())],
+                                h.old_price.map_or("-".to_string(), |p| format!("{:.2}", p)),
+                                h.new_price.map_or("-".to_string(), |p| format!("{:.2}", p)),
+                                h.tx_hash,
+                                h.reason.as_deref().unwrap_or("-"),
+                            );
+                        } else {
+                            println!(
+                                "  {:<20} {:<10} {:<20} {:>10} {:>10} {:<64}",
+                                format!("{:?}", h.order_status),
+                                format!("{:?}", h.order_type),
+                                &h.datetime[..std::cmp::min(20, h.datetime.len())],
+                                h.old_price.map_or("-".to_string(), |p| format!("{:.2}", p)),
+                                h.new_price.map_or("-".to_string(), |p| format!("{:.2}", p)),
+                                h.tx_hash,
+                            );
+                        }
+                    }
+                    println!("  Total: {} hash(es)\n", entries.len());
+                }
             }
             Ok(())
         }

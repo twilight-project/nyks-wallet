@@ -27,8 +27,9 @@ use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use jsonrpsee::rpc_params;
 use serde::{Deserialize, Serialize};
 use twilight_client_sdk::relayer_types::{
-    CancelTraderOrderZkos, CreateLendOrderZkos, CreateTraderOrderClientZkos, ExecuteLendOrderZkos,
-    ExecuteTraderOrderZkos, ExecuteTraderOrderZkosSlTp, QueryLendOrderZkos, QueryTraderOrderZkos,
+    CancelTraderOrderZkos, CancelTraderOrderZkosSlTp, CreateLendOrderZkos,
+    CreateTraderOrderClientZkos, ExecuteLendOrderZkos, ExecuteTraderOrderZkos,
+    ExecuteTraderOrderZkosSlTp, QueryLendOrderZkos, QueryTraderOrderZkos,
 };
 
 /// Wrapper for hex-encoded binary data sent to relayer endpoints.
@@ -296,6 +297,18 @@ impl RelayerJsonRpcClient {
     pub async fn cancel_trader_order(
         &self,
         tx: CancelTraderOrderZkos,
+    ) -> Result<RequestResponse, RpcError> {
+        let params = HexEncodedData {
+            data: tx.encode_as_hex_string(),
+        };
+        self.client
+            .request("cancel_trader_order", AsRpcParams(params))
+            .await
+    }
+
+    pub async fn cancel_trader_order_sltp(
+        &self,
+        tx: CancelTraderOrderZkosSlTp,
     ) -> Result<RequestResponse, RpcError> {
         let params = HexEncodedData {
             data: tx.encode_as_hex_string(),
