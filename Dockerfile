@@ -3,7 +3,7 @@
 #############################
 # Build stage
 #############################
-FROM rust:1.87 AS builder
+FROM rust:1.89 AS builder
 
 # Install build dependencies (protoc is required by build.rs)
 RUN apt-get update && \
@@ -18,7 +18,7 @@ WORKDIR /workspace
 COPY . .
 
 # Compile the relayer-init and relayer-cli binaries in release mode
-RUN cargo build --release --bin relayer-init --bin relayer-cli
+RUN cargo build --release --bin relayer-cli
 
 #############################
 # Runtime stage
@@ -36,15 +36,15 @@ RUN useradd -m relayer
 WORKDIR /home/relayer
 
 # Copy the built binaries from the builder stage
-COPY --from=builder /workspace/target/release/relayer-init /usr/local/bin/relayer-init
 COPY --from=builder /workspace/target/release/relayer-cli /usr/local/bin/relayer-cli
 
 # Switch to the non-root user
 USER relayer
+ENV RUST_LOG=info
 
 # The program expects several environment variables.
 # You can provide them at `docker run` time.
 # Example:
 #   docker run -e ZKOS_SERVER_URL=https://zkos-rpc.twilight.rest ... relayer-init
 
-ENTRYPOINT ["relayer-init"] 
+ENTRYPOINT ["relayer-cli"] 

@@ -2,18 +2,18 @@
 
 use super::super::MsgRegisterBtcDepositAddress;
 use anyhow::anyhow;
-use base64::{Engine as _, engine::general_purpose};
-use cosmrs::crypto::{PublicKey, secp256k1::SigningKey};
+use base64::{engine::general_purpose, Engine as _};
+use cosmrs::crypto::{secp256k1::SigningKey, PublicKey};
 use cosmrs::tendermint::chain::Id;
 use cosmrs::{
-    Coin,
     tx::{Body, Fee, SignDoc, SignerInfo},
+    Coin,
 };
 use log::debug;
 use prost::Message;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use std::{error::Error, str::FromStr};
 

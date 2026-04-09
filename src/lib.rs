@@ -186,6 +186,7 @@ pub mod nyks {
 }
 
 pub use nyks::module::bridge::MsgRegisterBtcDepositAddress;
+pub use nyks::module::bridge::MsgWithdrawBtcRequest;
 pub use nyks::module::zkos::MsgMintBurnTradingBtc;
 pub use nyks::module::zkos::MsgTransferTx;
 

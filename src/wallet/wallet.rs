@@ -3,17 +3,15 @@ use crate::security::print_secret_to_tty;
 use crate::{faucet::*, generate_seed};
 use anyhow::anyhow;
 use bip32::{DerivationPath, XPrv};
-use bip39::{Error as Bip39Error, Language as B39Lang, Mnemonic};
+use bip39::{Language as B39Lang, Mnemonic};
 use cosmrs::crypto::{secp256k1::SigningKey, PublicKey};
 use cosmrs::AccountId;
 use log::{debug, error, info};
 use reqwest::Client;
-use ripemd::Ripemd160;
-use rpassword::prompt_password;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use tokio::time::{sleep, Duration};
 use zeroize::ZeroizeOnDrop;
 pub const BECH_PREFIX: &str = "twilight";
@@ -27,7 +25,7 @@ fn coin_type() -> u32 {
     use crate::config::NETWORK_TYPE;
     match NETWORK_TYPE.as_str() {
         "mainnet" => 118,
-        _ => 1,
+        _ => 118,
     }
 }
 
@@ -77,168 +75,57 @@ pub struct Balance {
     pub sats: SATS,
 }
 
-/// Generate a random Cosmos account (for testing)
-pub fn generate_cosmos_account(prefix: &str) -> anyhow::Result<(SigningKey, PublicKey, AccountId)> {
-    let signing_key = SigningKey::random();
-    let public_key = signing_key.public_key();
-    let sha256_hash = Sha256::digest(public_key.clone().to_bytes());
-    let ripemd160_hash = Ripemd160::digest(&sha256_hash);
-    let account_id = AccountId::new(prefix, &ripemd160_hash).map_err(|e| anyhow!("{}", e))?;
-    Ok((signing_key, public_key, account_id))
+pub use crate::wallet::btc_wallet::types::*;
+
+/// Deposit record from the Twilight indexer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerDeposit {
+    pub id: u64,
+    pub tx_hash: String,
+    pub block_height: u64,
+    pub reserve_address: String,
+    pub deposit_amount: String,
+    pub btc_height: String,
+    pub btc_hash: String,
+    pub votes: u64,
+    pub confirmed: bool,
+    pub created_at: String,
 }
 
-/// Import account from mnemonic phrase
-fn account_from_mnemonic() -> anyhow::Result<(SigningKey, PublicKey, AccountId)> {
-    let phrase = prompt_password("Enter your mnemonic phrase (12 or 24 words): ")?;
-
-    let cleaned = phrase.trim().to_lowercase();
-    let word_count = cleaned.split_whitespace().count();
-    debug!("Validating mnemonic with {} words...", word_count);
-
-    // First, surface spelling issues or bad checksum explicitly.
-    if let Err(e) = Mnemonic::parse_in(B39Lang::English, &cleaned) {
-        match e {
-            Bip39Error::UnknownWord(index) => {
-                return Err(anyhow!(
-                    "Unknown word at position {} — double-check spelling against the official BIP-39 list.",
-                    index + 1
-                ));
-            }
-            Bip39Error::InvalidChecksum => {
-                return Err(anyhow!(
-                    "Checksum mismatch: every word is valid, but the overall phrase isn't — a word is out of place or mistyped."
-                ));
-            }
-            other => return Err(anyhow!("Mnemonic validation error: {}", other)),
-        }
-    }
-
-    // Safe to parse now.
-    let mnemonic = Mnemonic::parse_in(B39Lang::English, &cleaned)?;
-    debug!("Mnemonic validated successfully");
-
-    let keys = derive_keys(&mnemonic)?;
-
-    let signing_key = SigningKey::from_slice(&keys.private_key)
-        .map_err(|e| anyhow!("Invalid private key: {}", e))?;
-    let public_key = signing_key.public_key();
-
-    debug!("Cosmos account derived from mnemonic successfully");
-
-    Ok((signing_key, public_key, keys.account_id))
+/// Withdrawal record from the Twilight indexer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerWithdrawal {
+    pub id: u64,
+    pub withdraw_identifier: u32,
+    pub withdraw_address: String,
+    pub withdraw_reserve_id: String,
+    pub withdraw_amount: String,
+    pub is_confirmed: bool,
+    pub block_height: u64,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
-/// Import account from hex private key
-fn account_from_private_key_hex() -> anyhow::Result<(SigningKey, PublicKey, AccountId)> {
-    let hex_pk = prompt_password("Enter 32-byte private key hex (64 chars): ")?;
-    let hex_pk = hex_pk.trim();
-
-    if hex_pk.len() != 64 {
-        return Err(anyhow!("Private key must be exactly 64 hex characters"));
-    }
-
-    let bytes = hex::decode(hex_pk).map_err(|e| anyhow!("Invalid hex: {}", e))?;
-    if bytes.len() != 32 {
-        return Err(anyhow!("Private key must be 32 bytes"));
-    }
-
-    let mut key_bytes = [0u8; 32];
-    key_bytes.copy_from_slice(&bytes);
-
-    let signing_key =
-        SigningKey::from_slice(&key_bytes).map_err(|e| anyhow!("Invalid key: {}", e))?;
-    let public_key = signing_key.public_key();
-    let account_id = public_key
-        .account_id(BECH_PREFIX)
-        .map_err(|e| anyhow!("{}", e))?;
-
-    Ok((signing_key, public_key, account_id))
+/// Full account info from the Twilight indexer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerAccountInfo {
+    pub address: String,
+    pub balance: String,
+    pub tx_count: u64,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub balances: Vec<IndexerBalance>,
+    pub deposits: Vec<IndexerDeposit>,
+    pub withdrawals: Vec<IndexerWithdrawal>,
 }
 
-pub async fn check_code(lcd_endpoint: &str, faucet_endpoint: &str) -> anyhow::Result<()> {
-    info!("Twilight Market Maker Client");
-
-    info!("Choose account import method:");
-    info!("1. Generate new random account (testing)");
-    info!("2. Import from mnemonic phrase");
-    info!("3. Import from private key hex");
-
-    let choice = prompt_password("Enter choice (1, 2, or 3): ")?;
-
-    let (signing_key, public_key, account_id) = match choice.trim() {
-        "1" => {
-            info!("Generating new random account...");
-            generate_cosmos_account(BECH_PREFIX)?
-        }
-        "2" => {
-            info!("Importing account from mnemonic...");
-            account_from_mnemonic()?
-        }
-        "3" => {
-            info!("Importing account from private key...");
-            account_from_private_key_hex()?
-        }
-        _ => {
-            info!("Invalid choice, using random account");
-            generate_cosmos_account(BECH_PREFIX)?
-        }
-    };
-
-    info!("Account ready! Address: {}", account_id);
-
-    // Step 1: Get testnet tokens from faucet
-    info!("Requesting testnet tokens from faucet...");
-    match get_nyks(&account_id.to_string(), faucet_endpoint).await {
-        Ok(_) => info!("Successfully received testnet tokens"),
-        Err(e) => {
-            error!("Failed to get tokens from faucet: {}", e);
-            info!("You may need to wait or try again later");
-        }
-    };
-
-    // Wait a bit before next operation
-    sleep(Duration::from_secs(5)).await;
-
-    // Step 2: Register Bitcoin deposit address
-    info!("Registering Bitcoin deposit address...");
-    let (_wif, btc_address) = crate::wallet::generate_btc_key::generate_random_btc_address()?;
-    debug!("Generated BTC Address: {}", btc_address);
-
-    match sign_and_send_reg_deposit_tx(
-        signing_key,
-        public_key,
-        account_id.to_string(),
-        btc_address.to_string(),
-        lcd_endpoint,
-    )
-    .await
-    {
-        Ok(_) => {
-            info!("Successfully registered BTC deposit address!");
-            debug!("BTC Address: {}", btc_address);
-        }
-        Err(e) => {
-            error!("Failed to register BTC deposit address: {}", e);
-        }
-    };
-
-    // Wait a bit before next operation
-    sleep(Duration::from_secs(5)).await;
-
-    // Step 3: Mint test satoshis
-    info!("Minting test satoshis...");
-    match mint_sats(&account_id.to_string(), faucet_endpoint).await {
-        Ok(_) => info!("Successfully minted test satoshis"),
-        Err(e) => {
-            error!("Failed to mint satoshis: {}", e);
-            info!("You may need to wait or try again later");
-        }
-    };
-
-    info!("Market maker client operations completed!");
-
-    Ok(())
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerBalance {
+    pub denom: String,
+    pub amount: String,
 }
+
+pub use crate::wallet::btc_wallet::balance::*;
 
 /// Fetch on-chain balance for the given address via LCD endpoint.
 pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<Balance> {
@@ -269,42 +156,6 @@ pub async fn check_balance(address: &str, lcd_endpoint: &str) -> anyhow::Result<
     })
 }
 
-pub async fn create_and_export_random_wallet_account(name: &str) -> anyhow::Result<()> {
-    let write_path = format!("{}.json", name);
-    if std::path::Path::new(&write_path).exists() {
-        return Err(anyhow!(
-            "{} already exists. Please remove or rename it before creating a new account.",
-            write_path
-        ));
-    }
-
-    let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
-    let keys = derive_keys(&mnemonic)?;
-    let (_wif, btc_address) =
-        crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
-
-    debug!("twilight account address: {}", keys.account_id);
-
-    let account_info = serde_json::json!({
-        "mnemonic": mnemonic.to_string(),
-        "private_key": hex::encode(&keys.private_key),
-        "public_key": hex::encode(&keys.public_key),
-        "twilightaddress": keys.account_id.to_string(),
-        "btc_address": btc_address.to_string(),
-        "btc_address_registered": false,
-        "balance_nyks": 0,
-        "balance_sats": 0,
-        "sequence": 0,
-    });
-
-    let json_string = serde_json::to_string_pretty(&account_info)?;
-    std::fs::write(write_path.clone(), json_string)?;
-
-    info!("Account information saved to {}", write_path);
-
-    Ok(())
-}
-
 #[derive(Clone, Serialize, Deserialize, ZeroizeOnDrop)]
 pub struct Wallet {
     pub(crate) private_key: Vec<u8>,
@@ -315,6 +166,9 @@ pub struct Wallet {
     pub sequence: u64,
     pub btc_address: String,
     pub btc_address_registered: bool,
+    /// BTC wallet key material (populated when created from mnemonic)
+    #[zeroize(skip)]
+    pub btc_wallet: Option<crate::wallet::btc_wallet::BtcWallet>,
     #[zeroize(skip)]
     pub account_info: Option<Account>,
     #[zeroize(skip)]
@@ -342,6 +196,7 @@ impl std::fmt::Debug for Wallet {
             .field("sequence", &self.sequence)
             .field("btc_address", &self.btc_address)
             .field("btc_address_registered", &self.btc_address_registered)
+            .field("btc_wallet", &self.btc_wallet)
             .field("account_info", &self.account_info)
             .field("chain_config", &self.chain_config)
             .finish()
@@ -358,9 +213,10 @@ impl Wallet {
         let chain_config = chain_config.unwrap_or_default();
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
         let keys = derive_keys(&mnemonic)?;
-        let (_wif, btc_address) =
-            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
-        print_secret_to_tty(&mut mnemonic.to_string())?;
+        let mnemonic_str = mnemonic.to_string();
+        let btc_wallet = crate::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic_str)?;
+        let btc_address = btc_wallet.address.clone();
+        print_secret_to_tty(&mut mnemonic_str.clone())?;
         Ok(Wallet {
             private_key: keys.private_key,
             public_key: keys.public_key,
@@ -370,6 +226,7 @@ impl Wallet {
             sequence: 0,
             btc_address,
             btc_address_registered: false,
+            btc_wallet: Some(btc_wallet),
             account_info: None,
             chain_config,
         })
@@ -378,8 +235,9 @@ impl Wallet {
     pub async fn create_new_with_random_btc_address() -> anyhow::Result<Wallet> {
         let mnemonic = Mnemonic::generate_in(B39Lang::English, 24)?;
         let keys = derive_keys(&mnemonic)?;
-        let (_wif, btc_address) =
-            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
+        let btc_wallet =
+            crate::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic.to_string())?;
+        let btc_address = btc_wallet.address.clone();
 
         Ok(Wallet {
             private_key: keys.private_key,
@@ -390,31 +248,10 @@ impl Wallet {
             sequence: 0,
             btc_address,
             btc_address_registered: false,
+            btc_wallet: Some(btc_wallet),
             account_info: None,
             chain_config: WalletEndPointConfig::from_env(),
         })
-    }
-
-    pub fn from(
-        private_key: String,
-        public_key: String,
-        twilightaddress: String,
-        btc_address: String,
-        chain_config: Option<WalletEndPointConfig>,
-    ) -> Wallet {
-        let chain_config = chain_config.unwrap_or_default();
-        Wallet {
-            private_key: hex::decode(private_key.clone()).unwrap_or_default(),
-            public_key: hex::decode(public_key).unwrap_or_default(),
-            twilightaddress,
-            balance_nyks: 0,
-            balance_sats: 0,
-            sequence: 0,
-            btc_address,
-            btc_address_registered: false,
-            account_info: None,
-            chain_config,
-        }
     }
 
     pub fn from_mnemonic(
@@ -424,8 +261,9 @@ impl Wallet {
         let chain_config = chain_config.unwrap_or_default();
         let mnemonic = Mnemonic::parse_in(B39Lang::English, mnemonic)?;
         let keys = derive_keys(&mnemonic)?;
-        let (_wif, btc_address) =
-            crate::wallet::generate_btc_key::segwit_from_mnemonic(&mnemonic.to_string())?;
+        let mnemonic_str = mnemonic.to_string();
+        let btc_wallet = crate::wallet::btc_wallet::BtcWallet::from_mnemonic(&mnemonic_str)?;
+        let btc_address = btc_wallet.address.clone();
         Ok(Wallet {
             private_key: keys.private_key,
             public_key: keys.public_key,
@@ -435,6 +273,7 @@ impl Wallet {
             sequence: 0,
             btc_address,
             btc_address_registered: false,
+            btc_wallet: Some(btc_wallet),
             account_info: None,
             chain_config,
         })
@@ -462,6 +301,7 @@ impl Wallet {
             sequence: 0,
             btc_address: btc_address.to_string(),
             btc_address_registered: false,
+            btc_wallet: None,
             account_info: None,
             chain_config,
         })
@@ -472,10 +312,20 @@ impl Wallet {
         let account_info: Value = serde_json::from_str(&json_string)?;
         let wallet_config = WalletEndPointConfig::from_env();
         let wallet = Wallet {
-            private_key: hex::decode(account_info["private_key"].as_str().unwrap().to_string())
-                .unwrap_or_default(),
-            public_key: hex::decode(account_info["public_key"].as_str().unwrap().to_string())
-                .unwrap_or_default(),
+            private_key: hex::decode(
+                account_info["private_key"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("private_key not found"))?
+                    .to_string(),
+            )
+            .unwrap_or_default(),
+            public_key: hex::decode(
+                account_info["public_key"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("public_key not found"))?
+                    .to_string(),
+            )
+            .unwrap_or_default(),
             twilightaddress: account_info["twilightaddress"]
                 .as_str()
                 .unwrap()
@@ -487,6 +337,9 @@ impl Wallet {
             btc_address_registered: account_info["btc_address_registered"]
                 .as_bool()
                 .unwrap_or_default(),
+            btc_wallet: account_info
+                .get("btc_wallet")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             account_info: None,
             chain_config: WalletEndPointConfig::new(
                 account_info["lcd_endpoint"]
@@ -545,6 +398,7 @@ impl Wallet {
             "twilightaddress": self.twilightaddress,
             "btc_address": self.btc_address,
             "btc_address_registered": self.btc_address_registered,
+            "btc_wallet": self.btc_wallet,
             "balance_nyks": self.balance_nyks,
             "balance_sats": self.balance_sats,
             "sequence": self.sequence,
@@ -564,6 +418,743 @@ impl Wallet {
         Ok(wallet)
     }
 
+    /// Send tokens (nyks or sats) to another Twilight address.
+    /// Returns the transaction hash on success.
+    pub async fn send_tokens(
+        &mut self,
+        to_address: &str,
+        amount: u64,
+        denom: &str,
+    ) -> anyhow::Result<String> {
+        use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
+        use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+        use crate::nyks_rpc::rpcclient::txresult::parse_tx_response;
+
+        if denom != "nyks" && denom != "sats" {
+            return Err(anyhow!("denom must be 'nyks' or 'sats'"));
+        }
+
+        #[derive(prost::Message)]
+        struct Coin {
+            #[prost(string, tag = "1")]
+            denom: String,
+            #[prost(string, tag = "2")]
+            amount: String,
+        }
+
+        #[derive(prost::Message)]
+        struct CosmosMsgSend {
+            #[prost(string, tag = "1")]
+            from_address: String,
+            #[prost(string, tag = "2")]
+            to_address: String,
+            #[prost(message, repeated, tag = "3")]
+            amount: Vec<Coin>,
+        }
+
+        let msg = CosmosMsgSend {
+            from_address: self.twilightaddress.clone(),
+            to_address: to_address.to_string(),
+            amount: vec![Coin {
+                denom: denom.to_string(),
+                amount: amount.to_string(),
+            }],
+        };
+
+        let method_type = MethodTypeURL::MsgSend;
+        let any_msg = method_type.type_url(msg);
+
+        let sk = self.signing_key()?;
+        let pk = self.public_key()?;
+
+        let account_details = crate::faucet::fetch_account_details(
+            &self.twilightaddress,
+            &self.chain_config.lcd_endpoint,
+        )
+        .await?;
+        let account_number = account_details.account.account_number;
+        let sequence = account_details.account.sequence;
+
+        let signed_tx =
+            method_type.sign_msg::<CosmosMsgSend>(any_msg, pk, sequence, account_number, sk)?;
+
+        let method = Method::broadcast_tx_sync;
+        let (tx_send, _): (RpcBody<TxParams>, String) =
+            RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
+
+        let rpc_endpoint = self.chain_config.rpc_endpoint.clone();
+        let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
+            .await
+            .map_err(|e| anyhow!("RPC send failed: {e}"))?;
+
+        match response {
+            Ok(rpc_response) => {
+                let result = parse_tx_response(&method, rpc_response)?;
+                let tx_hash = result.get_tx_hash();
+                let code = result.get_code();
+                if code == 0 {
+                    Ok(tx_hash)
+                } else {
+                    Err(anyhow!(
+                        "Transaction failed (code {code}), TX Hash: {tx_hash}"
+                    ))
+                }
+            }
+            Err(e) => Err(anyhow!("RPC error: {e}")),
+        }
+    }
+
+    /// Register the wallet's BTC deposit address on-chain (mainnet only).
+    /// This tells the chain that the user intends to deposit `btc_satoshi_amount` satoshis.
+    /// After registration, the user must send BTC to a reserve address to complete the deposit.
+    /// `twilight_staking_amount` is typically 10_000.
+    pub async fn register_btc_deposit(
+        &mut self,
+        btc_satoshi_amount: u64,
+        twilight_staking_amount: u64,
+    ) -> anyhow::Result<String> {
+        if crate::config::NETWORK_TYPE.as_str() != "mainnet" {
+            return Err(anyhow!("register_btc_deposit is only available on mainnet. Use get_test_tokens for testnet."));
+        }
+
+        use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
+        use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+        use crate::nyks_rpc::rpcclient::txresult::parse_tx_response;
+
+        let msg = crate::MsgRegisterBtcDepositAddress {
+            btc_deposit_address: self.btc_address.clone(),
+            btc_satoshi_test_amount: btc_satoshi_amount,
+            twilight_staking_amount,
+            twilight_address: self.twilightaddress.clone(),
+        };
+
+        let method_type = MethodTypeURL::MsgRegisterBtcDepositAddress;
+        let any_msg = method_type.type_url(msg);
+
+        let sk = self.signing_key()?;
+        let pk = self.public_key()?;
+
+        let account_details = crate::faucet::fetch_account_details(
+            &self.twilightaddress,
+            &self.chain_config.lcd_endpoint,
+        )
+        .await?;
+        let account_number = account_details.account.account_number;
+        let sequence = account_details.account.sequence;
+
+        let signed_tx = method_type.sign_msg::<crate::MsgRegisterBtcDepositAddress>(
+            any_msg,
+            pk,
+            sequence,
+            account_number,
+            sk,
+        )?;
+
+        let method = Method::broadcast_tx_sync;
+        let (tx_send, _): (RpcBody<TxParams>, String) =
+            RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
+
+        let rpc_endpoint = self.chain_config.rpc_endpoint.clone();
+        let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
+            .await
+            .map_err(|e| anyhow!("RPC send failed: {e}"))?;
+
+        match response {
+            Ok(rpc_response) => {
+                let result = parse_tx_response(&method, rpc_response)?;
+                let tx_hash = result.get_tx_hash();
+                let code = result.get_code();
+                if code == 0 {
+                    self.btc_address_registered = true;
+                    info!("Registered BTC deposit address: {}", self.btc_address);
+                    Ok(tx_hash)
+                } else {
+                    Err(anyhow!(
+                        "Register BTC deposit failed (code {code}), TX Hash: {tx_hash}"
+                    ))
+                }
+            }
+            Err(e) => Err(anyhow!("RPC error: {e}")),
+        }
+    }
+
+    /// Submit a BTC withdrawal request on-chain.
+    /// `withdraw_address` is the Bitcoin address to receive BTC.
+    /// `reserve_id` is the reserve pool to withdraw from (fetch via `fetch_btc_reserves`).
+    /// `withdraw_amount` is the amount in satoshis.
+    pub async fn withdraw_btc(
+        &mut self,
+        withdraw_address: &str,
+        reserve_id: u64,
+        withdraw_amount: u64,
+    ) -> anyhow::Result<String> {
+        if crate::config::NETWORK_TYPE.as_str() != "mainnet" {
+            return Err(anyhow!("withdraw_btc is only available on mainnet."));
+        }
+
+        use crate::nyks_rpc::rpcclient::method::{Method, MethodTypeURL};
+        use crate::nyks_rpc::rpcclient::txrequest::{RpcBody, RpcRequest, TxParams};
+        use crate::nyks_rpc::rpcclient::txresult::parse_tx_response;
+
+        let msg = crate::MsgWithdrawBtcRequest {
+            withdraw_address: withdraw_address.to_string(),
+            reserve_id,
+            withdraw_amount,
+            twilight_address: self.twilightaddress.clone(),
+        };
+
+        let method_type = MethodTypeURL::MsgWithdrawBtcRequest;
+        let any_msg = method_type.type_url(msg);
+
+        let sk = self.signing_key()?;
+        let pk = self.public_key()?;
+
+        let account_details = crate::faucet::fetch_account_details(
+            &self.twilightaddress,
+            &self.chain_config.lcd_endpoint,
+        )
+        .await?;
+        let account_number = account_details.account.account_number;
+        let sequence = account_details.account.sequence;
+
+        let signed_tx = method_type.sign_msg::<crate::MsgWithdrawBtcRequest>(
+            any_msg,
+            pk,
+            sequence,
+            account_number,
+            sk,
+        )?;
+
+        let method = Method::broadcast_tx_sync;
+        let (tx_send, _): (RpcBody<TxParams>, String) =
+            RpcRequest::new_with_data(TxParams::new(signed_tx.clone()), method, signed_tx);
+
+        let rpc_endpoint = self.chain_config.rpc_endpoint.clone();
+        let response = tokio::task::spawn_blocking(move || tx_send.send(rpc_endpoint))
+            .await
+            .map_err(|e| anyhow!("RPC send failed: {e}"))?;
+
+        match response {
+            Ok(rpc_response) => {
+                let result = parse_tx_response(&method, rpc_response)?;
+                let tx_hash = result.get_tx_hash();
+                let code = result.get_code();
+                if code == 0 {
+                    info!(
+                        "Withdrawal request submitted: {} sats to {}",
+                        withdraw_amount, withdraw_address
+                    );
+                    Ok(tx_hash)
+                } else {
+                    Err(anyhow!(
+                        "Withdraw BTC request failed (code {code}), TX Hash: {tx_hash}"
+                    ))
+                }
+            }
+            Err(e) => Err(anyhow!("RPC error: {e}")),
+        }
+    }
+
+    /// Fetch all BTC reserve pools from the chain.
+    /// Returns a list of reserves with their IDs, addresses, and capacity info.
+    /// Users need a reserve ID to submit withdrawal requests and should send BTC
+    /// deposits to the reserve address.
+    pub async fn fetch_btc_reserves(&self) -> anyhow::Result<Vec<BtcReserve>> {
+        let url = format!(
+            "{}/twilight-project/nyks/volt/btc_reserve",
+            self.chain_config.lcd_endpoint
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to fetch BTC reserves ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let json: Value = response.json().await?;
+        let reserves = json
+            .get("BtcReserves")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow!("Missing BtcReserves field in response"))?;
+
+        let mut result = Vec::new();
+        for r in reserves {
+            result.push(BtcReserve {
+                reserve_id: r
+                    .get("ReserveId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                reserve_address: r
+                    .get("ReserveAddress")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                judge_address: r
+                    .get("JudgeAddress")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                btc_relay_capacity_value: r
+                    .get("BtcRelayCapacityValue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                total_value: r
+                    .get("TotalValue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                private_pool_value: r
+                    .get("PrivatePoolValue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                public_value: r
+                    .get("PublicValue")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                fee_pool: r
+                    .get("FeePool")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                unlock_height: r
+                    .get("UnlockHeight")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+                round_id: r
+                    .get("RoundId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0),
+            });
+        }
+
+        Ok(result)
+    }
+
+    /// Look up whether a specific BTC address is already registered on-chain.
+    /// Returns the twilight address it is mapped to, or None if not registered.
+    pub async fn fetch_registered_btc_by_address(
+        &self,
+        btc_address: &str,
+    ) -> anyhow::Result<Option<BtcDepositInfo>> {
+        let url = format!(
+            "{}/twilight-project/nyks/bridge/registered_btc_deposit_address/{}",
+            self.chain_config.lcd_endpoint, btc_address
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            if status.as_u16() == 404 || status.as_u16() == 400 {
+                return Ok(None);
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to query BTC registration ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let json: Value = response.json().await?;
+        let deposit_address = json
+            .get("depositAddress")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let twilight_address = json
+            .get("twilightDepositAddress")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if deposit_address.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(BtcDepositInfo {
+            btc_deposit_address: deposit_address,
+            twilight_address,
+            is_confirmed: false,
+        }))
+    }
+
+    /// Query the on-chain deposit registration status for this wallet's twilight address.
+    /// Returns the registered BTC deposit address info including confirmation status.
+    pub async fn fetch_deposit_status(&self) -> anyhow::Result<Option<BtcDepositInfo>> {
+        let url = format!(
+            "{}/twilight-project/nyks/bridge/registered_btc_deposit_address_by_twilight_address/{}",
+            self.chain_config.lcd_endpoint, self.twilightaddress
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            if status.as_u16() == 404 {
+                return Ok(None);
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to query deposit status ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let json: Value = response.json().await?;
+        let deposit_address = json
+            .get("depositAddress")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let twilight_address = json
+            .get("twilightDepositAddress")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if deposit_address.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(BtcDepositInfo {
+            btc_deposit_address: deposit_address,
+            twilight_address,
+            is_confirmed: false, // this endpoint doesn't return confirmation; use fetch_all_deposits
+        }))
+    }
+
+    /// Query all registered BTC deposit addresses and find entries matching this wallet.
+    /// Returns full deposit info including confirmation status.
+    pub async fn fetch_deposit_details(&self) -> anyhow::Result<Vec<BtcDepositDetail>> {
+        let url = format!(
+            "{}/twilight-project/nyks/bridge/registered_btc_deposit_addresses",
+            self.chain_config.lcd_endpoint
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to fetch deposit addresses ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let json: Value = response.json().await?;
+        let addresses = json
+            .get("addresses")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow!("Missing addresses field in response"))?;
+
+        let mut results = Vec::new();
+        for a in addresses {
+            let twilight_addr = a
+                .get("twilightAddress")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if twilight_addr == self.twilightaddress {
+                results.push(BtcDepositDetail {
+                    btc_deposit_address: a
+                        .get("btcDepositAddress")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    btc_satoshi_amount: a
+                        .get("btcSatoshiTestAmount")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0),
+                    twilight_staking_amount: a
+                        .get("twilightStakingAmount")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0),
+                    twilight_address: twilight_addr.to_string(),
+                    is_confirmed: a
+                        .get("isConfirmed")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    creation_block_height: a
+                        .get("CreationTwilightBlockHeight")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0),
+                });
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Query the on-chain withdrawal request status from LCD.
+    /// Parameters match the LCD query: reserve_id, btc_address, withdraw_amount.
+    pub async fn fetch_withdrawal_status(
+        &self,
+        reserve_id: u64,
+        btc_address: &str,
+        withdraw_amount: u64,
+    ) -> anyhow::Result<Option<BtcWithdrawStatus>> {
+        let url = format!(
+            "{}/twilight-project/nyks/volt/btc_withdraw_request/{}?reserveId={}&btcAddress={}&withdrawAmount={}",
+            self.chain_config.lcd_endpoint, self.twilightaddress, reserve_id, btc_address, withdraw_amount
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            if status.as_u16() == 404 || status.as_u16() == 400 {
+                return Ok(None);
+            }
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to query withdrawal status ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let json: Value = response.json().await?;
+        let req = match json.get("BtcWithdrawRequest") {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        Ok(Some(BtcWithdrawStatus {
+            withdraw_identifier: req
+                .get("withdrawIdentifier")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            withdraw_address: req
+                .get("withdrawAddress")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            withdraw_reserve_id: req
+                .get("withdrawReserveId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            withdraw_amount: req
+                .get("withdrawAmount")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            twilight_address: req
+                .get("twilightAddress")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            is_confirmed: req
+                .get("isConfirmed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            creation_twilight_block_height: req
+                .get("CreationTwilightBlockHeight")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+        }))
+    }
+
+    /// Fetch account details from the Twilight indexer, including deposits and withdrawals.
+    pub async fn fetch_account_from_indexer(&self) -> anyhow::Result<IndexerAccountInfo> {
+        let url = format!(
+            "{}/api/accounts/{}",
+            crate::config::TWILIGHT_INDEXER_URL.as_str(),
+            self.twilightaddress
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Indexer request failed ({}): {}", status, body));
+        }
+
+        let json: Value = response.json().await?;
+
+        let account = json
+            .get("account")
+            .ok_or_else(|| anyhow!("Missing account field"))?;
+        let address = account
+            .get("address")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let balance = account
+            .get("balance")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0")
+            .to_string();
+        let tx_count = account.get("txCount").and_then(|v| v.as_u64()).unwrap_or(0);
+        let first_seen = account
+            .get("firstSeen")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let last_seen = account
+            .get("lastSeen")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let balances = json
+            .get("balances")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|b| IndexerBalance {
+                        denom: b
+                            .get("denom")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        amount: b
+                            .get("amount")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let deposits = json
+            .get("deposits")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|d| IndexerDeposit {
+                        id: d.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+                        tx_hash: d
+                            .get("txHash")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        block_height: d.get("blockHeight").and_then(|v| v.as_u64()).unwrap_or(0),
+                        reserve_address: d
+                            .get("reserveAddress")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        deposit_amount: d
+                            .get("depositAmount")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
+                        btc_height: d
+                            .get("btcHeight")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
+                        btc_hash: d
+                            .get("btcHash")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        votes: d.get("votes").and_then(|v| v.as_u64()).unwrap_or(0),
+                        confirmed: d
+                            .get("confirmed")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                        created_at: d
+                            .get("createdAt")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let withdrawals = json
+            .get("withdrawals")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|w| IndexerWithdrawal {
+                        id: w.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+                        withdraw_identifier: w
+                            .get("withdrawIdentifier")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32,
+                        withdraw_address: w
+                            .get("withdrawAddress")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        withdraw_reserve_id: w
+                            .get("withdrawReserveId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
+                        withdraw_amount: w
+                            .get("withdrawAmount")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0")
+                            .to_string(),
+                        is_confirmed: w
+                            .get("isConfirmed")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                        block_height: w.get("blockHeight").and_then(|v| v.as_u64()).unwrap_or(0),
+                        created_at: w
+                            .get("createdAt")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        updated_at: w
+                            .get("updatedAt")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(IndexerAccountInfo {
+            address,
+            balance,
+            tx_count,
+            first_seen,
+            last_seen,
+            balances,
+            deposits,
+            withdrawals,
+        })
+    }
+
     pub fn get_zk_account_seed(
         &self,
         chain_id: &str,
@@ -580,9 +1171,145 @@ impl Wallet {
             .get_signature(),
         ))
     }
+
+    /// Fetch proposed BTC reserves from sweep address proposals.
+    /// The `limit` parameter controls how many recent records to return.
+    /// Parses each btcScript to extract the CLTV unlock height and returns
+    /// the reserve address (btcAddress) along with the unlock height.
+    pub async fn fetch_btc_proposed_reserve(
+        &self,
+        limit: u64,
+    ) -> anyhow::Result<Vec<BtcProposedReserve>> {
+        let url = format!(
+            "{}/twilight-project/nyks/bridge/propose_sweep_addresses_all/{}",
+            self.chain_config.lcd_endpoint, limit
+        );
+        let client = Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to fetch proposed sweep addresses ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let json: Value = response.json().await?;
+        let msgs = json
+            .get("proposeSweepAddressMsgs")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow!("Missing proposeSweepAddressMsgs in response"))?;
+
+        let mut results = Vec::new();
+        for msg in msgs {
+            let btc_address = msg
+                .get("btcAddress")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing btcAddress in proposal"))?
+                .to_string();
+
+            let btc_script_hex = msg
+                .get("btcScript")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing btcScript in proposal"))?;
+
+            let reserve_id = msg
+                .get("reserveId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string();
+
+            let round_id = msg
+                .get("roundId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string();
+
+            let judge_address = msg
+                .get("judgeAddress")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let unlock_height = parse_cltv_from_script(btc_script_hex)?;
+
+            results.push(BtcProposedReserve {
+                reserve_address: btc_address,
+                unlock_height,
+                reserve_id,
+                round_id,
+                judge_address,
+            });
+        }
+
+        // For each unique reserve_id, keep only the entry with the highest round_id.
+        let mut best_by_reserve: HashMap<String, BtcProposedReserve> = HashMap::new();
+        for entry in results {
+            let round: u64 = entry.round_id.parse().unwrap_or(0);
+            let existing = best_by_reserve.get(&entry.reserve_id);
+            let replace = match existing {
+                None => true,
+                Some(prev) => round > prev.round_id.parse::<u64>().unwrap_or(0),
+            };
+            if replace {
+                best_by_reserve.insert(entry.reserve_id.clone(), entry);
+            }
+        }
+
+        Ok(best_by_reserve.into_values().collect())
+    }
+}
+
+/// Parse the CLTV (CheckLockTimeVerify) unlock height from a hex-encoded BTC script.
+/// Looks for the pattern: OP_CHECKMULTISIG (0xae/0xaf) followed by a push opcode + locktime + OP_CLTV (0xb1).
+fn parse_cltv_from_script(hex_script: &str) -> anyhow::Result<u64> {
+    let script_bytes =
+        hex::decode(hex_script).map_err(|e| anyhow!("Invalid hex in btcScript: {}", e))?;
+
+    // Find OP_CHECKLOCKTIMEVERIFY (0xb1) and read the pushed value before it.
+    // The pattern is: <push_opcode> <locktime_bytes> OP_CLTV(0xb1) OP_DROP(0x75)
+    for i in 0..script_bytes.len() {
+        if script_bytes[i] == 0xb1 {
+            // The bytes before 0xb1 are the locktime push
+            // push opcode tells us the length: 0x01..0x4b = direct push of N bytes
+            // We need to find the push opcode that starts this sequence
+            if i < 2 {
+                continue;
+            }
+            // Walk backwards to find the push length opcode
+            // Common cases: 03 XX XX XX b1 (3-byte push) or 02 XX XX b1 (2-byte push)
+            for push_len in 1u8..=4 {
+                let start = i.checked_sub(push_len as usize + 1);
+                if let Some(start) = start {
+                    if script_bytes[start] == push_len {
+                        let locktime_bytes =
+                            &script_bytes[start + 1..start + 1 + push_len as usize];
+                        let mut value: u64 = 0;
+                        for (j, &byte) in locktime_bytes.iter().enumerate() {
+                            value |= (byte as u64) << (8 * j);
+                        }
+                        return Ok(value);
+                    }
+                }
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "Could not find OP_CHECKLOCKTIMEVERIFY in btcScript"
+    ))
 }
 
 pub async fn get_test_tokens(wallet: &mut Wallet) -> anyhow::Result<()> {
+    if crate::config::NETWORK_TYPE.as_str() == "mainnet" {
+        return Err(anyhow!(
+            "get_test_tokens is only available on testnet. Use register-btc for mainnet deposits."
+        ));
+    }
+
     let balance = wallet.update_balance().await?;
     debug!("Checking balance values if nyks is less than 50000");
     debug!("nyks: {}", balance.nyks);
@@ -679,5 +1406,51 @@ mod tests {
         println!("Wallet address:     {}", wallet.twilightaddress);
         println!("Wallet BTC address: {}", wallet.btc_address);
         println!("Public key hex:     {}", hex::encode(&wallet.public_key));
+    }
+
+    #[test]
+    fn test_parse_cltv_from_script() {
+        // Real script from propose_sweep_addresses_all response
+        let script = "542103bb383539f308f0b7e4b927385228367849eb7bcac29b3910258dabd580754f1f2103c376a184b351986910aa3dfdbfff794852850ba9f2e50cc43e6b34c5e81cbb15210392cee64c6886601943f83c38e9a566c08404d580bae1e5f93aa81e87c66aa169210267d9a474a97e50e02d7de4108a7e22499b85c205bd37ee883abf91df9c61b8b02102f6b205458790818994b85400bc311a053db17d43c83c9f03401057838ede691a21036beca3c8d5987b592f31e159d569d6ba1773367e795642fc1e421572c72995ce56af0300690eb1";
+        let height = parse_cltv_from_script(script).expect("Failed to parse CLTV");
+        // 0x0e6900 little-endian = 944384
+        assert_eq!(height, 944384);
+        println!("Parsed unlock height: {}", height);
+    }
+
+    #[test]
+    fn test_parse_cltv_invalid_script() {
+        // Script with no OP_CHECKLOCKTIMEVERIFY
+        let result = parse_cltv_from_script("5221deadbeef52ae");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_cltv_invalid_hex() {
+        let result = parse_cltv_from_script("not_valid_hex");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_btc_proposed_reserve() {
+        let wallet = Wallet::from_mnemonic(
+            "test test test test test test test test test test test junk",
+            None,
+        )
+        .expect("Failed to create wallet");
+
+        let reserves = wallet
+            .fetch_btc_proposed_reserve(10)
+            .await
+            .expect("Failed to fetch proposed reserves");
+
+        println!("Found {} unique reserves (from 10 records):", reserves.len());
+        for r in &reserves {
+            println!(
+                "  reserve_id: {}, round_id: {}, unlock_height: {}, address: {}, judge: {}",
+                r.reserve_id, r.round_id, r.unlock_height, r.reserve_address, r.judge_address
+            );
+        }
+        assert!(!reserves.is_empty(), "Should have at least one proposed reserve");
     }
 }

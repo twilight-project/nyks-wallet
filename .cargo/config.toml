@@ -9,3 +9,7 @@ check-vw = "check --no-default-features --features validator-wallet"
 test-vw = "test --no-default-features --features validator-wallet"
 check-vw-lib = "check --lib --no-default-features --features validator-wallet"
 test-vw-lib = "test --lib --no-default-features --features validator-wallet"
+[net]
+git-fetch-with-cli = true
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "symbol-mangling-version=v0"]

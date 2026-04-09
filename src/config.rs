@@ -1,25 +1,109 @@
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
-pub static FAUCET_BASE_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("FAUCET_BASE_URL").unwrap_or("http://0.0.0.0:6969".to_string()));
-pub static NYKS_LCD_BASE_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("NYKS_LCD_BASE_URL").unwrap_or("http://0.0.0.0:1317".to_string()));
-pub static NYKS_RPC_BASE_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("NYKS_RPC_BASE_URL").unwrap_or("http://0.0.0.0:26657".to_string()));
-pub static VALIDATOR_WALLET_PATH: LazyLock<String> =
-    LazyLock::new(|| std::env::var("VALIDATOR_WALLET_PATH").unwrap_or("validator.mnemonic".to_string()));
-pub static RELAYER_PROGRAM_JSON_PATH: LazyLock<String> =
-    LazyLock::new(|| std::env::var("RELAYER_PROGRAM_JSON_PATH").unwrap_or_else(|_| "./relayerprogram.json".to_string()));
-pub static ZKOS_SERVER_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("ZKOS_SERVER_URL").unwrap_or("http://0.0.0.0:3030".to_string()));
-pub static RELAYER_API_RPC_SERVER_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("RELAYER_API_RPC_SERVER_URL").unwrap_or("http://0.0.0.0:8088/api".to_string()));
-pub static CHAIN_ID: LazyLock<String> =
-    LazyLock::new(|| std::env::var("CHAIN_ID").unwrap_or("nyks".to_string()));
-/// Network type: "testnet" or "mainnet". Controls BIP-44 coin type (1 vs 118).
+/// Network type: "testnet" or "mainnet".
+/// and default endpoint URLs.
 pub static NETWORK_TYPE: LazyLock<String> =
     LazyLock::new(|| std::env::var("NETWORK_TYPE").unwrap_or("mainnet".to_string()));
+
+pub fn is_mainnet() -> bool {
+    *NETWORK_TYPE == "mainnet"
+}
+
+/// Bitcoin network type: "mainnet" or "testnet".
+/// Falls back to `NETWORK_TYPE` if `BTC_NETWORK_TYPE` is not set.
+pub static BTC_NETWORK_TYPE: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("BTC_NETWORK_TYPE").unwrap_or("mainnet".to_string())
+});
+
+pub fn is_btc_mainnet() -> bool {
+    *BTC_NETWORK_TYPE == "mainnet"
+}
+
+pub static BTC_ESPLORA_PRIMARY_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_btc_mainnet() {
+        "https://blockstream.info/api".to_string()
+    } else {
+        "https://blockstream.info/testnet/api".to_string()
+    };
+    std::env::var("BTC_ESPLORA_PRIMARY_URL").unwrap_or(default)
+});
+
+pub static BTC_ESPLORA_FALLBACK_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_btc_mainnet() {
+        "https://mempool.space/api".to_string()
+    } else {
+        "https://mempool.space/testnet4/api".to_string()
+    };
+    std::env::var("BTC_ESPLORA_FALLBACK_URL").unwrap_or(default)
+});
+
+/// Returns `(primary, fallback)` Esplora API endpoints for BTC queries.
+/// Overridable via `BTC_ESPLORA_PRIMARY_URL` and `BTC_ESPLORA_FALLBACK_URL` env vars.
+pub fn esplora_endpoints() -> (&'static str, &'static str) {
+    (
+        BTC_ESPLORA_PRIMARY_URL.as_str(),
+        BTC_ESPLORA_FALLBACK_URL.as_str(),
+    )
+}
+
+pub static FAUCET_BASE_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "".to_string()
+    } else {
+        "https://faucet-rpc.twilight.rest".to_string()
+    };
+    std::env::var("FAUCET_BASE_URL").unwrap_or(default)
+});
+pub static NYKS_LCD_BASE_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://lcd.twilight.org".to_string()
+    } else {
+        "https://lcd.twilight.rest".to_string()
+    };
+    std::env::var("NYKS_LCD_BASE_URL").unwrap_or(default)
+});
+pub static NYKS_RPC_BASE_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://rpc.twilight.org".to_string()
+    } else {
+        "https://rpc.twilight.rest".to_string()
+    };
+    std::env::var("NYKS_RPC_BASE_URL").unwrap_or(default)
+});
+pub static VALIDATOR_WALLET_PATH: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("VALIDATOR_WALLET_PATH").unwrap_or("validator.mnemonic".to_string())
+});
+pub static RELAYER_PROGRAM_JSON_PATH: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("RELAYER_PROGRAM_JSON_PATH")
+        .unwrap_or_else(|_| "./relayerprogram.json".to_string())
+});
+pub static ZKOS_SERVER_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://zkserver.twilight.org".to_string()
+    } else {
+        "https://nykschain.twilight.rest/zkos".to_string()
+    };
+    std::env::var("ZKOS_SERVER_URL").unwrap_or(default)
+});
+pub static RELAYER_API_RPC_SERVER_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://api.ephemeral.fi/api".to_string()
+    } else {
+        "https://relayer.twilight.rest/api".to_string()
+    };
+    std::env::var("RELAYER_API_RPC_SERVER_URL").unwrap_or(default)
+});
+pub static CHAIN_ID: LazyLock<String> =
+    LazyLock::new(|| std::env::var("CHAIN_ID").unwrap_or("nyks".to_string()));
+pub static TWILIGHT_INDEXER_URL: LazyLock<String> = LazyLock::new(|| {
+    let default = if is_mainnet() {
+        "https://indexer.twilight.org".to_string()
+    } else {
+        "https://indexer.twilight.rest".to_string()
+    };
+    std::env::var("TWILIGHT_INDEXER_URL").unwrap_or(default)
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EndpointConfig {
@@ -35,6 +119,9 @@ pub struct EndpointConfig {
 
 impl Default for EndpointConfig {
     fn default() -> Self {
+        unsafe {
+            std::env::set_var("ZKOS_SERVER_URL", &ZKOS_SERVER_URL.to_string());
+        }
         Self {
             validator_wallet_path: VALIDATOR_WALLET_PATH.to_string(),
             relayer_program_json_path: RELAYER_PROGRAM_JSON_PATH.to_string(),

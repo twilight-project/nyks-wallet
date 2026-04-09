@@ -6,36 +6,40 @@ use bitcoin::{
 };
 use std::str::FromStr;
 
-/// Returns (WIF, bc1… address)
+fn btc_network() -> (Network, NetworkKind) {
+    if crate::config::is_btc_mainnet() {
+        (Network::Bitcoin, NetworkKind::Main)
+    } else {
+        (Network::Testnet, NetworkKind::Test)
+    }
+}
+
+/// Returns (WIF, bc1q/tb1q address)
 pub fn segwit_from_mnemonic(mnemonic: &str) -> anyhow::Result<(String, String)> {
-    // 1. BIP‑39 seed
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic)?;
-    let seed = mnemonic.to_seed(""); // empty pass‑phrase → deterministic
+    let seed = mnemonic.to_seed("");
 
-    // 2. Master XPrv on main‑net
-    let master = Xpriv::new_master(Network::Bitcoin, &seed)?;
+    let (network, network_kind) = btc_network();
 
-    // 3. BIP‑84 path m/84'/0'/0'/0/0  (purpose 84', coin‑type 0', account 0', external 0, index 0)
+    let master = Xpriv::new_master(network, &seed)?;
     let path = DerivationPath::from_str("m/84'/0'/0'/0/0")?;
     let secp = Secp256k1::signing_only();
     let child = master.derive_priv(&secp, &path)?;
 
-    // 4. Keys
     let privkey = PrivateKey {
         compressed: true,
-        network: NetworkKind::Main,
+        network: network_kind,
         inner: child.private_key,
     };
     let pubkey: PublicKey = privkey.public_key(&secp);
     let compressed_pubkey = CompressedPublicKey::from_slice(&pubkey.to_bytes()).unwrap();
-    // 5. Native SegWit (bech32 bc1…) address
-    let addr = Address::p2wpkh(&compressed_pubkey, Network::Bitcoin);
+    let addr = Address::p2wpkh(&compressed_pubkey, network);
 
     Ok((privkey.to_wif(), addr.to_string()))
 }
 
 /// Generate a random valid BTC segwit address using a fresh mnemonic.
-/// Returns (WIF, bc1... address).
+/// Returns (WIF, bc1q/tb1q address).
 pub fn generate_random_btc_address() -> anyhow::Result<(String, String)> {
     let mnemonic = Mnemonic::generate_in(Language::English, 24)?;
     segwit_from_mnemonic(&mnemonic.to_string())
@@ -46,9 +50,11 @@ pub fn segwit_from_private_key(private_key: &str) -> anyhow::Result<(String, Str
     let secp = Secp256k1::signing_only();
     let pubkey: PublicKey = privkey.public_key(&secp);
     let compressed_pubkey = CompressedPublicKey::from_slice(&pubkey.to_bytes()).unwrap();
-    let addr = Address::p2wpkh(&compressed_pubkey, Network::Bitcoin);
+    let (network, _) = btc_network();
+    let addr = Address::p2wpkh(&compressed_pubkey, network);
     Ok((privkey.to_wif(), addr.to_string()))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,14 +65,8 @@ mod tests {
         let (wif, address) = segwit_from_mnemonic(mnemonic).unwrap();
         println!("WIF: {}", wif);
         println!("Address: {}", address);
-        // // Check WIF format is correct
-        // assert!(wif.starts_with("c"));
-        // assert_eq!(wif.len(), 52);
-
-        // // Check address format is correct
-        // assert!(address.to_string().starts_with("tb1q"));
-        // assert_eq!(address.to_string().len(), 42);
     }
+
     #[test]
     fn test_segwit_from_private_key() {
         let private_key = "Ky3HTdELEKGJaHBXn3sstmxWbiJVNinKUnZoDanPpBR6czAPMMVg";

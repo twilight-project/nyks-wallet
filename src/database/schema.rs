@@ -6,6 +6,7 @@ diesel::table! {
     zk_accounts (id) {
         id -> Nullable<Integer>,
         wallet_id -> Text,
+        network_type -> Text,
         account_index -> BigInt,
         qq_address -> Text,
         balance -> BigInt,
@@ -13,6 +14,7 @@ diesel::table! {
         scalar -> Text,
         io_type_value -> Integer,
         on_chain -> Bool,
+        tx_type -> Nullable<Text>,
         created_at -> Timestamp,
         updated_at -> Timestamp,
     }
@@ -36,6 +38,7 @@ diesel::table! {
     order_wallets (id) {
         id -> Nullable<Integer>,
         wallet_id -> Text,
+        network_type -> Text,
         chain_id -> Text,
         seed_encrypted -> Binary,
         seed_salt -> Binary,
@@ -54,6 +57,7 @@ diesel::table! {
     utxo_details (id) {
         id -> Nullable<Integer>,
         wallet_id -> Text,
+        network_type -> Text,
         account_index -> BigInt,
         utxo_data -> Text, // JSON serialized UtxoDetailResponse
         created_at -> Timestamp,
@@ -66,6 +70,7 @@ diesel::table! {
     request_ids (id) {
         id -> Nullable<Integer>,
         wallet_id -> Text,
+        network_type -> Text,
         account_index -> BigInt,
         request_id -> Text,
         created_at -> Timestamp,
@@ -90,6 +95,7 @@ diesel::table! {
         status -> Text,
         tx_hash -> Nullable<Text>,
         created_at -> Timestamp,
+        network_type -> Text,
     }
 }
 
@@ -104,6 +110,62 @@ diesel::table! {
         amount -> BigInt,
         tx_hash -> Nullable<Text>,
         created_at -> Timestamp,
+        network_type -> Text,
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+diesel::table! {
+    btc_deposits (id) {
+        id -> Nullable<Integer>,
+        wallet_id -> Text,
+        network_type -> Text,
+        btc_address -> Text,
+        twilight_address -> Text,
+        reserve_address -> Nullable<Text>,
+        reserve_id -> Nullable<BigInt>,
+        amount -> BigInt,
+        staking_amount -> BigInt,
+        registration_tx_hash -> Nullable<Text>,
+        btc_tx_hash -> Nullable<Text>,
+        status -> Text,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+diesel::table! {
+    btc_withdrawals (id) {
+        id -> Nullable<Integer>,
+        wallet_id -> Text,
+        network_type -> Text,
+        withdraw_address -> Text,
+        twilight_address -> Text,
+        reserve_id -> BigInt,
+        amount -> BigInt,
+        tx_hash -> Nullable<Text>,
+        status -> Text,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+diesel::table! {
+    btc_transfers (id) {
+        id -> Nullable<Integer>,
+        wallet_id -> Text,
+        network_type -> Text,
+        from_address -> Text,
+        to_address -> Text,
+        amount -> BigInt,
+        fee -> BigInt,
+        tx_id -> Nullable<Text>,
+        status -> Text,
+        confirmations -> Integer,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
     }
 }
 
@@ -116,4 +178,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     request_ids,
     order_history,
     transfer_history,
+    btc_deposits,
+    btc_withdrawals,
+    btc_transfers,
 );

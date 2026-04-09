@@ -74,6 +74,9 @@ pub enum MethodTypeURL {
     MsgMintBurnTradingBtc,
     MsgTransferTx,
 
+    // ---- bank module ----
+    MsgSend,
+
     // ---- bridge module ----
     MsgConfirmBtcDeposit,
     MsgRegisterBtcDepositAddress,
@@ -125,6 +128,16 @@ impl MethodTypeURL {
                     value: buf,
                 };
                 any
+            }
+
+            // ---- bank module ----
+            MethodTypeURL::MsgSend => {
+                let mut buf = Vec::new();
+                msg.encode(&mut buf).expect("msg encoding failed");
+                cosmrs::Any {
+                    type_url: "/cosmos.bank.v1beta1.MsgSend".to_string(),
+                    value: buf,
+                }
             }
 
             // ---- bridge module ----

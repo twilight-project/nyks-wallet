@@ -14,7 +14,12 @@ use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::security::SecurePassword;
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use twilight_client_sdk::{relayer_rpcclient::method::UtxoDetailResponse, zkvm::IOType};
+use twilight_client_sdk::{relayer_rpcclient::method::UtxoDetailResponse, relayer_types::TXType, zkvm::IOType};
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+fn current_network_type() -> String {
+    crate::config::NETWORK_TYPE.to_string()
+}
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 #[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +29,7 @@ use twilight_client_sdk::{relayer_rpcclient::method::UtxoDetailResponse, zkvm::I
 pub struct DbZkAccount {
     pub id: Option<i32>,
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub qq_address: String,
     pub balance: i64,
@@ -31,6 +37,7 @@ pub struct DbZkAccount {
     pub scalar: String,
     pub io_type_value: i32,
     pub on_chain: bool,
+    pub tx_type: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }
@@ -40,6 +47,7 @@ pub struct DbZkAccount {
 #[diesel(table_name = zk_accounts)]
 pub struct NewDbZkAccount {
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub qq_address: String,
     pub balance: i64,
@@ -47,6 +55,7 @@ pub struct NewDbZkAccount {
     pub scalar: String,
     pub io_type_value: i32,
     pub on_chain: bool,
+    pub tx_type: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }
@@ -84,6 +93,7 @@ impl DbZkAccount {
         let now = chrono::Utc::now().naive_utc();
         NewDbZkAccount {
             wallet_id,
+            network_type: current_network_type(),
             account_index: zk_account.index as i64,
             qq_address: zk_account.qq_address.clone(),
             balance: zk_account.balance as i64,
@@ -91,6 +101,7 @@ impl DbZkAccount {
             scalar: zk_account.scalar.clone(),
             io_type_value: zk_account.io_type.clone() as i32,
             on_chain: zk_account.on_chain,
+            tx_type: zk_account.tx_type.as_ref().map(|t| format!("{:?}", t)),
             created_at: now,
             updated_at: now,
         }
@@ -103,6 +114,8 @@ impl DbZkAccount {
             _ => return Err(format!("Invalid io_type_value: {}", self.io_type_value)),
         };
 
+        let tx_type = self.tx_type.as_deref().and_then(TXType::from_str);
+
         Ok(ZkAccount {
             qq_address: self.qq_address.clone(),
             balance: self.balance as u64,
@@ -111,6 +124,7 @@ impl DbZkAccount {
             index: self.account_index as u64,
             io_type,
             on_chain: self.on_chain,
+            tx_type,
         })
     }
 
@@ -118,6 +132,7 @@ impl DbZkAccount {
         self.balance = zk_account.balance as i64;
         self.io_type_value = zk_account.io_type.clone() as i32;
         self.on_chain = zk_account.on_chain;
+        self.tx_type = zk_account.tx_type.as_ref().map(|t| format!("{:?}", t));
         self.updated_at = chrono::Utc::now().naive_utc();
     }
 }
@@ -131,6 +146,7 @@ impl DbZkAccount {
 pub struct DbOrderWallet {
     pub id: Option<i32>,
     pub wallet_id: String,
+    pub network_type: String,
     pub chain_id: String,
     pub seed_encrypted: Vec<u8>,
     pub seed_salt: Vec<u8>,
@@ -148,6 +164,7 @@ pub struct DbOrderWallet {
 #[diesel(table_name = order_wallets)]
 pub struct NewDbOrderWallet {
     pub wallet_id: String,
+    pub network_type: String,
     pub chain_id: String,
     pub seed_encrypted: Vec<u8>,
     pub seed_salt: Vec<u8>,
@@ -168,6 +185,7 @@ pub struct NewDbOrderWallet {
 pub struct DbUtxoDetail {
     pub id: Option<i32>,
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub utxo_data: String, // JSON serialized
     pub created_at: NaiveDateTime,
@@ -179,6 +197,7 @@ pub struct DbUtxoDetail {
 #[diesel(table_name = utxo_details)]
 pub struct NewDbUtxoDetail {
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub utxo_data: String,
     pub created_at: NaiveDateTime,
@@ -193,6 +212,7 @@ pub struct NewDbUtxoDetail {
 pub struct DbRequestId {
     pub id: Option<i32>,
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub request_id: String,
     pub created_at: NaiveDateTime,
@@ -204,6 +224,7 @@ pub struct DbRequestId {
 #[diesel(table_name = request_ids)]
 pub struct NewDbRequestId {
     pub wallet_id: String,
+    pub network_type: String,
     pub account_index: i64,
     pub request_id: String,
     pub created_at: NaiveDateTime,
@@ -229,6 +250,7 @@ impl DbOrderWallet {
 
         Ok(NewDbOrderWallet {
             wallet_id,
+            network_type: current_network_type(),
             chain_id,
             seed_encrypted: encrypted_seed,
             seed_salt: salt,
@@ -332,6 +354,7 @@ impl DbUtxoDetail {
 
         Ok(NewDbUtxoDetail {
             wallet_id,
+            network_type: current_network_type(),
             account_index: account_index as i64,
             utxo_data,
             created_at: now,
@@ -366,6 +389,7 @@ pub struct DbOrderHistory {
     pub status: String,
     pub tx_hash: Option<String>,
     pub created_at: NaiveDateTime,
+    pub network_type: String,
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -385,6 +409,7 @@ pub struct NewDbOrderHistory {
     pub status: String,
     pub tx_hash: Option<String>,
     pub created_at: NaiveDateTime,
+    pub network_type: String,
 }
 
 // Transfer history model
@@ -402,6 +427,7 @@ pub struct DbTransferHistory {
     pub amount: i64,
     pub tx_hash: Option<String>,
     pub created_at: NaiveDateTime,
+    pub network_type: String,
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -415,6 +441,120 @@ pub struct NewDbTransferHistory {
     pub amount: i64,
     pub tx_hash: Option<String>,
     pub created_at: NaiveDateTime,
+    pub network_type: String,
+}
+
+// BTC Deposit model
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = btc_deposits)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct DbBtcDeposit {
+    pub id: Option<i32>,
+    pub wallet_id: String,
+    pub network_type: String,
+    pub btc_address: String,
+    pub twilight_address: String,
+    pub reserve_address: Option<String>,
+    pub reserve_id: Option<i64>,
+    pub amount: i64,
+    pub staking_amount: i64,
+    pub registration_tx_hash: Option<String>,
+    pub btc_tx_hash: Option<String>,
+    pub status: String,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = btc_deposits)]
+pub struct NewDbBtcDeposit {
+    pub wallet_id: String,
+    pub network_type: String,
+    pub btc_address: String,
+    pub twilight_address: String,
+    pub reserve_address: Option<String>,
+    pub reserve_id: Option<i64>,
+    pub amount: i64,
+    pub staking_amount: i64,
+    pub registration_tx_hash: Option<String>,
+    pub btc_tx_hash: Option<String>,
+    pub status: String,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+// BTC Withdrawal model
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = btc_withdrawals)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct DbBtcWithdrawal {
+    pub id: Option<i32>,
+    pub wallet_id: String,
+    pub network_type: String,
+    pub withdraw_address: String,
+    pub twilight_address: String,
+    pub reserve_id: i64,
+    pub amount: i64,
+    pub tx_hash: Option<String>,
+    pub status: String,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = btc_withdrawals)]
+pub struct NewDbBtcWithdrawal {
+    pub wallet_id: String,
+    pub network_type: String,
+    pub withdraw_address: String,
+    pub twilight_address: String,
+    pub reserve_id: i64,
+    pub amount: i64,
+    pub tx_hash: Option<String>,
+    pub status: String,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = btc_transfers)]
+pub struct DbBtcTransfer {
+    pub id: Option<i32>,
+    pub wallet_id: String,
+    pub network_type: String,
+    pub from_address: String,
+    pub to_address: String,
+    pub amount: i64,
+    pub fee: i64,
+    pub tx_id: Option<String>,
+    pub status: String,
+    pub confirmations: i32,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = btc_transfers)]
+pub struct NewDbBtcTransfer {
+    pub wallet_id: String,
+    pub network_type: String,
+    pub from_address: String,
+    pub to_address: String,
+    pub amount: i64,
+    pub fee: i64,
+    pub tx_id: Option<String>,
+    pub status: String,
+    pub confirmations: i32,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
@@ -424,6 +564,7 @@ impl DbRequestId {
 
         NewDbRequestId {
             wallet_id,
+            network_type: current_network_type(),
             account_index: account_index as i64,
             request_id,
             created_at: now,

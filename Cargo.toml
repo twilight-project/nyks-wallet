@@ -11,7 +11,7 @@ required-features = ["order-wallet"]
 
 [[bin]]
 name = "relayer-cli"
-path = "src/bin/relayer_cli.rs"
+path = "src/bin/relayer_cli/main.rs"
 required-features = ["order-wallet"]
 
 [lib]
@@ -98,9 +98,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tendermint-rpc = { version = "0.34", features = ["http-client"] }
 uuid = { version = "1.6.1", features = ["v4", "serde"] }
 zeroize = "1.7"
+bdk_wallet = { version = "2.3", default-features = false, features = ["std", "keys-bip39"] }
+bdk_esplora = { version = "0.22", default-features = false, features = ["async-https-rustls", "blocking", "tokio"] }
 aes-gcm = "0.10"
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
+qr2term = "0.3"
 
 # ---- Database (feature-gated) ----------------------------------------------
 diesel = { version = "2.1", features = ["chrono", "r2d2"], optional = true }

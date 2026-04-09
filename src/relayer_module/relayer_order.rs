@@ -19,6 +19,36 @@ use uuid::Uuid;
 
 use crate::relayer_module::relayer_api::RelayerJsonRpcClient;
 
+const DEFAULT_RELAYER_PROGRAM_JSON: &str = r#"{
+  "program_index": {
+    "LiquidateOrder": 5,
+    "SettleTraderOrderNegativeMarginDifference": 6,
+    "SettleTraderOrder": 2,
+    "SettleLendOrder": 4,
+    "CreateLendOrder": 3,
+    "RelayerInitializer": 0,
+    "CreateTraderOrder": 1
+  },
+  "program": [
+    "060a0402000000060a0e0401000000060a0402000000060a0e1013",
+    "060a0403000000060a0405000000060a0d0e13020202",
+    "040300000002040300000002040a0000000603000000000a0b04070000000603000000000a04020000000c04020000000a0b04020000000a0c0404000000060a0b0c0302000000050d0307000000050d0407000000050403000000050b0c0406000000050d0407000000050d0403000000050c0e04010000000b0403000000060a0c0402000000060a0e101302",
+    "0401000000060a0302000000060a0306000000060a0c0e0403000000060a0304000000060a0307000000060a0c0e100401000000050402000000060a0405000000060a0d0c0402000000060a0403000000060a0d0e1013",
+    "050304000000060a0307000000060a0d0c0302000000060a0306000000060a0d0e0406000000060a0b0403000000060a0c0402000000060a0e100401000000060a0402000000060a0403000000060a0b0c0e101302",
+    "0202020202060a0401000000060a0407000000060a0c0e130202020202",
+    "040300000002040300000002040a0000000603000000000a0b04070000000603000000000a04020000000c04020000000a0b04020000000a0c0404000000060a0c0302000000050d0307000000050d0407000000050403000000050b0c0406000000050d0407000000050d0403000000050c0e04010000000b0403000000060a0c0402000000060a0e101302"
+  ]
+}"#;
+
+fn load_programs(contract_path: &str) -> ContractManager {
+    if std::path::Path::new(contract_path).exists() {
+        ContractManager::import_program(contract_path)
+    } else {
+        serde_json::from_str(DEFAULT_RELAYER_PROGRAM_JSON)
+            .expect("hardcoded relayer program JSON is valid")
+    }
+}
+
 pub async fn create_trader_order(
     sk: RistrettoSecretKey,
     rscalar: Scalar,
@@ -33,7 +63,7 @@ pub async fn create_trader_order(
     address: String,
     relayer_api_client: &RelayerJsonRpcClient,
 ) -> Result<String, String> {
-    let programs = ContractManager::import_program(&contract_path);
+    let programs = load_programs(&contract_path);
     let input_coin =
         tokio::task::spawn_blocking(move || get_transaction_coin_input_from_address_fast(address))
             .await
@@ -173,7 +203,7 @@ pub async fn create_lend_order(
     .await
     .map_err(|e| e.to_string())?;
     let input_coin = input_coin.map_err(|e| e.to_string())?;
-    let programs = ContractManager::import_program(&contract_path);
+    let programs = load_programs(&contract_path);
     let script_address =
         programs.create_contract_address(twilight_client_sdk::address::Network::default())?;
     let output_memo_scalar = twilight_client_sdk::util::hex_to_scalar(scalar_hex.clone())

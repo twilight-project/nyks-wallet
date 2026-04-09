@@ -206,6 +206,10 @@ pub struct Portfolio {
     pub liquidation_loss: f64,
     /// Active lend positions.
     pub lend_positions: Vec<LendPositionSummary>,
+    /// Settled (closed) lend positions unlocked during this summary.
+    pub closed_lend_positions: Vec<LendPositionSummary>,
+    /// Realised PnL from closed lend positions.
+    pub realised_lend_pnl: f64,
     /// Number of ZkOS accounts total.
     pub total_accounts: usize,
     /// Number of on-chain accounts.
@@ -223,6 +227,7 @@ impl Portfolio {
         closed_trader_positions: Vec<PositionSummary>,
         liquidated_trader_positions: Vec<PositionSummary>,
         lend_positions: Vec<LendPositionSummary>,
+        closed_lend_positions: Vec<LendPositionSummary>,
         total_accounts: usize,
         on_chain_accounts: usize,
     ) -> Self {
@@ -257,6 +262,8 @@ impl Portfolio {
             .map(|p| p.initial_margin)
             .sum();
 
+        let realised_lend_pnl: f64 = closed_lend_positions.iter().map(|p| p.pnl).sum();
+
         let denominator = total_trading_balance as f64 + total_margin_used;
         let margin_utilization = if denominator > 0.0 {
             total_margin_used / denominator
@@ -278,6 +285,8 @@ impl Portfolio {
             liquidated_trader_positions,
             liquidation_loss,
             lend_positions,
+            closed_lend_positions,
+            realised_lend_pnl,
             total_accounts,
             on_chain_accounts,
             margin_utilization,
