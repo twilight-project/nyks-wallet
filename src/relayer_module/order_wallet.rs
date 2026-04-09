@@ -14,10 +14,10 @@ use crate::{
     config::{EndpointConfig, RelayerEndPointConfig},
     error::{Result as WalletResult, WalletError},
     relayer_module::{
-        self, fetch_removed_utxo_details_with_retry, fetch_tx_hash_with_account_address_retry,
-        fetch_tx_hash_with_once, fetch_tx_hash_with_retry,
-        fetch_tx_hash_with_retry_with_close_order, fetch_utxo_details_with_once,
-        fetch_utxo_details_with_retry,
+        self, check_tx_status, fetch_removed_utxo_details_with_retry,
+        fetch_tx_hash_with_account_address_retry, fetch_tx_hash_with_once,
+        fetch_tx_hash_with_retry, fetch_tx_hash_with_retry_with_close_order,
+        fetch_utxo_details_with_once, fetch_utxo_details_with_retry,
         nonce_manager::NonceManager,
         relayer_api::RelayerJsonRpcClient,
         relayer_order::{
@@ -466,7 +466,8 @@ impl OrderWallet {
             self.nonce_manager.release(sequence);
             return Err(format!("Failed to send tx to chain: {}", result.tx_hash));
         }
-
+        let _ = check_tx_status(&result.tx_hash, &self.wallet.chain_config.lcd_endpoint).await?;
+        // self.sync_account_state(account_index).await?;
         self.zk_accounts.update_on_chain(&account_index, true)?;
         self.try_update_account_in_db(&account_index);
 
@@ -619,6 +620,7 @@ impl OrderWallet {
             self.nonce_manager.release(sequence);
             return Err(format!("Failed to send tx to chain: {}", result.tx_hash));
         }
+        let _ = check_tx_status(&result.tx_hash, &self.wallet.chain_config.lcd_endpoint).await?;
         self.zk_accounts.update_on_chain(&index, false)?;
         self.zk_accounts.update_balance(&index, 0)?;
         self.try_update_account_in_db(&index);
