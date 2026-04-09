@@ -1,6 +1,6 @@
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 use nyks_wallet::wallet::btc_wallet::validation::validate_btc_segwit_address;
-use nyks_wallet::wallet::btc_wallet::BtcReserve;
+use nyks_wallet::wallet::btc_wallet::BtcProposedReserve;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::commands::WalletCmd;
@@ -13,9 +13,10 @@ use crate::helpers::{
 use crate::helpers::resolve_order_wallet;
 
 /// How many blocks remain before a reserve's unlock window closes.
-fn reserve_blocks_left(reserve: &BtcReserve, btc_height: u64) -> u64 {
-    if btc_height > 0 && reserve.unlock_height + 144 > btc_height {
-        reserve.unlock_height + 144 - btc_height
+/// For proposed reserves, `unlock_height` is the actual CLTV expiry height.
+fn reserve_blocks_left(reserve: &BtcProposedReserve, btc_height: u64) -> u64 {
+    if btc_height > 0 && reserve.unlock_height > btc_height {
+        reserve.unlock_height - btc_height
     } else {
         0
     }
@@ -34,7 +35,7 @@ fn reserve_status_label(blocks_left: u64) -> Option<&'static str> {
 }
 
 /// Pick the best reserve: non-critical, non-expired, with the latest expiry.
-fn find_best_reserve(reserves: &[BtcReserve], btc_height: u64) -> Option<(BtcReserve, u64)> {
+fn find_best_reserve(reserves: &[BtcProposedReserve], btc_height: u64) -> Option<(BtcProposedReserve, u64)> {
     reserves
         .iter()
         .filter_map(|r| {
@@ -708,7 +709,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             println!("Checking BTC reserve status...");
             let reserves = ow
                 .wallet
-                .fetch_btc_reserves()
+                .fetch_btc_proposed_reserve(10)
                 .await
                 .map_err(|e| format!("Failed to fetch reserves: {e}"))?;
 
@@ -731,7 +732,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                     .any(|r| reserve_blocks_left(r, btc_height) == 0);
                 if any_expired {
                     let max_unlock = reserves.iter().map(|r| r.unlock_height).max().unwrap_or(0);
-                    let new_reserve_at = max_unlock + 148;
+                    let new_reserve_at = max_unlock + 4;
                     if new_reserve_at > btc_height {
                         let blocks_until = new_reserve_at - btc_height;
                         return Err(format!(
@@ -877,7 +878,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                             &btc_addr,
                             &tw_addr,
                             Some(target_reserve.reserve_address.clone()),
-                            Some(target_reserve.reserve_id),
+                            target_reserve.reserve_id.parse::<u64>().ok(),
                             amount,
                             staking_amount,
                             Some(tx_hash.clone()),
@@ -947,7 +948,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                     let r = active_reserves[0];
                     (
                         Some(r.reserve_address.clone()),
-                        Some(r.reserve_id),
+                        r.reserve_id.parse::<u64>().ok(),
                     )
                 } else {
                     (None, None)
@@ -968,16 +969,16 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
 
                 println!("\nActive reserve addresses to send {amount} sats to:");
                 println!(
-                    "\n{:<6} {:<50} {:<15} {:<10}",
-                    "ID", "RESERVE ADDRESS", "TOTAL VALUE", "STATUS"
+                    "\n{:<6} {:<8} {:<10} {}",
+                    "ID", "ROUND", "STATUS", "RESERVE ADDRESS"
                 );
-                println!("{}", "-".repeat(85));
+                println!("{}", "-".repeat(92));
                 for r in &active_reserves {
                     let bl = reserve_blocks_left(r, btc_height);
                     let status = reserve_status_label(bl).unwrap_or("UNKNOWN");
                     println!(
-                        "{:<6} {:<50} {:<15} {:<10}",
-                        r.reserve_id, r.reserve_address, r.total_value, status
+                        "{:<6} {:<8} {:<10} {}",
+                        r.reserve_id, r.round_id, status, r.reserve_address
                     );
                 }
 
@@ -1013,7 +1014,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             password,
         } => {
             let ow = resolve_order_wallet(wallet_id, password).await?;
-            match ow.wallet.fetch_btc_reserves().await {
+            match ow.wallet.fetch_btc_proposed_reserve(10).await {
                 Ok(reserves) => {
                     if reserves.is_empty() {
                         println!("No BTC reserves found on chain.");
@@ -1027,17 +1028,16 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                         }
 
                         println!(
-                            "{:<6} {:<50} {:<15} {:<14} {:<10}",
-                            "ID", "RESERVE ADDRESS", "TOTAL VALUE", "BLOCKS LEFT", "STATUS"
+                            "{:<6} {:<8} {:<14} {:<10} {}",
+                            "ID", "ROUND", "BLOCKS LEFT", "STATUS", "RESERVE ADDRESS"
                         );
-                        println!("{}", "-".repeat(98));
+                        println!("{}", "-".repeat(106));
                         for r in &reserves {
-                            let next_unlock = r.unlock_height + 144;
                             let (blocks_left, status) = if btc_height > 0 {
-                                if next_unlock <= btc_height {
+                                if r.unlock_height <= btc_height {
                                     ("expired".to_string(), "EXPIRED")
                                 } else {
-                                    let remaining = next_unlock - btc_height;
+                                    let remaining = r.unlock_height - btc_height;
                                     let st = if remaining <= 4 {
                                         "CRITICAL"
                                     } else if remaining <= 72 {
@@ -1051,8 +1051,8 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                                 (format!("unlock:{}", r.unlock_height), "UNKNOWN")
                             };
                             println!(
-                                "{:<6} {:<50} {:<15} {:<14} {:<10}",
-                                r.reserve_id, r.reserve_address, r.total_value, blocks_left, status
+                                "{:<6} {:<8} {:<14} {:<10} {}",
+                                r.reserve_id, r.round_id, blocks_left, status, r.reserve_address
                             );
                         }
                         println!("\nTotal: {} reserve(s)", reserves.len());
@@ -1060,12 +1060,12 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                         // Check if any reserves are expired and show new-address ETA
                         if btc_height > 0 {
                             let any_expired =
-                                reserves.iter().any(|r| r.unlock_height + 144 <= btc_height);
+                                reserves.iter().any(|r| r.unlock_height <= btc_height);
                             if any_expired {
-                                // New reserve address becomes available at unlock_height + 148 (4 blocks after expiry)
+                                // New reserve address becomes available ~4 blocks after expiry
                                 let max_unlock =
                                     reserves.iter().map(|r| r.unlock_height).max().unwrap_or(0);
-                                let new_reserve_at = max_unlock + 148;
+                                let new_reserve_at = max_unlock + 4;
                                 if new_reserve_at > btc_height {
                                     let blocks_until = new_reserve_at - btc_height;
                                     println!("\nNote: Expired reserves are sweeping. A new reserve address will be");
@@ -1653,7 +1653,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             // 2. Show reserve addresses (or the one user chose)
             let reserves = ow
                 .wallet
-                .fetch_btc_reserves()
+                .fetch_btc_proposed_reserve(10)
                 .await
                 .map_err(|e| format!("Failed to fetch reserves: {e}"))?;
 
@@ -1763,7 +1763,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                             &btc_addr,
                             &tw_addr,
                             Some(reserve.reserve_address.clone()),
-                            Some(reserve.reserve_id),
+                            reserve.reserve_id.parse::<u64>().ok(),
                             amount_sats,
                             0,
                             None,
@@ -1803,7 +1803,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                             &btc_addr,
                             &tw_addr,
                             Some(reserve.reserve_address.clone()),
-                            Some(reserve.reserve_id),
+                            reserve.reserve_id.parse::<u64>().ok(),
                             amount_sats,
                             0,
                             None,
@@ -1823,7 +1823,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                     &btc_addr,
                     &tw_addr,
                     Some(reserve.reserve_address.clone()),
-                    Some(reserve.reserve_id),
+                    reserve.reserve_id.parse::<u64>().ok(),
                     amount_sats,
                     0,
                     None,
