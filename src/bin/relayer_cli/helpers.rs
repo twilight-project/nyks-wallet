@@ -294,7 +294,8 @@ fn visible_width(s: &str) -> usize {
     width
 }
 
-/// Get the terminal width using libc ioctl, falling back to `$COLUMNS`.
+/// Get the terminal width using libc ioctl (Unix), falling back to `$COLUMNS`.
+#[cfg(unix)]
 fn get_terminal_width() -> Option<u16> {
     unsafe {
         let mut ws: libc::winsize = std::mem::zeroed();
@@ -302,6 +303,14 @@ fn get_terminal_width() -> Option<u16> {
             return Some(ws.ws_col);
         }
     }
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+}
+
+/// Get the terminal width from `$COLUMNS` (non-Unix fallback).
+#[cfg(not(unix))]
+fn get_terminal_width() -> Option<u16> {
     std::env::var("COLUMNS")
         .ok()
         .and_then(|v| v.parse().ok())
