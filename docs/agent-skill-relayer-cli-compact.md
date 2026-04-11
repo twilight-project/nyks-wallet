@@ -538,10 +538,10 @@ relayer-cli --json order unlock-close-order ...   # {"account_index": N, "order_
 relayer-cli --json order unlock-failed-order ...  # {"account_index": N, "status": "unlocked"}
 ```
 
-## 16. Optional Repository Docs (humans)
+## 16. Further Reading
 
 Agents with only this file should **not** depend on the paths below. Developers with the full `nyks-wallet` repo may use:
-- `docs/relayer-cli.md` — Exhaustive per-command examples, every flag, output columns
-- `docs/cli-command-rules.md` — Same preconditions as §10 in prose tables; wallet-resolution footer is **wrong** vs §2 (trust §2)
-- `docs/order-lifecycle.md` — Extra diagrams for ZkAccount / order states
-- `docs/btc-onboarding.md` — BTC deposit/withdraw narrative and troubleshooting
+- [relayer-cli.md](relayer-cli.md) — Exhaustive per-command examples, every flag, output columns
+- [cli-command-rules.md](cli-command-rules.md) — Same preconditions as §10 in prose tables; wallet-resolution footer is **wrong** vs §2 (trust §2)
+- [order-lifecycle.md](order-lifecycle.md) — Extra diagrams for ZkAccount / order states
+- [btc-onboarding.md](btc-onboarding.md) — BTC deposit/withdraw narrative and troubleshooting

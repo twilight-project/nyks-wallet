@@ -2,7 +2,7 @@
 
 A complete guide for AI agents and developers to build, configure, and operate the Twilight `relayer-cli`.
 
-**Standalone use:** If the agent has **only this file** (no `relayer-cli.md`, no source tree), treat this document as the single source of truth. Default URLs, resolution order, and common flags are inlined below. The closing section lists optional repo docs for humans who have the full repository.
+**Standalone use:** If the agent has **only this file** (no [relayer-cli.md](relayer-cli.md), no source tree), treat this document as the single source of truth. Default URLs, resolution order, and common flags are inlined below. The closing section lists optional repo docs for humans who have the full repository.
 
 **When to use this document:** Install/build, `.env`, credentials, ZkOS account lifecycle, trade and lend orders, market queries, BTC onboarding, split accounts, error recovery, JSON output, and testnet verification.
 
@@ -25,7 +25,7 @@ A complete guide for AI agents and developers to build, configure, and operate t
 13. [Critical Rules](#13-critical-rules)
 14. [Error Recovery](#14-error-recovery)
 15. [JSON Output](#15-json-output)
-16. [Optional Repository Docs (humans)](#16-optional-repository-docs-humans)
+16. [Further Reading](#16-further-reading)
 
 ---
 
@@ -874,13 +874,13 @@ relayer-cli --json order unlock-failed-order ...  # {"account_index": N, "status
 
 ---
 
-## 16. Optional repository docs (humans)
+## 16. Further Reading
 
 Agents that **only** have this skill file should **not** depend on the paths below. Developers with the full `nyks-wallet` repo may use:
 
-| Document                    | Contents                                                                                              |
-| --------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `docs/relayer-cli.md`       | Exhaustive per-command examples, every flag, output columns                                           |
-| `docs/cli-command-rules.md` | Same preconditions as **§10** in prose tables; wallet-resolution footer is **wrong** vs §3 (trust §3) |
-| `docs/order-lifecycle.md`   | Extra diagrams for ZkAccount / order states                                                           |
-| `docs/btc-onboarding.md`    | BTC deposit/withdraw narrative and troubleshooting                                                    |
+| Document | Contents |
+| -------- | -------- |
+| [relayer-cli.md](relayer-cli.md) | Exhaustive per-command examples, every flag, output columns |
+| [cli-command-rules.md](cli-command-rules.md) | Same preconditions as **§10** in prose tables; wallet-resolution footer is **wrong** vs §3 (trust §3) |
+| [order-lifecycle.md](order-lifecycle.md) | Extra diagrams for ZkAccount / order states |
+| [btc-onboarding.md](btc-onboarding.md) | BTC deposit/withdraw narrative and troubleshooting |
