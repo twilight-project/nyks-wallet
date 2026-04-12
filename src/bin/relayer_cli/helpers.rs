@@ -3,6 +3,64 @@ use nyks_wallet::relayer_module::relayer_types::OrderStatus;
 use secrecy::SecretString;
 
 // ---------------------------------------------------------------------------
+// MaybeOwnedWallet — allows handlers to work with either an owned wallet
+// (loaded fresh from DB) or a borrowed reference from the REPL session.
+// ---------------------------------------------------------------------------
+
+pub(crate) enum MaybeOwnedWallet<'a> {
+    Owned(OrderWallet),
+    Borrowed(&'a mut OrderWallet),
+}
+
+impl std::ops::Deref for MaybeOwnedWallet<'_> {
+    type Target = OrderWallet;
+    fn deref(&self) -> &OrderWallet {
+        match self {
+            Self::Owned(w) => w,
+            Self::Borrowed(w) => w,
+        }
+    }
+}
+
+impl std::ops::DerefMut for MaybeOwnedWallet<'_> {
+    fn deref_mut(&mut self) -> &mut OrderWallet {
+        match self {
+            Self::Owned(w) => w,
+            Self::Borrowed(w) => w,
+        }
+    }
+}
+
+/// Resolve an `OrderWallet` — use the REPL wallet if provided, otherwise load from DB.
+#[cfg(any(feature = "sqlite", feature = "postgresql"))]
+pub(crate) async fn get_or_resolve_wallet<'a>(
+    repl_wallet: Option<&'a mut OrderWallet>,
+    wallet_id: Option<String>,
+    password: Option<String>,
+) -> Result<MaybeOwnedWallet<'a>, String> {
+    match repl_wallet {
+        Some(w) => Ok(MaybeOwnedWallet::Borrowed(w)),
+        None => Ok(MaybeOwnedWallet::Owned(
+            resolve_order_wallet(wallet_id, password).await?,
+        )),
+    }
+}
+
+#[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
+pub(crate) async fn get_or_resolve_wallet<'a>(
+    repl_wallet: Option<&'a mut OrderWallet>,
+    _wallet_id: Option<String>,
+    _password: Option<String>,
+) -> Result<MaybeOwnedWallet<'a>, String> {
+    match repl_wallet {
+        Some(w) => Ok(MaybeOwnedWallet::Borrowed(w)),
+        None => Ok(MaybeOwnedWallet::Owned(
+            OrderWallet::new(None).map_err(|e| e.to_string())?,
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

@@ -1,14 +1,14 @@
-#[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 // use nyks_wallet::relayer_module::relayer_types::OrderStatus;
 
 use crate::commands::OrderCmd;
-use crate::helpers::{parse_datetime, parse_order_status, parse_order_type, parse_position_type};
+use crate::helpers::{get_or_resolve_wallet, parse_datetime, parse_order_status, parse_order_type, parse_position_type};
 
-#[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use crate::helpers::resolve_order_wallet;
-
-pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(), String> {
+pub(crate) async fn handle_order(
+    cmd: OrderCmd,
+    json_output: bool,
+    repl_wallet: Option<&mut OrderWallet>,
+) -> Result<(), String> {
     match cmd {
         OrderCmd::OpenTrade {
             account_index,
@@ -22,10 +22,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             let ot = parse_order_type(&order_type)?;
             let ps = parse_position_type(&side)?;
 
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             if !json_output {
                 println!(
@@ -65,10 +62,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             if !json_output {
                 println!("Closing trader order on account {account_index}...");
@@ -119,10 +113,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             if !json_output {
                 println!("Cancelling trader order on account {account_index}...");
@@ -149,10 +140,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let order = ow.query_trader_order_v1(account_index).await?;
             if json_output {
@@ -175,10 +163,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             if !json_output {
                 println!("Opening lend order on account {account_index}...");
@@ -209,10 +194,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             if !json_output {
                 println!("Closing lend order on account {account_index}...");
@@ -232,10 +214,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let tx_type = ow.zk_accounts.get_account(&account_index)?.tx_type.clone();
 
@@ -287,10 +266,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             if !json_output {
                 println!("Unlocking failed order on account {account_index}...");
@@ -328,10 +304,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let order = ow.query_lend_order_v1(account_index).await?;
             if json_output {
@@ -354,10 +327,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let orders = ow.historical_trader_order(account_index).await?;
             if json_output {
@@ -399,10 +369,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let orders = ow.historical_lend_order(account_index).await?;
             if json_output {
@@ -441,10 +408,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let entries = ow.order_funding_history(account_index).await?;
             if json_output {
@@ -490,10 +454,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             to,
             since,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             use nyks_wallet::relayer_module::relayer_types::AccountSummaryArgs;
             let params = AccountSummaryArgs {
@@ -653,10 +614,7 @@ pub(crate) async fn handle_order(cmd: OrderCmd, json_output: bool) -> Result<(),
             use nyks_wallet::relayer_module::relayer_api::RelayerJsonRpcClient;
             use nyks_wallet::relayer_module::relayer_types::TransactionHashArgs;
 
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let account_address = ow.zk_accounts.get_account_address(&account_index)?;
 

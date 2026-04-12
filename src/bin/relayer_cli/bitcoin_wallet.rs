@@ -1,13 +1,13 @@
-#[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 use nyks_wallet::wallet::btc_wallet::validation::validate_btc_segwit_address;
 
 use crate::commands::BitcoinWalletCmd;
+use crate::helpers::get_or_resolve_wallet;
 
-#[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use crate::helpers::resolve_order_wallet;
-
-pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), String> {
+pub(crate) async fn handle_bitcoin_wallet(
+    cmd: BitcoinWalletCmd,
+    repl_wallet: Option<&mut OrderWallet>,
+) -> Result<(), String> {
     match cmd {
         BitcoinWalletCmd::Balance {
             wallet_id,
@@ -19,11 +19,7 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             let address = if let Some(addr) = btc_address {
                 addr
             } else {
-                #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-                let ow = resolve_order_wallet(wallet_id, password).await?;
-                #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-                let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
-
+                let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
                 if ow.wallet.btc_address.is_empty() {
                     return Err("Wallet has no BTC address configured".to_string());
                 }
@@ -114,10 +110,7 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             }
 
             // Load wallet and extract BtcWallet
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let btc_wallet = ow.wallet.btc_wallet.as_ref().ok_or_else(|| {
                 "BTC wallet not available. The wallet was created from a private key, \
@@ -200,10 +193,7 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let network = if nyks_wallet::config::is_btc_mainnet() {
                 "mainnet"
@@ -278,7 +268,7 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             let new_address = btc_wallet.address.clone();
 
             // Load the existing wallet from DB
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let old_address = ow.wallet.btc_address.clone();
             let twilight_address = ow.wallet.twilightaddress.clone();
@@ -361,7 +351,7 @@ pub(crate) async fn handle_bitcoin_wallet(cmd: BitcoinWalletCmd) -> Result<(), S
             status,
             limit,
         } => {
-            let ow = resolve_order_wallet(wallet_id, password).await?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
             let db = ow
                 .get_db_manager()
                 .ok_or("Database not available. Rebuild with --features sqlite".to_string())?;
