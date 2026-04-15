@@ -19,6 +19,8 @@ struct GithubAsset {
 fn artifact_name() -> Result<&'static str, String> {
     if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
         Ok("nyks-wallet-linux-amd64")
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
+        Ok("nyks-wallet-linux-arm64")
     } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
         Ok("nyks-wallet-macos-arm64")
     } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
@@ -208,6 +210,7 @@ mod tests {
         println!("name: {name}");
         assert!(
             name == "nyks-wallet-linux-amd64"
+                || name == "nyks-wallet-linux-arm64"
                 || name == "nyks-wallet-macos-arm64"
                 || name == "nyks-wallet-windows-amd64.exe",
             "unexpected artifact name: {name}"
@@ -221,6 +224,8 @@ mod tests {
             assert_eq!(name, "nyks-wallet-macos-arm64");
         } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
             assert_eq!(name, "nyks-wallet-linux-amd64");
+        } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
+            assert_eq!(name, "nyks-wallet-linux-arm64");
         } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
             assert_eq!(name, "nyks-wallet-windows-amd64.exe");
         }
