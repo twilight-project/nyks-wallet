@@ -1,4 +1,6 @@
 use clap::{Parser, Subcommand};
+use rustyline::error::ReadlineError;
+use rustyline::DefaultEditor;
 
 use crate::commands::*;
 use crate::helpers::resolve_password;
@@ -160,31 +162,38 @@ pub(crate) async fn run_repl(
 
         // 5. REPL loop
         let prompt = format!("{}> ", short_addr);
-        let stdin = std::io::stdin();
+        let mut rl = DefaultEditor::new().map_err(|e| format!("Failed to init line editor: {e}"))?;
+
+        // Try to load history from a file (ignore errors — file may not exist yet)
+        let history_path = dirs_history_path();
+        let _ = rl.load_history(&history_path);
 
         loop {
-            // Print prompt
-            eprint!("{}", prompt);
-
-            // Read line
-            let mut line = String::new();
-            match stdin.read_line(&mut line) {
-                Ok(0) => {
-                    // EOF (Ctrl+D)
+            // Read line with full editing support (arrows, history, etc.)
+            let line = match rl.readline(&prompt) {
+                Ok(line) => line,
+                Err(ReadlineError::Interrupted) => {
+                    // Ctrl+C — cancel current line, keep looping
+                    continue;
+                }
+                Err(ReadlineError::Eof) => {
+                    // Ctrl+D
                     println!();
                     break;
                 }
-                Ok(_) => {}
                 Err(e) => {
                     eprintln!("Read error: {e}");
                     break;
                 }
-            }
+            };
 
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
+
+            // Add to history
+            let _ = rl.add_history_entry(line);
 
             // Handle bare built-in aliases
             match line.to_lowercase().as_str() {
@@ -271,10 +280,26 @@ pub(crate) async fn run_repl(
             println!(); // blank line between commands
         }
 
+        // Save history for next session
+        let _ = rl.save_history(&history_path);
+
         println!("Goodbye.");
     }
 
     Ok(())
+}
+
+/// Returns the path to the REPL history file (~/.relayer_cli_history).
+fn dirs_history_path() -> std::path::PathBuf {
+    let mut path = dirs_home();
+    path.push(".relayer_cli_history");
+    path
+}
+
+fn dirs_home() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 // ---------------------------------------------------------------------------

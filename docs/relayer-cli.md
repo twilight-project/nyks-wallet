@@ -134,6 +134,7 @@ relayer-cli [--json] <COMMAND>
 - `history` — view order and transfer history (requires DB)
 - `portfolio` — portfolio summary, balances (with unit conversion), liquidation risks
 - `verify-test` — run verification tests against testnet (testnet only)
+- `repl` — interactive REPL mode with line editing, history, and a persistent wallet session
 - `help` — show help for the CLI or a specific command group
 
 ### Built-in Help
@@ -1547,6 +1548,72 @@ Run all verification tests in sequence: wallet → market → zkaccount → orde
 
 ```bash
 relayer-cli verify-test all
+```
+
+---
+
+## REPL (Interactive Mode)
+
+Launch an interactive session that keeps your wallet loaded in memory. You can run any CLI command without repeating the `relayer-cli` prefix or re-entering credentials.
+
+```bash
+relayer-cli repl
+relayer-cli repl --wallet-id my-wallet
+relayer-cli repl --wallet-id my-wallet --password s3cret
+```
+
+If `--wallet-id` or `--password` are omitted, the REPL checks the session cache and environment variables first, then prompts interactively.
+
+### Line Editing and History
+
+The REPL uses `rustyline` for full terminal line-editing support:
+
+| Key              | Action                              |
+| ---------------- | ----------------------------------- |
+| Up / Down        | Scroll through command history      |
+| Left / Right     | Move cursor within the current line |
+| Home / Ctrl+A    | Jump to start of line               |
+| End / Ctrl+E     | Jump to end of line                 |
+| Ctrl+W           | Delete word before cursor           |
+| Ctrl+C           | Cancel current line (stay in REPL)  |
+| Ctrl+D           | Exit the REPL                       |
+
+Command history is persisted across sessions in `~/.relayer_cli_history`.
+
+### REPL-Only Commands
+
+| Command          | Description                                            |
+| ---------------- | ------------------------------------------------------ |
+| `reload`         | Reload the wallet from the database (pick up external changes) |
+| `help`           | Show available command groups                          |
+| `help <group>`   | Show subcommands for a group (e.g. `help order`)       |
+| `clear`          | Clear the screen                                       |
+| `exit` / `quit`  | Leave the REPL                                         |
+
+### Example Session
+
+```
+$ relayer-cli repl --wallet-id demo
+Wallet password: ****
+
+Relayer REPL — interactive mode
+  Wallet ID: demo
+  Address:   twilight1abc...xyz123
+  Accounts:  2
+
+Type commands without the `relayer-cli` prefix.
+Examples: wallet balance, order query-trade --account-index 0, market price
+Type `help` for command list, `exit` or `quit` to leave.
+
+twilight1a...z123> wallet balance
+  BTC Balance:  0.05000000
+  Sats Balance: 5000000
+
+twilight1a...z123> market price
+  BTC/USD: 67,432.50
+
+twilight1a...z123> exit
+Goodbye.
 ```
 
 ---
