@@ -6,23 +6,23 @@ A complete guide for AI agents and developers to build, configure, and operate t
 
 ## 1. Quick Start (pre-built binary)
 
-Download a pre-built binary from [GitHub releases](https://github.com/twilight-project/nyks-wallet/releases) — no build tools required.
+Download the latest pre-built binary from [GitHub releases](https://github.com/twilight-project/nyks-wallet/releases) — no build tools required.
+
+### Install script (macOS / Linux)
 
 ```bash
-# macOS ARM64 (Apple Silicon)
-curl -LO https://github.com/twilight-project/nyks-wallet/releases/download/v0.1.1-relayer-cli/nyks-wallet-macos-arm64
-mv nyks-wallet-macos-arm64 relayer-cli
-chmod +x relayer-cli
-
-# Linux x86_64
-curl -LO https://github.com/twilight-project/nyks-wallet/releases/download/v0.1.1-relayer-cli/nyks-wallet-linux-amd64
-mv nyks-wallet-linux-amd64 relayer-cli
-chmod +x relayer-cli
-
-# Windows x86_64
-curl -LO https://github.com/twilight-project/nyks-wallet/releases/download/v0.1.1-relayer-cli/nyks-wallet-windows-amd64.exe
-mv nyks-wallet-windows-amd64.exe relayer-cli.exe
+curl -sSfL https://raw.githubusercontent.com/twilight-project/nyks-wallet/main/install.sh | sh
 ```
+
+This auto-detects your platform, downloads the latest release, and installs `relayer-cli` in the current directory.
+
+### Install script (Windows PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/twilight-project/nyks-wallet/main/install.ps1 | iex
+```
+
+### Verify
 
 ```bash
 ./relayer-cli --help
