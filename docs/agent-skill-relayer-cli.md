@@ -108,6 +108,26 @@ relayer-cli [--json] <command-group> <subcommand> [flags]
 
 `--json` outputs JSON instead of formatted tables. Useful for scripting/parsing.
 
+### REPL (Interactive Mode)
+
+For interactive sessions, use the `repl` command. It loads the wallet once and keeps it in memory, so you don't repeat credentials or the `relayer-cli` prefix on every command.
+
+```bash
+relayer-cli repl                                    # prompts for wallet ID + password
+relayer-cli repl --wallet-id test1                  # prompts for password only
+relayer-cli repl --wallet-id test1 --password pass  # fully non-interactive start
+```
+
+Inside the REPL, type commands directly:
+
+```
+twilight1a...z123> wallet balance
+twilight1a...z123> order query-trade --account-index 0
+twilight1a...z123> market price --json
+```
+
+The REPL supports full line editing (arrow keys, Home/End, Ctrl+A/E) and persistent command history across sessions (`~/.relayer_cli_history`). Additional REPL-only commands: `reload` (re-read wallet from DB), `clear`, `help [group]`, `exit`/`quit`.
+
 ---
 
 ## 5. Complete Workflow: Testnet

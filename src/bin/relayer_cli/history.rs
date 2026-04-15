@@ -1,12 +1,19 @@
+use nyks_wallet::relayer_module::order_wallet::OrderWallet;
+
 use crate::commands::HistoryCmd;
+use crate::helpers::MaybeOwnedWallet;
 
 #[cfg(any(feature = "sqlite", feature = "postgresql"))]
 use crate::helpers::{load_order_wallet_from_db, resolve_wallet_id};
 
-pub(crate) async fn handle_history(cmd: HistoryCmd, json_output: bool) -> Result<(), String> {
+pub(crate) async fn handle_history(
+    cmd: HistoryCmd,
+    json_output: bool,
+    repl_wallet: Option<&mut OrderWallet>,
+) -> Result<(), String> {
     #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
     {
-        let _ = (cmd, json_output);
+        let _ = (cmd, json_output, repl_wallet);
         return Err(
             "Database features (sqlite/postgresql) not enabled. Rebuild with --features sqlite"
                 .to_string(),
@@ -22,9 +29,14 @@ pub(crate) async fn handle_history(cmd: HistoryCmd, json_output: bool) -> Result
             limit,
             offset,
         } => {
-            let wallet_id = resolve_wallet_id(wallet_id)
-                .ok_or("wallet_id is required (pass --wallet-id, set NYKS_WALLET_ID env var, or run `wallet unlock`)")?;
-            let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
+            let ow: MaybeOwnedWallet<'_> = match repl_wallet {
+                Some(w) => MaybeOwnedWallet::Borrowed(w),
+                None => {
+                    let wallet_id = resolve_wallet_id(wallet_id)
+                        .ok_or("wallet_id is required (pass --wallet-id, set NYKS_WALLET_ID env var, or run `wallet unlock`)")?;
+                    MaybeOwnedWallet::Owned(load_order_wallet_from_db(&wallet_id, password, None)?)
+                }
+            };
             let filter = nyks_wallet::relayer_module::transaction_history::OrderHistoryFilter {
                 account_index,
                 limit: Some(limit),
@@ -74,9 +86,14 @@ pub(crate) async fn handle_history(cmd: HistoryCmd, json_output: bool) -> Result
             limit,
             offset,
         } => {
-            let wallet_id = resolve_wallet_id(wallet_id)
-                .ok_or("wallet_id is required (pass --wallet-id, set NYKS_WALLET_ID env var, or run `wallet unlock`)")?;
-            let ow = load_order_wallet_from_db(&wallet_id, password, None)?;
+            let ow: MaybeOwnedWallet<'_> = match repl_wallet {
+                Some(w) => MaybeOwnedWallet::Borrowed(w),
+                None => {
+                    let wallet_id = resolve_wallet_id(wallet_id)
+                        .ok_or("wallet_id is required (pass --wallet-id, set NYKS_WALLET_ID env var, or run `wallet unlock`)")?;
+                    MaybeOwnedWallet::Owned(load_order_wallet_from_db(&wallet_id, password, None)?)
+                }
+            };
             let filter = nyks_wallet::relayer_module::transaction_history::TransferHistoryFilter {
                 limit: Some(limit),
                 offset: Some(offset),

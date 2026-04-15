@@ -8,6 +8,7 @@ mod history;
 mod market;
 mod order;
 mod portfolio;
+mod repl;
 mod verify_test;
 mod wallet;
 mod zkaccount;
@@ -65,6 +66,18 @@ enum Commands {
     #[command(subcommand)]
     VerifyTest(VerifyTestCmd),
 
+    /// Start interactive REPL mode — enter wallet ID and password once, then
+    /// run commands without the `relayer-cli` prefix or repeated credentials.
+    Repl {
+        /// Wallet ID to use for the REPL session (prompts if omitted)
+        #[arg(long)]
+        wallet_id: Option<String>,
+
+        /// Wallet password (prompts securely if omitted)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
     /// Show help for a command group (e.g. `help wallet`)
     Help {
         /// Command group to get help for (wallet, zkaccount, order, market, history, portfolio)
@@ -86,14 +99,17 @@ async fn main() {
     let json_output = cli.json;
 
     let result = match cli.command {
-        Commands::Wallet(cmd) => wallet::handle_wallet(cmd).await,
-        Commands::Zkaccount(cmd) => zkaccount::handle_zkaccount(cmd).await,
-        Commands::Order(cmd) => order::handle_order(cmd, json_output).await,
+        Commands::Wallet(cmd) => wallet::handle_wallet(cmd, None).await,
+        Commands::Zkaccount(cmd) => zkaccount::handle_zkaccount(cmd, None).await,
+        Commands::Order(cmd) => order::handle_order(cmd, json_output, None).await,
         Commands::Market(cmd) => market::handle_market(cmd, json_output).await,
-        Commands::History(cmd) => history::handle_history(cmd, json_output).await,
-        Commands::Portfolio(cmd) => portfolio::handle_portfolio(cmd, json_output).await,
-        Commands::BitcoinWallet(cmd) => bitcoin_wallet::handle_bitcoin_wallet(cmd).await,
+        Commands::History(cmd) => history::handle_history(cmd, json_output, None).await,
+        Commands::Portfolio(cmd) => portfolio::handle_portfolio(cmd, json_output, None).await,
+        Commands::BitcoinWallet(cmd) => bitcoin_wallet::handle_bitcoin_wallet(cmd, None).await,
         Commands::VerifyTest(cmd) => verify_test::handle_verify_test(cmd).await,
+        Commands::Repl { wallet_id, password } => {
+            repl::run_repl(wallet_id, password).await
+        }
         Commands::Help { command } => {
             match command {
                 Some(group) => help::print_subcommand_help(&group),

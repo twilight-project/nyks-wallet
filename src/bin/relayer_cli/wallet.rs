@@ -5,12 +5,9 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::commands::WalletCmd;
 use crate::helpers::{
-    load_order_wallet_from_db, resolve_password, resolve_wallet_id, session_clear, session_load,
-    session_save,
+    get_or_resolve_wallet, load_order_wallet_from_db, resolve_password, resolve_wallet_id,
+    session_clear, session_load, session_save,
 };
-
-#[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use crate::helpers::resolve_order_wallet;
 
 /// How many blocks remain before a reserve's unlock window closes.
 /// For proposed reserves, `unlock_height` is the actual CLTV expiry height.
@@ -82,7 +79,10 @@ fn save_deposit_record(
     }
 }
 
-pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
+pub(crate) async fn handle_wallet(
+    cmd: WalletCmd,
+    repl_wallet: Option<&mut OrderWallet>,
+) -> Result<(), String> {
     match cmd {
         WalletCmd::Create {
             wallet_id,
@@ -247,10 +247,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let balance = ow
                 .wallet
@@ -291,10 +288,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             ow.wallet
                 .export_to_json(&output)
@@ -308,10 +302,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             password,
             on_chain_only,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let mut accounts = ow.zk_accounts.get_all_accounts();
             accounts.sort_by_key(|a| a.index);
@@ -351,7 +342,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             wallet_id,
             password,
         } => {
-            let ow = resolve_order_wallet(wallet_id, password).await?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
             println!("Wallet Info");
             println!("  Address:         {}", ow.wallet.twilightaddress);
             println!("  BTC address:     {}", ow.wallet.btc_address);
@@ -416,10 +407,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             ow.sync_nonce().await?;
             println!("Nonce synced from chain");
@@ -568,7 +556,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
         } => {
             validate_btc_segwit_address(&btc_address)?;
 
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             // Block update if already registered on-chain — each twilight address
             // can only be linked to a single BTC address.
@@ -638,7 +626,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             wallet_id,
             password,
         } => {
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
             let from_addr = ow.wallet.twilightaddress.clone();
 
             println!("Sending {amount} {denom}");
@@ -671,7 +659,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             if nyks_wallet::config::NETWORK_TYPE.as_str() != "mainnet" {
                 return Err("register-btc is only available on mainnet. Use `wallet faucet` for testnet tokens.".to_string());
             }
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
             let btc_addr = ow.wallet.btc_address.clone();
             let tw_addr = ow.wallet.twilightaddress.clone();
 
@@ -1013,7 +1001,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             wallet_id,
             password,
         } => {
-            let ow = resolve_order_wallet(wallet_id, password).await?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
             match ow.wallet.fetch_btc_proposed_reserve(10).await {
                 Ok(reserves) => {
                     if reserves.is_empty() {
@@ -1124,7 +1112,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                         .to_string(),
                 );
             }
-            let ow = resolve_order_wallet(wallet_id, password).await?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
             let tw_addr = ow.wallet.twilightaddress.clone();
 
             println!("Checking deposit & withdrawal status for {tw_addr}...\n");
@@ -1379,7 +1367,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                 return Err("withdraw-btc is only available on mainnet.".to_string());
             }
 
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
             let tw_addr = ow.wallet.twilightaddress.clone();
             let btc_addr = ow.wallet.btc_address.clone();
 
@@ -1445,7 +1433,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             if nyks_wallet::config::NETWORK_TYPE.as_str() != "mainnet" {
                 return Err("withdraw-status is only available on mainnet.".to_string());
             }
-            let ow = resolve_order_wallet(wallet_id, password).await?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let db_manager = ow.get_db_manager().ok_or("No database manager available")?;
 
@@ -1619,7 +1607,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
                 return Err("Amount must be greater than 0".to_string());
             }
 
-            let ow = resolve_order_wallet(wallet_id, password).await?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
             let btc_addr = ow.wallet.btc_address.clone();
             let tw_addr = ow.wallet.twilightaddress.clone();
 
@@ -1861,7 +1849,7 @@ pub(crate) async fn handle_wallet(cmd: WalletCmd) -> Result<(), String> {
             if nyks_wallet::config::NETWORK_TYPE.as_str() == "mainnet" {
                 return Err("faucet is only available on testnet. Use `wallet register-btc` for mainnet deposits.".to_string());
             }
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
             let tw_addr = ow.wallet.twilightaddress.clone();
 
             println!("Requesting test tokens for {tw_addr}...");

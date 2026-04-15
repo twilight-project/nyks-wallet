@@ -1,22 +1,20 @@
-#[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 use nyks_wallet::relayer_module::relayer_types::OrderStatus;
 
 use crate::commands::PortfolioCmd;
+use crate::helpers::get_or_resolve_wallet;
 
-#[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use crate::helpers::resolve_order_wallet;
-
-pub(crate) async fn handle_portfolio(cmd: PortfolioCmd, json_output: bool) -> Result<(), String> {
+pub(crate) async fn handle_portfolio(
+    cmd: PortfolioCmd,
+    json_output: bool,
+    repl_wallet: Option<&mut OrderWallet>,
+) -> Result<(), String> {
     match cmd {
         PortfolioCmd::Summary {
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let portfolio = ow.get_portfolio_summary().await?;
 
@@ -249,10 +247,7 @@ pub(crate) async fn handle_portfolio(cmd: PortfolioCmd, json_output: bool) -> Re
             password,
             unit,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let balances = ow.get_account_balances();
 
@@ -325,10 +320,7 @@ pub(crate) async fn handle_portfolio(cmd: PortfolioCmd, json_output: bool) -> Re
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let risks = ow.get_liquidation_risks().await?;
 

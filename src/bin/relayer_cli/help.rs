@@ -25,6 +25,8 @@ COMMANDS:
                     candles, history-funding, history-fees, apy-chart)
     history         Local DB history (orders, transfers)
     portfolio       Portfolio tracking (summary, balances, risks)
+    repl            Interactive REPL mode — enter wallet ID and password once,
+                    then run commands without the `relayer-cli` prefix
     verify-test     Run verification tests against testnet (testnet only)
 
 GLOBAL FLAGS:
@@ -37,6 +39,10 @@ ENVIRONMENT:
     NYKS_WALLET_ID          Default wallet ID
     NYKS_WALLET_PASSPHRASE  Default password
     BTC_NETWORK_TYPE        Bitcoin network (mainnet/testnet, falls back to mainnet)
+
+REPL MODE:
+    relayer-cli repl                     # interactive prompt for wallet ID & password
+    relayer-cli repl --wallet-id <id>    # start REPL with a specific wallet
 
 Run `relayer-cli help <COMMAND>` for details on a specific command group."#
     );

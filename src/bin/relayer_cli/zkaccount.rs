@@ -1,12 +1,12 @@
-#[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 
 use crate::commands::ZkaccountCmd;
+use crate::helpers::get_or_resolve_wallet;
 
-#[cfg(any(feature = "sqlite", feature = "postgresql"))]
-use crate::helpers::resolve_order_wallet;
-
-pub(crate) async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
+pub(crate) async fn handle_zkaccount(
+    cmd: ZkaccountCmd,
+    repl_wallet: Option<&mut OrderWallet>,
+) -> Result<(), String> {
     match cmd {
         ZkaccountCmd::Fund {
             amount,
@@ -51,10 +51,7 @@ pub(crate) async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
                 return Err("Amount must be greater than 0".to_string());
             }
 
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             println!("Funding {amount_sats} sats to new ZkOS trading account...");
             let (tx_result, account_index) = ow.funding_to_trading(amount_sats).await?;
@@ -70,10 +67,7 @@ pub(crate) async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             println!("Withdrawing from ZkOS account {account_index} back to on-chain wallet...");
             ow.trading_to_funding(account_index).await?;
@@ -86,10 +80,7 @@ pub(crate) async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
             wallet_id,
             password,
         } => {
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             println!("Transferring from ZkOS account {account_index} to new account...");
             let new_index = ow.trading_to_trading(account_index).await?;
@@ -167,10 +158,7 @@ pub(crate) async fn handle_zkaccount(cmd: ZkaccountCmd) -> Result<(), String> {
                 return Err("All balances must be greater than 0".to_string());
             }
 
-            #[cfg(any(feature = "sqlite", feature = "postgresql"))]
-            let mut ow = resolve_order_wallet(wallet_id, password).await?;
-            #[cfg(not(any(feature = "sqlite", feature = "postgresql")))]
-            let mut ow = OrderWallet::new(None).map_err(|e| e.to_string())?;
+            let mut ow = get_or_resolve_wallet(repl_wallet, wallet_id, password).await?;
 
             let total: u64 = balance_vec.iter().sum();
             println!(
