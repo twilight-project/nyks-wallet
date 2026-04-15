@@ -1,6 +1,6 @@
 [package]
 name = "nyks-wallet"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 resolver = "2"
 
@@ -99,8 +99,15 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tendermint-rpc = { version = "0.34", features = ["http-client"] }
 uuid = { version = "1.6.1", features = ["v4", "serde"] }
 zeroize = "1.7"
-bdk_wallet = { version = "2.3", default-features = false, features = ["std", "keys-bip39"] }
-bdk_esplora = { version = "0.22", default-features = false, features = ["async-https-rustls", "blocking", "tokio"] }
+bdk_wallet = { version = "2.3", default-features = false, features = [
+    "std",
+    "keys-bip39",
+] }
+bdk_esplora = { version = "0.22", default-features = false, features = [
+    "async-https-rustls",
+    "blocking",
+    "tokio",
+] }
 aes-gcm = "0.10"
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
