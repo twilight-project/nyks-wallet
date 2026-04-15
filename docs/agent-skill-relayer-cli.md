@@ -28,6 +28,15 @@ mv nyks-wallet-windows-amd64.exe relayer-cli.exe
 ./relayer-cli --help
 ```
 
+### Updating
+
+Once installed, the CLI can update itself:
+
+```bash
+relayer-cli update            # download and install the latest version
+relayer-cli update --check    # check if an update is available
+```
+
 ---
 
 ## 2. Build from Source
@@ -350,6 +359,12 @@ Coin → open-lend → Memo (PENDING) → fills → FILLED
 | `portfolio summary` | Full portfolio: balances, positions, PnL (auto-unlocks settled) |
 | `portfolio balances` | Per-account balance breakdown (`--unit sats\|mbtc\|btc`) |
 | `portfolio risks` | Liquidation risk for open positions |
+
+### Update
+
+| Command | Purpose |
+|---|---|
+| `update` | Check for updates and self-update the binary (`--check` for dry run) |
 
 ### History (from local DB)
 

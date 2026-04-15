@@ -9,6 +9,7 @@ mod market;
 mod order;
 mod portfolio;
 mod repl;
+mod update;
 mod verify_test;
 mod wallet;
 mod zkaccount;
@@ -78,6 +79,13 @@ enum Commands {
         password: Option<String>,
     },
 
+    /// Check for updates and self-update the binary
+    Update {
+        /// Check only — show available version without downloading
+        #[arg(long, default_value_t = false)]
+        check: bool,
+    },
+
     /// Show help for a command group (e.g. `help wallet`)
     Help {
         /// Command group to get help for (wallet, zkaccount, order, market, history, portfolio)
@@ -107,6 +115,7 @@ async fn main() {
         Commands::Portfolio(cmd) => portfolio::handle_portfolio(cmd, json_output, None).await,
         Commands::BitcoinWallet(cmd) => bitcoin_wallet::handle_bitcoin_wallet(cmd, None).await,
         Commands::VerifyTest(cmd) => verify_test::handle_verify_test(cmd).await,
+        Commands::Update { check } => update::handle_update(check).await,
         Commands::Repl { wallet_id, password } => {
             repl::run_repl(wallet_id, password).await
         }

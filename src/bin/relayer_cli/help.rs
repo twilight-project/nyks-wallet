@@ -28,6 +28,7 @@ COMMANDS:
     repl            Interactive REPL mode — enter wallet ID and password once,
                     then run commands without the `relayer-cli` prefix
     verify-test     Run verification tests against testnet (testnet only)
+    update          Check for updates and self-update the binary
 
 GLOBAL FLAGS:
     --json      Output results as JSON (for scripting)
@@ -298,6 +299,22 @@ EXAMPLES:
     );
 }
 
+pub(crate) fn print_update_help() {
+    println!(
+        r#"Check for updates and self-update the binary.
+
+USAGE:
+    relayer-cli update [--check]
+
+FLAGS:
+    --check     Check for a new version without downloading or installing
+
+EXAMPLES:
+    relayer-cli update              # download and install the latest version
+    relayer-cli update --check      # check if an update is available"#
+    );
+}
+
 pub(crate) fn print_subcommand_help(group: &str) {
     match group.to_lowercase().replace('-', "").as_str() {
         "wallet" => print_wallet_help(),
@@ -308,6 +325,7 @@ pub(crate) fn print_subcommand_help(group: &str) {
         "history" => print_history_help(),
         "portfolio" => print_portfolio_help(),
         "verifytest" => print_verify_test_help(),
+        "update" => print_update_help(),
         _ => {
             eprintln!("Unknown command group: '{}'\n", group);
             print_global_help();

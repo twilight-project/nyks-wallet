@@ -110,6 +110,7 @@ bdk_esplora = { version = "0.22", default-features = false, features = [
 ] }
 aes-gcm = "0.10"
 clap = { version = "4", features = ["derive"] }
+self-replace = "1"
 libc = "0.2"
 qr2term = "0.3"
 

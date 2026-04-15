@@ -135,6 +135,7 @@ relayer-cli [--json] <COMMAND>
 - `portfolio` — portfolio summary, balances (with unit conversion), liquidation risks
 - `verify-test` — run verification tests against testnet (testnet only)
 - `repl` — interactive REPL mode with line editing, history, and a persistent wallet session
+- `update` — check for updates and self-update the binary
 - `help` — show help for the CLI or a specific command group
 
 ### Built-in Help
@@ -1615,6 +1616,28 @@ twilight1a...z123> market price
 twilight1a...z123> exit
 Goodbye.
 ```
+
+---
+
+## Update Command
+
+Check for new releases and self-update the binary in-place. Fetches the latest release from [GitHub releases](https://github.com/twilight-project/nyks-wallet/releases), compares versions, and downloads the correct platform-specific binary.
+
+### `update`
+
+```bash
+# Check and install the latest version
+relayer-cli update
+
+# Check only (no download)
+relayer-cli update --check
+```
+
+| Flag      | Description                                          |
+| --------- | ---------------------------------------------------- |
+| `--check` | Check for a new version without downloading or installing |
+
+The command detects the current platform automatically (macOS ARM64, Linux x86_64, Windows x86_64) and downloads the matching binary. On success, restart the CLI to use the new version.
 
 ---
 
