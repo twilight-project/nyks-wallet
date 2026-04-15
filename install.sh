@@ -29,7 +29,9 @@ case "${ARCH}" in
         if [ "${OS}" = "Darwin" ]; then
             ARTIFACT="nyks-wallet-macos-arm64"
         else
-            echo "Error: Linux ARM64 is not supported" >&2; exit 1
+            # No native Linux ARM64 build — use x86_64 binary (works under emulation, e.g. Docker on Apple Silicon)
+            echo "Note: no native Linux ARM64 build available, using x86_64 binary"
+            ARTIFACT="nyks-wallet-linux-amd64"
         fi
         ;;
     *)
