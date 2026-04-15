@@ -48,14 +48,9 @@ RELEASE_JSON="$(curl -sf "${API_URL}")" || {
     exit 1
 }
 
-# Extract download URL — try jq first, fall back to grep+cut
-if command -v jq >/dev/null 2>&1; then
-    DOWNLOAD_URL="$(echo "${RELEASE_JSON}" | jq -r ".assets[] | select(.name == \"${ARTIFACT}\") | .browser_download_url")"
-    TAG="$(echo "${RELEASE_JSON}" | jq -r '.tag_name')"
-else
-    DOWNLOAD_URL="$(echo "${RELEASE_JSON}" | grep "browser_download_url" | grep "${ARTIFACT}" | head -1 | cut -d '"' -f 4)"
-    TAG="$(echo "${RELEASE_JSON}" | grep '"tag_name"' | head -1 | cut -d '"' -f 4)"
-fi
+# Extract download URL and tag via grep — works regardless of JSON body encoding
+DOWNLOAD_URL="$(echo "${RELEASE_JSON}" | grep "browser_download_url" | grep "${ARTIFACT}" | head -1 | cut -d '"' -f 4)"
+TAG="$(echo "${RELEASE_JSON}" | grep '"tag_name"' | head -1 | cut -d '"' -f 4)"
 
 if [ -z "${DOWNLOAD_URL}" ] || [ "${DOWNLOAD_URL}" = "null" ]; then
     echo "Error: could not find asset '${ARTIFACT}' in latest release" >&2
