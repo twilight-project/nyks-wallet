@@ -20,9 +20,18 @@ use commands::*;
 // CLI definition
 // ---------------------------------------------------------------------------
 
+const VERSION_INFO: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("BUILD_DATE"),
+    ")\nhttps://github.com/twilight-project/nyks-wallet/releases/tag/v",
+    env!("CARGO_PKG_VERSION"),
+    "-relayer-cli"
+);
+
 /// Twilight Relayer CLI — manage wallets and orders from the command line.
 #[derive(Parser)]
-#[command(name = "relayer-cli", version, about, long_about = None, disable_help_subcommand = true)]
+#[command(name = "relayer-cli", version = VERSION_INFO, about, long_about = None, disable_help_subcommand = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
