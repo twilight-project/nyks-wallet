@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::io::Write;
 
 const GITHUB_API_URL: &str =
@@ -111,6 +112,43 @@ pub(crate) async fn handle_update(check_only: bool) -> Result<(), String> {
         .map_err(|e| format!("Failed to read download: {e}"))?;
 
     println!("Downloaded {} bytes.", bytes.len());
+
+    // --- Verify checksum --------------------------------------------------------
+
+    let checksum_name = format!("{expected_name}.sha256");
+    let checksum_asset = release.assets.iter().find(|a| a.name == checksum_name);
+
+    if let Some(checksum_asset) = checksum_asset {
+        println!("Verifying checksum...");
+
+        let checksum_text = client
+            .get(&checksum_asset.browser_download_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download checksum: {e}"))?
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read checksum: {e}"))?;
+
+        let expected = checksum_text
+            .split_whitespace()
+            .next()
+            .ok_or_else(|| "Checksum file is empty".to_string())?;
+
+        let actual = hex::encode(Sha256::digest(&bytes));
+
+        if actual != expected {
+            return Err(format!(
+                "Checksum mismatch!\n  Expected: {expected}\n  Actual:   {actual}"
+            ));
+        }
+
+        println!("Checksum verified.");
+    } else {
+        println!("Note: no checksum file in release, skipping verification.");
+    }
+
+    // --- Write and replace -------------------------------------------------------
 
     let tmp_path = std::env::temp_dir().join(format!("relayer-cli-update-{}", std::process::id()));
 
