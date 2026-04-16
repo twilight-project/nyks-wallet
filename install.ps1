@@ -3,6 +3,7 @@
     Install the latest relayer-cli binary for Windows.
 .DESCRIPTION
     Downloads the latest relayer-cli release from GitHub and places it in the current directory.
+    Verifies the download against a SHA256 checksum if available.
 .EXAMPLE
     .\install.ps1
 .EXAMPLE
@@ -43,6 +44,34 @@
     } catch {
         Write-Host "Error: Download failed: $_" -ForegroundColor Red
         return
+    }
+
+    # --- Verify checksum ---
+
+    $ChecksumAsset = $Release.assets | Where-Object { $_.name -eq "$Artifact.sha256" }
+
+    if ($ChecksumAsset) {
+        Write-Host "Verifying checksum..."
+
+        try {
+            $ChecksumContent = Invoke-RestMethod -Uri $ChecksumAsset.browser_download_url -Headers @{ "User-Agent" = "relayer-cli-installer" }
+            $Expected = ($ChecksumContent -split '\s+')[0].ToUpper()
+            $Actual = (Get-FileHash $BinaryName -Algorithm SHA256).Hash
+
+            if ($Actual -ne $Expected) {
+                Write-Host "Error: checksum mismatch!" -ForegroundColor Red
+                Write-Host "  Expected: $Expected" -ForegroundColor Red
+                Write-Host "  Actual:   $Actual" -ForegroundColor Red
+                Remove-Item $BinaryName -Force
+                return
+            }
+
+            Write-Host "Checksum verified."
+        } catch {
+            Write-Host "Warning: could not verify checksum, skipping: $_" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "Note: no checksum file found in release, skipping verification"
     }
 
     Write-Host ""

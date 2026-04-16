@@ -66,6 +66,37 @@ curl -sfL "${DOWNLOAD_URL}" -o "${INSTALL_DIR}/${BINARY_NAME}" || {
     exit 1
 }
 
+# --- Verify checksum ---------------------------------------------------------
+
+CHECKSUM_URL="$(echo "${RELEASE_JSON}" | grep "browser_download_url" | grep "${ARTIFACT}.sha256" | head -1 | cut -d '"' -f 4)"
+
+if [ -n "${CHECKSUM_URL}" ] && [ "${CHECKSUM_URL}" != "null" ]; then
+    echo "Verifying checksum..."
+
+    EXPECTED="$(curl -sfL "${CHECKSUM_URL}" | cut -d ' ' -f 1)"
+
+    if [ -z "${EXPECTED}" ]; then
+        echo "Warning: could not download checksum file, skipping verification" >&2
+    else
+        # shasum works on both macOS and Linux
+        ACTUAL="$(shasum -a 256 "${INSTALL_DIR}/${BINARY_NAME}" | cut -d ' ' -f 1)"
+
+        if [ "${ACTUAL}" != "${EXPECTED}" ]; then
+            echo "Error: checksum mismatch!" >&2
+            echo "  Expected: ${EXPECTED}" >&2
+            echo "  Actual:   ${ACTUAL}" >&2
+            rm -f "${INSTALL_DIR}/${BINARY_NAME}"
+            exit 1
+        fi
+
+        echo "Checksum verified."
+    fi
+else
+    echo "Note: no checksum file found in release, skipping verification"
+fi
+
+# --- Finalize ----------------------------------------------------------------
+
 chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
 echo ""
