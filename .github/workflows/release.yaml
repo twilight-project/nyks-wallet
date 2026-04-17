@@ -2,7 +2,7 @@ name: Release
 
 on:
   release:
-    types: [created, published]
+    types: [published]
 
 concurrency:
   group: release-${{ github.ref }}
@@ -15,32 +15,67 @@ permissions:
   contents: write
 
 jobs:
+  verify-version:
+    if: contains(github.event.release.tag_name, '-relayer-cli')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Cargo.toml version matches release tag
+        shell: bash
+        run: |
+          set -e
+          TAG="${{ github.event.release.tag_name }}"
+          TAG_VERSION="${TAG%-relayer-cli}"
+          TAG_VERSION="${TAG_VERSION#v}"
+          CARGO_VERSION=$(grep -E '^version = "' Cargo.toml | head -1 | sed -E 's/^version = "(.+)"$/\1/')
+          echo "Tag version:   $TAG_VERSION"
+          echo "Cargo version: $CARGO_VERSION"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Cargo.toml version ($CARGO_VERSION) does not match tag version ($TAG_VERSION). Bump Cargo.toml before tagging."
+            exit 1
+          fi
+
   build-and-upload:
+    needs: verify-version
+    if: contains(github.event.release.tag_name, '-relayer-cli')
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: nyks-wallet-linux-amd64
+            artifact_suffix: relayer_cli_linux_amd64
             binary: target/x86_64-unknown-linux-gnu/release/relayer-cli
+            label: "Relayer CLI Linux amd64"
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            artifact: nyks-wallet-linux-arm64
+            artifact_suffix: relayer_cli_linux_arm64
             binary: target/aarch64-unknown-linux-gnu/release/relayer-cli
+            label: "Relayer CLI Linux arm64"
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: nyks-wallet-macos-arm64
+            artifact_suffix: relayer_cli_macos_arm64
             binary: target/aarch64-apple-darwin/release/relayer-cli
+            label: "Relayer CLI macOS arm64"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: nyks-wallet-windows-amd64.exe
+            artifact_suffix: relayer_cli_windows_amd64.exe
             binary: target/x86_64-pc-windows-msvc/release/relayer-cli.exe
+            label: "Relayer CLI Windows amd64"
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set artifact name
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG%-relayer-cli}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=nw_${VERSION}_${{ matrix.artifact_suffix }}" >> $GITHUB_ENV
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -92,27 +127,31 @@ jobs:
       - name: Prepare binary artifact (Unix)
         if: runner.os != 'Windows'
         run: |
-          cp ${{ matrix.binary }} ${{ matrix.artifact }}
-          chmod +x ${{ matrix.artifact }}
+          cp ${{ matrix.binary }} ${{ env.ARTIFACT_NAME }}
+          chmod +x ${{ env.ARTIFACT_NAME }}
 
       - name: Prepare binary artifact (Windows)
         if: runner.os == 'Windows'
-        run: cp ${{ matrix.binary }} ${{ matrix.artifact }}
+        run: cp ${{ matrix.binary }} ${{ env.ARTIFACT_NAME }}
 
       - name: Generate SHA256 checksum (Unix)
         if: runner.os != 'Windows'
-        run: shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+        run: shasum -a 256 ${{ env.ARTIFACT_NAME }} > ${{ env.ARTIFACT_NAME }}.sha256
 
       - name: Generate SHA256 checksum (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $hash = (Get-FileHash "${{ matrix.artifact }}" -Algorithm SHA256).Hash.ToLower()
-          "$hash  ${{ matrix.artifact }}" | Out-File -Encoding ascii "${{ matrix.artifact }}.sha256"
+          $hash = (Get-FileHash "${{ env.ARTIFACT_NAME }}" -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ env.ARTIFACT_NAME }}" | Out-File -Encoding ascii "${{ env.ARTIFACT_NAME }}.sha256"
 
       - name: Upload binary to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ${{ matrix.artifact }}
-            ${{ matrix.artifact }}.sha256
+        shell: bash
+        run: |
+          set -e
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "${{ env.ARTIFACT_NAME }}#${{ matrix.label }} ${{ env.VERSION }}" \
+            "${{ env.ARTIFACT_NAME }}.sha256#SHA256 checksum for ${{ matrix.label }} ${{ env.VERSION }}" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

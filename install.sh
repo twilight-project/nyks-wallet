@@ -2,7 +2,7 @@
 set -e
 
 REPO="twilight-project/nyks-wallet"
-API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+API_URL="https://api.github.com/repos/${REPO}/releases?per_page=100"
 INSTALL_DIR="."
 BINARY_NAME="relayer-cli"
 
@@ -12,50 +12,54 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 case "${OS}" in
-    Linux)  ARTIFACT="nyks-wallet-linux-amd64" ;;
-    Darwin) ARTIFACT="nyks-wallet-macos-arm64" ;;
-    *)      echo "Error: unsupported OS: ${OS}" >&2; exit 1 ;;
-esac
-
-case "${ARCH}" in
-    x86_64|amd64)
-        if [ "${OS}" = "Linux" ]; then
-            ARTIFACT="nyks-wallet-linux-amd64"
-        else
-            echo "Error: macOS x86_64 is not supported (Apple Silicon only)" >&2; exit 1
-        fi
+    Linux)
+        case "${ARCH}" in
+            x86_64|amd64)    PLATFORM_SUFFIX="_linux_amd64" ;;
+            arm64|aarch64)   PLATFORM_SUFFIX="_linux_arm64" ;;
+            *) echo "Error: unsupported Linux architecture: ${ARCH}" >&2; exit 1 ;;
+        esac
         ;;
-    arm64|aarch64)
-        if [ "${OS}" = "Darwin" ]; then
-            ARTIFACT="nyks-wallet-macos-arm64"
-        else
-            ARTIFACT="nyks-wallet-linux-arm64"
-        fi
+    Darwin)
+        case "${ARCH}" in
+            arm64|aarch64)   PLATFORM_SUFFIX="_macos_arm64" ;;
+            *) echo "Error: macOS x86_64 is not supported (Apple Silicon only)" >&2; exit 1 ;;
+        esac
         ;;
     *)
-        echo "Error: unsupported architecture: ${ARCH}" >&2; exit 1
+        echo "Error: unsupported OS: ${OS}" >&2; exit 1
         ;;
 esac
 
-echo "Detected platform: ${OS} ${ARCH} -> ${ARTIFACT}"
+echo "Detected platform: ${OS} ${ARCH} -> ${PLATFORM_SUFFIX}"
 
-# --- Fetch latest release URL -----------------------------------------------
+# --- Fetch releases list ----------------------------------------------------
 
-echo "Fetching latest release from ${REPO}..."
+echo "Fetching releases from ${REPO}..."
 
-RELEASE_JSON="$(curl -sf "${API_URL}")" || {
-    echo "Error: failed to fetch release info from GitHub API" >&2
+RELEASES_JSON="$(curl -sf "${API_URL}")" || {
+    echo "Error: failed to fetch releases from GitHub API" >&2
     exit 1
 }
 
-# Extract download URL and tag via grep — works regardless of JSON body encoding
-DOWNLOAD_URL="$(echo "${RELEASE_JSON}" | grep "browser_download_url" | grep "${ARTIFACT}" | head -1 | cut -d '"' -f 4)"
-TAG="$(echo "${RELEASE_JSON}" | grep '"tag_name"' | head -1 | cut -d '"' -f 4)"
+# Pick the newest browser_download_url whose filename matches the
+# relayer-cli asset for this platform. GitHub returns releases newest-first,
+# so the first match is the latest relayer-cli release. This naturally
+# ignores unrelated tags like v0.1.1 or v0.0.4-relayer-deployer.
+DOWNLOAD_URL="$(echo "${RELEASES_JSON}" \
+    | grep '"browser_download_url"' \
+    | grep "_relayer_cli${PLATFORM_SUFFIX}\"" \
+    | head -1 \
+    | cut -d '"' -f 4)"
 
-if [ -z "${DOWNLOAD_URL}" ] || [ "${DOWNLOAD_URL}" = "null" ]; then
-    echo "Error: could not find asset '${ARTIFACT}' in latest release" >&2
+if [ -z "${DOWNLOAD_URL}" ]; then
+    echo "Error: could not find a relayer-cli asset for platform ${PLATFORM_SUFFIX}" >&2
     exit 1
 fi
+
+# Extract the tag from the download URL path:
+# https://github.com/OWNER/REPO/releases/download/<TAG>/<ASSET>
+TAG="$(echo "${DOWNLOAD_URL}" | awk -F'/releases/download/' '{print $2}' | awk -F'/' '{print $1}')"
+ARTIFACT="$(echo "${DOWNLOAD_URL}" | awk -F'/' '{print $NF}')"
 
 echo "Downloading ${TAG} (${ARTIFACT})..."
 
@@ -68,31 +72,27 @@ curl -sfL "${DOWNLOAD_URL}" -o "${INSTALL_DIR}/${BINARY_NAME}" || {
 
 # --- Verify checksum ---------------------------------------------------------
 
-CHECKSUM_URL="$(echo "${RELEASE_JSON}" | grep "browser_download_url" | grep "${ARTIFACT}.sha256" | head -1 | cut -d '"' -f 4)"
+CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
 
-if [ -n "${CHECKSUM_URL}" ] && [ "${CHECKSUM_URL}" != "null" ]; then
-    echo "Verifying checksum..."
+echo "Verifying checksum..."
 
-    EXPECTED="$(curl -sfL "${CHECKSUM_URL}" | cut -d ' ' -f 1)"
+EXPECTED="$(curl -sfL "${CHECKSUM_URL}" 2>/dev/null | cut -d ' ' -f 1)"
 
-    if [ -z "${EXPECTED}" ]; then
-        echo "Warning: could not download checksum file, skipping verification" >&2
-    else
-        # shasum works on both macOS and Linux
-        ACTUAL="$(shasum -a 256 "${INSTALL_DIR}/${BINARY_NAME}" | cut -d ' ' -f 1)"
-
-        if [ "${ACTUAL}" != "${EXPECTED}" ]; then
-            echo "Error: checksum mismatch!" >&2
-            echo "  Expected: ${EXPECTED}" >&2
-            echo "  Actual:   ${ACTUAL}" >&2
-            rm -f "${INSTALL_DIR}/${BINARY_NAME}"
-            exit 1
-        fi
-
-        echo "Checksum verified."
-    fi
+if [ -z "${EXPECTED}" ]; then
+    echo "Warning: no checksum file found for ${ARTIFACT}, skipping verification" >&2
 else
-    echo "Note: no checksum file found in release, skipping verification"
+    # shasum works on both macOS and Linux
+    ACTUAL="$(shasum -a 256 "${INSTALL_DIR}/${BINARY_NAME}" | cut -d ' ' -f 1)"
+
+    if [ "${ACTUAL}" != "${EXPECTED}" ]; then
+        echo "Error: checksum mismatch!" >&2
+        echo "  Expected: ${EXPECTED}" >&2
+        echo "  Actual:   ${ACTUAL}" >&2
+        rm -f "${INSTALL_DIR}/${BINARY_NAME}"
+        exit 1
+    fi
+
+    echo "Checksum verified."
 fi
 
 # --- Finalize ----------------------------------------------------------------
