@@ -37,9 +37,13 @@ RESOLUTION PRIORITY (wallet-id & password):
     --flag  >  session cache (wallet unlock)  >  env var
 
 ENVIRONMENT:
+    NETWORK_TYPE            Nyks network (mainnet/testnet, default: mainnet)
     NYKS_WALLET_ID          Default wallet ID
     NYKS_WALLET_PASSPHRASE  Default password
-    BTC_NETWORK_TYPE        Bitcoin network (mainnet/testnet, falls back to mainnet)
+    BTC_NETWORK_TYPE        BTC network for key derivation (default: mainnet).
+                            Keep as mainnet even with NETWORK_TYPE=testnet —
+                            the Nyks chain only supports BTC mainnet. Only
+                            override to testnet for local bitcoin-wallet testing.
 
 REPL MODE:
     relayer-cli repl                     # interactive prompt for wallet ID & password
@@ -110,17 +114,24 @@ SUBCOMMANDS:
     transfer    Transfer balance between ZkOS trading accounts
     split       Split one account into multiple new accounts
 
-AMOUNTS:
-    fund/split accept amounts in multiple units (pick one):
-        --amount <sats>           Satoshis
-        --amount-mbtc <mbtc>      Milli-BTC (1 mBTC = 100,000 sats)
-        --amount-btc <btc>        BTC (1 BTC = 100,000,000 sats)
+AMOUNTS (fund — pick exactly one):
+    --amount <sats>           Satoshis
+    --amount-mbtc <mbtc>      Milli-BTC (1 mBTC = 100,000 sats)
+    --amount-btc <btc>        BTC (1 BTC = 100,000,000 sats)
+
+BALANCES (split — comma-separated list, pick exactly one):
+    --balances "1000,2000"        Satoshis per new account
+    --balances-mbtc "0.01,0.02"   Milli-BTC per new account
+    --balances-btc "0.00001,…"    BTC per new account
+    (max 8 new accounts per split call; no zero values; sum ≤ source balance)
 
 EXAMPLES:
     relayer-cli zkaccount fund --amount 50000
+    relayer-cli zkaccount fund --amount-btc 0.0005
     relayer-cli zkaccount withdraw --account-index 1
     relayer-cli zkaccount transfer --account-index 1
-    relayer-cli zkaccount split --account-index 0 --balances "10000,20000,30000""#
+    relayer-cli zkaccount split --account-index 0 --balances "10000,20000,30000"
+    relayer-cli zkaccount split --account-index 0 --balances-mbtc "0.1,0.2""#
     );
 }
 
@@ -133,10 +144,15 @@ USAGE:
 
 TRADING:
     open-trade          Open a leveraged position (MARKET/LIMIT)
-    close-trade         Close a position (MARKET/LIMIT/SLTP)
-    cancel-trade        Cancel a pending order or cancel SL/TP on a filled order
+    close-trade         Close a position. Modes:
+                          MARKET (default) — immediate close at market price
+                          LIMIT  — --order-type LIMIT --execution-price <P>
+                          SLTP   — --stop-loss <P> and/or --take-profit <P>
+                        (LIMIT cannot be combined with --stop-loss / --take-profit)
+    cancel-trade        No flags: cancel PENDING order, or remove settle_limit on FILLED
+                        --stop-loss / --take-profit: remove SL/TP triggers on FILLED
     query-trade         Query current order status
-    unlock-close-order  Unlock a settled order (trade or lend) based on account's TXType
+    unlock-close-order  Unlock a settled order (trade or lend) based on account's tx_type
     unlock-failed-order Unlock a failed order (reclaim account when submission failed)
 
 LENDING:
@@ -155,15 +171,19 @@ HISTORY & ANALYTICS (from relayer):
 EXAMPLES:
     relayer-cli order open-trade --account-index 1 --side LONG --entry-price 65000 --leverage 5
     relayer-cli order close-trade --account-index 1
+    relayer-cli order close-trade --account-index 1 --order-type LIMIT --execution-price 70000
+    relayer-cli order close-trade --account-index 1 --stop-loss 60000 --take-profit 75000
+    relayer-cli order cancel-trade --account-index 1              # cancel PENDING or remove settle_limit
+    relayer-cli order cancel-trade --account-index 1 --stop-loss  # remove SL only (position stays open)
+    relayer-cli order cancel-trade --account-index 1 --stop-loss --take-profit
     relayer-cli order query-trade --account-index 1
     relayer-cli order history-trade --account-index 1
-    relayer-cli order cancel-trade --account-index 1 --stop-loss --take-profit
     relayer-cli order account-summary --from 2024-01-01 --to 2024-12-31
     relayer-cli order request-history --account-index 0
     relayer-cli order request-history --account-index 0 --status FILLED --reason
 
 NOTE:
-    If the account was previously used for a open/closed order. You must transfer the account
+    If the account was previously used for an open/closed order, you must transfer the account
     first before placing a new order, as an order cannot be placed with the same
     account address twice. If the order was pending to fill and later cancelled, you can reuse the
     account.
@@ -193,10 +213,10 @@ LIVE DATA:
     server-time         Relayer server time
 
 HISTORICAL DATA:
-    history-price       Historical prices over a date range
-    candles             OHLCV candlestick data
-    history-funding     Historical funding rates
-    history-fees        Historical fee rates
+    history-price       Historical prices over a date range (requires --from, --to)
+    candles             OHLCV candlestick data (requires --since)
+    history-funding     Historical funding rates (requires --from, --to)
+    history-fees        Historical fee rates (requires --from, --to)
     apy-chart           APY chart data for lend pool
 
 EXAMPLES:
@@ -251,10 +271,12 @@ USAGE:
     relayer-cli bitcoin-wallet <SUBCOMMAND>
 
 SUBCOMMANDS:
-    balance     Check on-chain BTC balance (confirmed + unconfirmed)
-    transfer    Send BTC to a native SegWit address
-    receive     Show BTC receive address and wallet details
-    history     Show BTC transfer history with confirmation status
+    balance                 Check on-chain BTC balance (confirmed + unconfirmed)
+    transfer                Send BTC to a native SegWit address
+    receive                 Show BTC receive address and wallet details
+    history                 Show BTC transfer history with confirmation status
+    update-bitcoin-wallet   Re-derive BTC keys from a new mnemonic (only if
+                            current BTC address is not yet registered on-chain)
 
 AMOUNTS (transfer):
     --amount <sats>           Satoshis (priority 1)
@@ -274,7 +296,8 @@ EXAMPLES:
     relayer-cli bitcoin-wallet transfer --to bc1q... --amount-mbtc 0.5 --fee-rate 5
     relayer-cli bitcoin-wallet receive
     relayer-cli bitcoin-wallet history
-    relayer-cli bitcoin-wallet history --status confirmed"#
+    relayer-cli bitcoin-wallet history --status confirmed
+    relayer-cli bitcoin-wallet update-bitcoin-wallet --mnemonic "<phrase>""#
     );
 }
 
@@ -326,6 +349,7 @@ pub(crate) fn print_subcommand_help(group: &str) {
         "portfolio" => print_portfolio_help(),
         "verifytest" => print_verify_test_help(),
         "update" => print_update_help(),
+        "repl" => crate::repl::print_repl_help(),
         _ => {
             eprintln!("Unknown command group: '{}'\n", group);
             print_global_help();

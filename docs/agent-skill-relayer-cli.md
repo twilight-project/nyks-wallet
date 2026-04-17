@@ -2,6 +2,23 @@
 
 A complete guide for AI agents and developers to build, configure, and operate the Twilight `relayer-cli`. This document is self-contained — read it to go from zero to executing trades.
 
+## Contents
+
+1. [Quick Start (pre-built binary)](#1-quick-start-pre-built-binary) — install the released binary in one command
+2. [Build from Source](#2-build-from-source) — Rust/protoc prerequisites, SQLite vs PostgreSQL
+3. [Configure](#3-configure) — env vars, endpoints, credential resolution, DB
+4. [Global CLI pattern](#4-global-cli-pattern) — `--json`, REPL, amount-units convention
+5. [Complete Workflow: Testnet](#5-complete-workflow-testnet) — create → faucet → trade → withdraw
+6. [Complete Workflow: Mainnet (BTC onboarding)](#6-complete-workflow-mainnet-btc-onboarding) — register/deposit/withdraw, manual flow for no-mnemonic wallets
+7. [Account State Model](#7-account-state-model) — ZkAccount fields, `Coin`/`Memo`/`State` semantics
+8. [Order Lifecycle](#8-order-lifecycle) — trade/lend flows, close-trade rules, status reference, numeric limits, preconditions
+9. [Command Quick Reference](#9-command-quick-reference) — every command in one place, grouped by domain
+10. [Multiple Orders via Split](#10-multiple-orders-via-split) — parallel orders from one funded account
+11. [Critical Rules](#11-critical-rules) — address reuse, reserve timing, network restrictions
+12. [Error Recovery](#12-error-recovery) — symptom → resolution table
+13. [JSON Output](#13-json-output) — `--json` shape by command category
+14. [Getting Unstuck](#14-getting-unstuck) — inline `help` / `--help` pointers
+
 ---
 
 ## 1. Quick Start (pre-built binary)
@@ -21,6 +38,8 @@ This auto-detects your platform, downloads the latest release, and installs `rel
 ```powershell
 irm https://raw.githubusercontent.com/twilight-project/nyks-wallet/main/install.ps1 | iex
 ```
+
+> **Note:** The pre-built binary is compiled with the **default feature set (SQLite backend)**. If you need the PostgreSQL backend, build from source — see [Section 2](#2-build-from-source).
 
 ### Verify
 
@@ -73,39 +92,69 @@ docker run -e RUST_LOG=info -e NETWORK_TYPE=testnet relayer-cli <command>
 
 ## 3. Configure
 
-### Minimal .env for mainnet
+A `.env` file in the working directory is loaded automatically. All defaults are built into the binary — you typically don't need to set anything beyond `RUST_LOG` and (for testnet) `NETWORK_TYPE`.
+
+### Minimal .env
 
 ```bash
+# Mainnet
 RUST_LOG=info
-```
 
-That's it. All defaults (`NETWORK_TYPE=mainnet`, endpoints, database path, relayer program path) are built into the binary. No other env vars are required.
-
-### Minimal .env for testnet
-
-```bash
+# Testnet
 RUST_LOG=info
 NETWORK_TYPE=testnet
 ```
 
-All testnet endpoints auto-resolve from `NETWORK_TYPE=testnet`. Override only if needed (e.g., local development).
-
-### Key env vars
+### Core variables
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `NETWORK_TYPE` | `mainnet` or `testnet` — controls endpoints and BIP-44 derivation | `mainnet` |
-| `BTC_NETWORK_TYPE` | Bitcoin network for BTC keys/balance — falls back to hardcoded `mainnet` | `mainnet` |
-| `NYKS_WALLET_ID` | Default wallet ID when `--wallet-id` is omitted | — |
-| `NYKS_WALLET_PASSPHRASE` | Default password when `--password` is omitted | — |
-| `DATABASE_URL_SQLITE` | SQLite database path | `./wallet_data.db` |
+| `RUST_LOG` | Logging level (`info`, `debug`, `trace`) | — |
+| `RUST_BACKTRACE` | Rust backtraces (`1` or `full`) | — |
+| `CHAIN_ID` | Blockchain network identifier | `nyks` |
+| `NETWORK_TYPE` | `mainnet` or `testnet` — controls nyks chain endpoints and BIP-44 derivation | `mainnet` |
+| `BTC_NETWORK_TYPE` | Bitcoin network for BTC key derivation. See note below — leave as `mainnet` for normal use | `mainnet` |
 
-### Wallet credential resolution order
+> **Important — `BTC_NETWORK_TYPE` does NOT follow `NETWORK_TYPE`.** The Nyks chain only supports **BTC mainnet**, even when running against nyks testnet. All deposit/withdraw flows (`register-btc`, `deposit-btc`, `withdraw-btc`, reserves) operate on BTC mainnet regardless of `NETWORK_TYPE`. Keep `BTC_NETWORK_TYPE=mainnet` (the default) for both nyks mainnet and nyks testnet. Only set `BTC_NETWORK_TYPE=testnet` when **locally testing the `bitcoin-wallet` subcommands** (`balance`, `transfer`, `receive`) against the Bitcoin testnet — never combine it with the register/deposit/withdraw flows.
 
-1. `--wallet-id` / `--password` CLI flags
-2. Session cache (`wallet unlock`)
-3. `NYKS_WALLET_ID` / `NYKS_WALLET_PASSPHRASE` env vars
-4. Interactive prompt (for `wallet unlock` only)
+### Chain endpoints (auto-resolved from `NETWORK_TYPE`)
+
+| Variable | Default (mainnet) | Default (testnet) |
+|---|---|---|
+| `NYKS_RPC_BASE_URL` | `https://rpc.twilight.org` | `https://rpc.twilight.rest` |
+| `NYKS_LCD_BASE_URL` | `https://lcd.twilight.org` | `https://lcd.twilight.rest` |
+| `FAUCET_BASE_URL` | disabled | `https://faucet-rpc.twilight.rest` |
+| `TWILIGHT_INDEXER_URL` | `https://indexer.twilight.org` | `https://indexer.twilight.rest` |
+| `BTC_ESPLORA_PRIMARY_URL` | `https://blockstream.info/api` | `https://blockstream.info/testnet/api` |
+| `BTC_ESPLORA_FALLBACK_URL` | `https://mempool.space/api` | `https://mempool.space/testnet/api` |
+
+### Order-wallet endpoints (required for trading/lending/ZkOS)
+
+| Variable | Default (mainnet) | Default (testnet) |
+|---|---|---|
+| `RELAYER_API_RPC_SERVER_URL` | `https://api.ephemeral.fi/api` | `https://relayer.twilight.rest/api` |
+| `ZKOS_SERVER_URL` | `https://zkserver.twilight.org` | `https://nykschain.twilight.rest/zkos` |
+| `RELAYER_PROGRAM_JSON_PATH` | `./relayerprogram.json` | `./relayerprogram.json` |
+
+### Wallet credentials
+
+| Variable | Purpose |
+|---|---|
+| `NYKS_WALLET_ID` | Default wallet ID when `--wallet-id` is omitted |
+| `NYKS_WALLET_PASSPHRASE` | Default password when `--password` is omitted |
+
+**Resolution order** (for both wallet-id and password):
+1. CLI flag (`--wallet-id`, `--password`)
+2. Session cache (set via `wallet unlock`)
+3. Env var (`NYKS_WALLET_ID`, `NYKS_WALLET_PASSPHRASE`)
+4. Interactive prompt (only for `wallet unlock`; other commands error out)
+
+### Database
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `DATABASE_URL_SQLITE` | SQLite file path (default feature) | `./wallet_data.db` |
+| `DATABASE_URL_POSTGRESQL` | PostgreSQL connection string (requires `--features postgresql` build) | — |
 
 ---
 
@@ -116,6 +165,24 @@ relayer-cli [--json] <command-group> <subcommand> [flags]
 ```
 
 `--json` outputs JSON instead of formatted tables. Useful for scripting/parsing.
+
+### Amount units (shared across commands that take a BTC amount)
+
+Commands that accept a BTC amount (`zkaccount fund`, `wallet deposit-btc`, `bitcoin-wallet transfer`) take **exactly one** of these three flags:
+
+| Flag | Unit | Example |
+|---|---|---|
+| `--amount <sats>` | satoshis (integer) | `--amount 50000` |
+| `--amount-mbtc <mBTC>` | milli-BTC (float) | `--amount-mbtc 0.5` |
+| `--amount-btc <BTC>` | BTC (float) | `--amount-btc 0.0005` |
+
+Conversion: **1 BTC = 100,000 mBTC = 100,000,000 sats**.
+
+`zkaccount split` uses the plural-list variants: `--balances "1000,2000,3000"` (sats), `--balances-mbtc`, `--balances-btc`.
+
+**Display units (separate from input):**
+- `bitcoin-wallet balance` accepts `--btc` or `--mbtc` flags to display the balance in that unit (default: sats).
+- `portfolio balances` accepts `--unit sats|mbtc|btc`.
 
 ### REPL (Interactive Mode)
 
@@ -209,22 +276,58 @@ relayer-cli wallet withdraw-btc --reserve-id 1 --amount 50000
 relayer-cli wallet withdraw-status
 ```
 
+### Manual BTC deposit (no mnemonic, e.g. hardware wallet / external custody)
+
+If you don't want the CLI to hold Bitcoin signing keys, skip `wallet import` and instead set an external BTC address you control. The CLI will **not** auto-send — it only records the deposit intent and shows you the reserve address to pay from your external wallet.
+
+```bash
+# 1. Create wallet (no mnemonic, no BTC signing keys)
+relayer-cli wallet create --wallet-id main --password <pwd>
+
+# 2. Point the wallet at a BTC address you control elsewhere
+relayer-cli wallet update-btc-address --btc-address bc1q<your_external_address>
+
+# 3. Register + record a deposit intent. The CLI prints the reserve address to pay.
+relayer-cli wallet register-btc --amount 50000
+
+# 4. Send 50,000 sats from your external wallet to that reserve address
+#    IMPORTANT: MUST come from bc1q<your_external_address> — other senders are not credited.
+
+# 5. Wait for Bitcoin confirmation (~10 min) + validator confirmation (~1h+)
+relayer-cli wallet deposit-status
+
+# 6. Balance appears on Twilight — proceed to trading as in step 7 above
+relayer-cli wallet balance
+```
+
+For subsequent deposits after registration, use `wallet deposit-btc` (same pattern — prints the reserve address, you send manually).
+
 ---
 
 ## 7. Account State Model
 
-Each ZkOS account has three key fields:
+A **ZkAccount** is a privacy-preserving trading account on the ZkOS layer. Each account holds a balance, a cryptographic commitment (QuisQuis account), and state metadata.
 
-| Field | Values | Meaning |
+### Full account fields (as shown in `wallet accounts` output and returned by queries)
+
+| Field | Values / Type | Meaning |
 |---|---|---|
-| `io_type` | `Coin`, `Memo`, `State` | Account state on ZkOS |
-| `tx_type` | `ORDERTX`, `LENDTX`, `None` | Type of active order |
-| `on_chain` | `true`, `false` | Whether account exists on-chain |
+| `index` | integer | Unique identifier within the wallet (used as `--account-index` everywhere) |
+| `balance` | integer (satoshis) | Current balance |
+| `qq_address` | hex string | QuisQuis encrypted account = public key + ElGamal commitment. Changes on every transfer (this is why an address can only be used once) |
+| `account` | string | Derived account address used for on-chain lookups (`tx-hashes --by account`, `request-history`) |
+| `scalar` | hex string | Randomness scalar used in the ElGamal commitment. Secret — part of the wallet DB, never exposed on-chain |
+| `io_type` | `Coin` / `Memo` / `State` | Account state on ZkOS (see below) |
+| `tx_type` | `ORDERTX` / `LENDTX` / `None` | Type of active order when `io_type = Memo` |
+| `on_chain` | `true` / `false` | Whether the account currently exists on-chain (set false after transfer/withdraw) |
 
-**State transitions:**
-- `Coin` = idle, ready for orders or transfers
-- `Memo` = locked in an active order
-- After close + unlock: back to `Coin`, but **must transfer before reuse**
+### State meanings and transitions
+
+- **`Coin`** — idle UTXO, ready for new orders or transfers.
+- **`Memo`** — locked in an active order; `tx_type` indicates which kind (`ORDERTX` = trade, `LENDTX` = lend).
+- **`State`** — on-chain initialization state, used briefly during account setup.
+
+After `close-trade` + `unlock-close-order`, the account returns to `Coin` with a new balance (margin ± PnL), but **the address is spent** — must run `zkaccount transfer` before opening a new order from that account.
 
 ---
 
@@ -263,6 +366,31 @@ Coin → open-trade → Memo (PENDING)
 
 `--order-type LIMIT` **cannot** be combined with `--stop-loss` or `--take-profit`.
 
+### Close-trade examples
+
+```bash
+# MARKET close (default) — immediate close at market price
+relayer-cli order close-trade --account-index 0
+
+# LIMIT close — settles when price hits 70000
+relayer-cli order close-trade --account-index 0 --order-type LIMIT --execution-price 70000
+
+# SLTP close — sets stop-loss 60000 and take-profit 75000, position stays open until a trigger fires
+relayer-cli order close-trade --account-index 0 --stop-loss 60000 --take-profit 75000
+
+# SLTP with only stop-loss (same pattern for take-profit alone)
+relayer-cli order close-trade --account-index 0 --stop-loss 60000
+
+# Remove a settle_limit set by a prior LIMIT close (position stays open)
+relayer-cli order cancel-trade --account-index 0
+
+# Remove stop-loss only (keeps take-profit, keeps position open)
+relayer-cli order cancel-trade --account-index 0 --stop-loss
+
+# Remove both SL and TP
+relayer-cli order cancel-trade --account-index 0 --stop-loss --take-profit
+```
+
 ### Lend order
 
 ```
@@ -270,6 +398,69 @@ Coin → open-lend → Memo (PENDING) → fills → FILLED
   ├── close-lend → SETTLED → unlock → Coin
   └── failed     → unlock-failed-order → Coin
 ```
+
+### Lend position metrics (fields returned by `query-lend` / `portfolio summary`)
+
+| Field | Meaning |
+|---|---|
+| `deposit` | Original amount deposited into the pool (sats) |
+| `balance` | Current value of the position = `deposit + accrued yield` |
+| `npoolshare` | Fractional share of the total lending pool |
+| `payment` | Cumulative interest/yield payment received |
+| `apr` | Annualised percentage rate (from v1 API) |
+
+### Order status reference (values in `order_status` field across `query-trade`, `query-lend`, `history-*`)
+
+| Status | When it applies | Next action |
+|---|---|---|
+| `PENDING` | Order submitted, waiting to be filled | `cancel-trade` (no flags) → `CANCELLED` |
+| `FILLED` | Matched/accepted, position is active | `close-trade` (MARKET/LIMIT/SLTP) or `close-lend` |
+| `SETTLED` | Position closed and settled | `unlock-close-order` → `Coin` |
+| `LIQUIDATE` | Position liquidated (trade only) | `unlock-close-order` → `Coin` |
+| `CANCELLED` | Cancelled before filling | Account already back to `Coin` |
+| `LENDED` | Internal lend state (rare, usually seen mid-settlement) | Wait for `SETTLED`, then unlock |
+
+### `unlock-close-order` routing
+
+The CLI uses the account's `tx_type` to pick the right unlock path:
+
+| `tx_type` | Action |
+|---|---|
+| `ORDERTX` | Query trader order, verify `SETTLED`/`LIQUIDATE`, fetch UTXO, restore to `Coin` |
+| `LENDTX` | Query lend order, verify `SETTLED`, fetch UTXO, restore to `Coin` |
+| `None` | Falls back to trader-order unlock (backward compat for pre-`tx_type` accounts) |
+
+`portfolio summary` auto-runs `unlock-close-order` for any settled/liquidated accounts it discovers, so you rarely need to call it manually if you check portfolio regularly.
+
+### Numeric constraints
+
+| Flag / input | Constraint |
+|---|---|
+| `order open-trade --leverage` | Integer in **1–50** |
+| `order open-trade --entry-price` | Integer USD (u64) — no decimals |
+| `order close-trade --execution-price` | Float, must be `> 0` when used with `--order-type LIMIT` |
+| `order close-trade --stop-loss` / `--take-profit` | Float, must be `> 0` |
+| `zkaccount split` | Creates **at most 8** new accounts per call (tx size limit) |
+| `zkaccount split --balances` | All entries must be `> 0`; sum must be `≤` source account balance |
+| Amount flags (`--amount`, `--amount-mbtc`, `--amount-btc`) | Provide exactly one; must be `> 0` |
+
+### Precondition cheat-sheet (common "why did this error?" cases)
+
+| Command | Required account state | Required order status | Other |
+|---|---|---|---|
+| `open-trade` | `Coin` + `on_chain` + **unused address** | — | Market not halted |
+| `open-lend` | `Coin` + `on_chain` + **unused address** | — | Market not halted |
+| `close-trade MARKET` | `Memo` + `ORDERTX` | `FILLED` | Market not halted |
+| `close-trade LIMIT` | `Memo` + `ORDERTX` | `FILLED` | `--execution-price > 0`; no `--stop-loss`/`--take-profit` |
+| `close-trade SLTP` | `Memo` + `ORDERTX` | `FILLED` | At least one of `--stop-loss`/`--take-profit`; no `LIMIT` |
+| `close-lend` | `Memo` + `LENDTX` | `FILLED` | — |
+| `cancel-trade` (no flags) | `Memo` | `PENDING` **or** `FILLED` with active `settle_limit` | — |
+| `cancel-trade --stop-loss` / `--take-profit` | `Memo` | `FILLED` with matching trigger | Trigger must exist |
+| `unlock-close-order` | `Memo` | `SETTLED` **or** `LIQUIDATE` | Errors otherwise (does not silently skip) |
+| `unlock-failed-order` | `Memo` with no active order | — | — |
+| `zkaccount transfer` / `withdraw` / `split` | `Coin` + `on_chain` | — | `split` sum ≤ balance, no zero balances |
+
+**"Unused address"** means the account has never been the source of an order. After `close-trade` + `unlock-close-order`, the address is spent — you must `zkaccount transfer` before opening a new order from that account (see [Critical Rule #1](#11-critical-rules)).
 
 ---
 
@@ -327,8 +518,18 @@ Coin → open-lend → Memo (PENDING) → fills → FILLED
 | `order history-lend` | Historical lend orders (from relayer) | Yes |
 | `order funding-history` | Funding payment history | Yes |
 | `order account-summary` | Trading activity summary | Yes |
-| `order tx-hashes` | Look up tx hashes by ID | **No** |
-| `order request-history` | Look up tx hashes by account index | Yes |
+| `order tx-hashes` | Look up tx hashes by `--id` + `--by request\|account\|tx` | **No** |
+| `order request-history` | Look up tx hashes by account index (resolves address from wallet) | Yes |
+
+### Bitcoin Wallet (on-chain BTC, not ZkOS)
+
+| Command | Purpose | Wallet needed? |
+|---|---|---|
+| `bitcoin-wallet balance` | On-chain BTC balance (confirmed + unconfirmed); `--btc` / `--mbtc` for units | Yes (or `--btc-address` for arbitrary lookup) |
+| `bitcoin-wallet transfer` | Send BTC to a native SegWit address (requires mnemonic-backed BTC wallet) | Yes |
+| `bitcoin-wallet receive` | Show BTC receive address, derivation path, QR code, registration status | Yes |
+| `bitcoin-wallet history` | BTC transfer history with confirmation status (`--status pending\|broadcast\|confirmed`) | Yes |
+| `bitcoin-wallet update-bitcoin-wallet` | Re-derive BTC keys from a new mnemonic (only if BTC address not yet registered) | Yes |
 
 ### Market (no wallet needed)
 
@@ -372,6 +573,14 @@ Coin → open-lend → Memo (PENDING) → fills → FILLED
 |---|---|
 | `history orders` | Order history (open/close/cancel events) |
 | `history transfers` | Transfer history (fund/withdraw/transfer events) |
+
+### Misc
+
+| Command | Purpose |
+|---|---|
+| `repl [--wallet-id] [--password]` | Interactive REPL — loads wallet once, then runs commands without the `relayer-cli` prefix. See §4 for details |
+| `help [group]` | Inline help — `relayer-cli help` for overview, `relayer-cli help <group>` (e.g. `order`, `wallet`) for group details |
+| `verify-test <wallet\|market\|zkaccount\|order\|all>` | **Testnet only** — runs self-tests against live testnet. Developer tool; requires funded wallet for `zkaccount`/`order` suites |
 
 ---
 
@@ -419,7 +628,16 @@ relayer-cli order open-trade --account-index 5 --side SHORT --entry-price 70000 
 
 1. **Account address reuse**: A ZkOS account address can only be used for **one order**. After close + unlock, you **must** `zkaccount transfer` before placing a new order.
 
-2. **Reserve timing**: BTC reserves rotate every ~144 blocks (~24h). The reserve must be ACTIVE when your BTC tx confirms. Status: ACTIVE (>72 blocks) > WARNING (5-72) > CRITICAL (<=4, don't send) > EXPIRED (0, don't send).
+2. **Reserve timing**: A BTC *reserve* is a validator-controlled Bitcoin address that the protocol uses to custody deposited BTC. Reserves **rotate every ~144 Bitcoin blocks (~24h)** — a new reserve becomes ACTIVE and the old one is swept. You send BTC to the current ACTIVE reserve; validators then credit your Twilight wallet with an equivalent SATS balance. The reserve must **still be ACTIVE when your BTC transaction confirms on Bitcoin** (~10 min + validator confirmation, ~1h+ total). Check `wallet reserves` before sending. Status table:
+
+   | Status | Blocks left | Safe to send? |
+   |---|---|---|
+   | ACTIVE | > 72 | Yes |
+   | WARNING | 5 – 72 | Only if tx will confirm quickly |
+   | CRITICAL | ≤ 4 | **No** — tx likely won't confirm in time |
+   | EXPIRED | 0 | **No** — reserve is being swept |
+
+   If all reserves are expired/critical, wait for the next rotation; `wallet reserves` shows ETA.
 
 3. **Registered address only**: BTC deposits must come from your registered BTC address. Sending from any other address will not be credited.
 
@@ -437,45 +655,67 @@ relayer-cli order open-trade --account-index 5 --side SHORT --entry-price 70000 
 
 ## 12. Error Recovery
 
-| Situation | Command |
+| Situation | Command / Resolution |
 |---|---|
 | Order submission failed, account stuck in Memo | `order unlock-failed-order --account-index N` |
 | Order settled but account still Memo | `order unlock-close-order --account-index N` |
 | Want to reuse account after order | `zkaccount transfer --account-index N` |
 | Nonce/sequence mismatch | `wallet sync-nonce` |
-| Deposit stuck as pending | Check `wallet deposit-status`, ensure BTC tx has 1+ confirmations, wait for validators |
 | "Value Witness Verification Failed" on open-trade | Account address was already used — run `zkaccount transfer` first |
-| All reserves expired | Wait for rotation (~144 blocks). `wallet reserves` shows ETA |
+| All reserves expired / critical | Wait for rotation (~144 blocks, ~24h). `wallet reserves` shows ETA |
+| `register-btc` says "BTC address is already registered to your wallet" | Already done — use `wallet deposit-btc` instead for subsequent deposits |
+| "BTC address is registered to a different twilight address" | Another wallet already owns this BTC address on-chain — use a different BTC address (`wallet update-btc-address`) |
+| Deposit stuck as pending for >1h | (1) Confirm BTC tx has 1+ confirmations on mempool explorer, (2) confirm BTC was sent from your *registered* BTC address, (3) confirm the target reserve was still ACTIVE at confirmation time, (4) rerun `wallet deposit-status` |
+| `register-btc` / `deposit-btc` says "Failed to estimate fee" | If BTC just arrived, wait for 1 confirmation and retry; otherwise CLI falls back to a 2,000 sat fee buffer |
+| `bitcoin-wallet update-bitcoin-wallet` rejected | Current BTC address is already registered on-chain and can't be changed. Either continue using it, or create a fresh wallet |
+| "BTC wallet not available" on auto-pay | Wallet was created without a mnemonic — either re-import with a mnemonic, or use the manual deposit flow (§6) |
 
 ---
 
 ## 13. JSON Output
 
-All commands support `--json` for machine-readable output. Common patterns:
+`--json` is a global flag — it works on every command. Use the shape table below to parse the result.
+
+| Command category | JSON shape |
+|---|---|
+| Submitters (`open-trade`, `close-trade`, `cancel-trade`, `open-lend`, `close-lend`, `register-btc`, `deposit-btc`, `withdraw-btc`, `send`, `zkaccount fund/withdraw/transfer/split`) | `{"request_id": "..."}` (and/or tx-hash fields) |
+| Queries (`query-trade`, `query-lend`, `history-*`, `funding-history`, `account-summary`, `tx-hashes`, `request-history`) | Full object (`TraderOrderV1`, `LendOrderV1`, arrays of records, etc.) |
+| Market (`price`, `orderbook`, `funding-rate`, `candles`, …) | Raw value or object from the relayer |
+| Unlocks (`unlock-close-order`) | `{"account_index": N, "order_status": "...", "request_id": "..."}` |
+| Unlocks (`unlock-failed-order`) | `{"account_index": N, "status": "unlocked"}` |
+| Wallet info (`balance`, `info`, `accounts`, `reserves`, `deposit-status`, `withdraw-status`) | Object with the corresponding fields |
+| Portfolio (`summary`, `balances`, `risks`) | Full portfolio JSON |
+
+Example:
 
 ```bash
-# Commands that submit orders/actions return request_id
-relayer-cli --json order open-trade ...    # {"request_id": "..."}
-relayer-cli --json order close-trade ...   # {"request_id": "..."}
-relayer-cli --json order cancel-trade ...  # {"request_id": "..."}
+relayer-cli --json order open-trade --account-index 0 --side LONG --entry-price 65000 --leverage 5
+# → {"request_id": "..."}
 
-# Query commands return full JSON objects
-relayer-cli --json order query-trade --account-index 0   # TraderOrderV1 JSON
-relayer-cli --json order query-lend --account-index 0    # LendOrderV1 JSON
-relayer-cli --json market price                          # price value
-
-# Unlock commands return status
-relayer-cli --json order unlock-close-order ...   # {"account_index": N, "order_status": "...", "request_id": "..."}
-relayer-cli --json order unlock-failed-order ...  # {"account_index": N, "status": "unlocked"}
+relayer-cli --json order query-trade --account-index 0
+# → full TraderOrderV1 object with order_status, entry_nonce, settle_limit, stop_loss, take_profit, funding_applied, ...
 ```
 
 ---
 
-## 14. Further Reading
+## 14. Getting Unstuck
 
-| Document | Contents |
-|---|---|
-| [relayer-cli.md](relayer-cli.md) | Full CLI reference — every flag, every output column |
-| [cli-command-rules.md](cli-command-rules.md) | Preconditions and requirements for every command |
-| [order-lifecycle.md](order-lifecycle.md) | ZkAccount states, trade/lend lifecycle diagrams |
-| [btc-onboarding.md](btc-onboarding.md) | BTC deposit/withdrawal flow with troubleshooting |
+If a command fails and §12 doesn't cover it, use `relayer-cli help <group>` for inline flag/precondition reference — every command group has detailed help built into the binary:
+
+```bash
+relayer-cli help wallet
+relayer-cli help order
+relayer-cli help zkaccount
+relayer-cli help market
+relayer-cli help bitcoin-wallet
+relayer-cli help portfolio
+relayer-cli help history
+relayer-cli help update
+```
+
+Each command also supports `--help` for per-subcommand flag details:
+
+```bash
+relayer-cli order close-trade --help
+relayer-cli wallet register-btc --help
+```

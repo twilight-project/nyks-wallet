@@ -306,7 +306,7 @@ fn dirs_home() -> std::path::PathBuf {
 // REPL-specific help
 // ---------------------------------------------------------------------------
 
-fn print_repl_help() {
+pub(crate) fn print_repl_help() {
     println!(
         r#"Relayer REPL — interactive mode
 
