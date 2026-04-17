@@ -41,15 +41,18 @@ RELEASES_JSON="$(curl -sf "${API_URL}")" || {
     exit 1
 }
 
-# Pick the newest browser_download_url whose filename matches the
-# relayer-cli asset for this platform. GitHub returns releases newest-first,
-# so the first match is the latest relayer-cli release. This naturally
-# ignores unrelated tags like v0.1.1 or v0.0.4-relayer-deployer.
+# Pick the newest download URL whose filename matches the relayer-cli asset
+# for this platform. Works regardless of whether GitHub returns pretty-printed
+# or compact JSON: we extract the URL with a single regex rather than relying
+# on line-by-line grep + field-cut. GitHub returns releases newest-first, so
+# the first match is the latest relayer-cli release, which naturally ignores
+# unrelated tags like v0.1.1 or v0.0.4-relayer-deployer.
+#
+# The regex stops at `_relayer_cli${PLATFORM_SUFFIX}` (without `.sha256`), so
+# both binary and checksum URLs in the JSON produce the same binary URL here.
 DOWNLOAD_URL="$(echo "${RELEASES_JSON}" \
-    | grep '"browser_download_url"' \
-    | grep "_relayer_cli${PLATFORM_SUFFIX}\"" \
-    | head -1 \
-    | cut -d '"' -f 4)"
+    | grep -oE "https://github\.com/[^\"]+_relayer_cli${PLATFORM_SUFFIX}" \
+    | head -1)"
 
 if [ -z "${DOWNLOAD_URL}" ]; then
     echo "Error: could not find a relayer-cli asset for platform ${PLATFORM_SUFFIX}" >&2
