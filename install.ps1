@@ -29,15 +29,22 @@
         return
     }
 
-    # Filter to stable releases whose tag ends with '-relayer-cli' and pick the one
-    # with the highest semver. GitHub's default ordering is creation date, which we
-    # don't fully trust, so sort by parsed version instead.
+    # Filter to stable releases whose tag ends with '-relayer-cli' and which have
+    # both the platform binary and its .sha256 uploaded. Requiring the checksum
+    # ensures we skip releases whose workflow is still building — the release tag
+    # exists the moment it is created, but assets are uploaded 30–40 minutes later
+    # when the matrix build finishes. Without this check we'd error out with
+    # "could not find a relayer-cli asset" during that window. The workflow
+    # uploads the binary first and the checksum second, so a present checksum
+    # means the binary is fully uploaded too.
     $RelayerReleases = $Releases | Where-Object {
-        -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '-relayer-cli$'
+        -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '-relayer-cli$' -and
+        ($_.assets | Where-Object { $_.name.EndsWith($PlatformSuffix) -and -not $_.name.EndsWith(".sha256") }) -and
+        ($_.assets | Where-Object { $_.name.EndsWith("$PlatformSuffix.sha256") })
     }
 
     if (-not $RelayerReleases) {
-        Write-Host "Error: no release found with tag suffix '-relayer-cli'" -ForegroundColor Red
+        Write-Host "Error: no published relayer-cli release with assets for platform '$PlatformSuffix'. A newer release may still be building." -ForegroundColor Red
         return
     }
 
@@ -50,15 +57,9 @@
 
     $Tag = $Release.tag_name
 
-    # Binary asset: ends with platform suffix, not a .sha256 file.
     $Asset = $Release.assets | Where-Object {
         $_.name.EndsWith($PlatformSuffix) -and -not $_.name.EndsWith(".sha256")
     } | Select-Object -First 1
-
-    if (-not $Asset) {
-        Write-Host "Error: Could not find a relayer-cli asset for platform '$PlatformSuffix' in release $Tag" -ForegroundColor Red
-        return
-    }
 
     $DownloadUrl = $Asset.browser_download_url
 

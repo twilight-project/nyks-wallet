@@ -34,12 +34,22 @@ struct GithubAsset {
     browser_download_url: String,
 }
 
-fn pick_latest_relayer_release(mut releases: Vec<GithubRelease>) -> Option<GithubRelease> {
+fn pick_latest_relayer_release(
+    mut releases: Vec<GithubRelease>,
+    suffix: &str,
+) -> Option<GithubRelease> {
+    // Require both the binary and checksum to be uploaded. The release
+    // workflow uploads them together, but while a build is still in progress
+    // the release tag already exists with empty or partial assets. Skipping
+    // those lets us fall back to the previous fully-published release instead
+    // of erroring out with "no asset found for this platform".
     releases.retain(|r| {
         !r.draft
             && !r.prerelease
             && r.tag_name.ends_with(RELEASE_TAG_SUFFIX)
             && parse_version(&r.tag_name).is_ok()
+            && find_binary_asset(&r.assets, suffix).is_some()
+            && find_checksum_asset(&r.assets, suffix).is_some()
     });
     releases.sort_by_key(|r| parse_version(&r.tag_name).unwrap_or((0, 0, 0)));
     releases.pop()
@@ -112,6 +122,8 @@ pub(crate) async fn handle_update(check_only: bool) -> Result<(), String> {
 
     println!("Checking for updates...");
 
+    let suffix = artifact_suffix()?;
+
     let releases: Vec<GithubRelease> = client
         .get(GITHUB_API_URL)
         .send()
@@ -121,8 +133,10 @@ pub(crate) async fn handle_update(check_only: bool) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to parse release JSON: {e}"))?;
 
-    let release = pick_latest_relayer_release(releases).ok_or_else(|| {
-        format!("No release found with tag suffix '{RELEASE_TAG_SUFFIX}'.")
+    let release = pick_latest_relayer_release(releases, suffix).ok_or_else(|| {
+        format!(
+            "No release found with tag suffix '{RELEASE_TAG_SUFFIX}' and assets for this platform ('{suffix}'). A newer release may still be building."
+        )
     })?;
 
     let remote = parse_version(&release.tag_name)?;
@@ -144,7 +158,6 @@ pub(crate) async fn handle_update(check_only: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    let suffix = artifact_suffix()?;
     let asset = find_binary_asset(&release.assets, suffix)
         .ok_or_else(|| format!("No asset found for this platform (suffix '{suffix}')."))?;
 
@@ -432,6 +445,21 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn make_release(tag: &str, draft: bool, prerelease: bool) -> GithubRelease {
+        // Tests default to a release with the linux_amd64 binary + checksum
+        // uploaded, since `pick_latest_relayer_release` now requires that.
+        let version = tag.trim_end_matches(RELEASE_TAG_SUFFIX);
+        GithubRelease {
+            tag_name: tag.to_string(),
+            draft,
+            prerelease,
+            assets: vec![
+                asset(&format!("nw_{version}_relayer_cli_linux_amd64")),
+                asset(&format!("nw_{version}_relayer_cli_linux_amd64.sha256")),
+            ],
+        }
+    }
+
+    fn make_release_without_assets(tag: &str, draft: bool, prerelease: bool) -> GithubRelease {
         GithubRelease {
             tag_name: tag.to_string(),
             draft,
@@ -450,7 +478,8 @@ mod tests {
             make_release("v0.0.2-validator-wallet", false, false),
             make_release("v0.1.4-realyer-cli", false, false), // typo, must be skipped
         ];
-        let picked = pick_latest_relayer_release(releases).expect("should pick a release");
+        let picked = pick_latest_relayer_release(releases, "_linux_amd64")
+            .expect("should pick a release");
         assert_eq!(picked.tag_name, "v0.1.9-relayer-cli");
     }
 
@@ -461,7 +490,8 @@ mod tests {
             make_release("v0.1.9-relayer-cli", false, true),  // prerelease
             make_release("v0.1.8-relayer-cli", false, false), // stable
         ];
-        let picked = pick_latest_relayer_release(releases).expect("should pick a release");
+        let picked = pick_latest_relayer_release(releases, "_linux_amd64")
+            .expect("should pick a release");
         assert_eq!(picked.tag_name, "v0.1.8-relayer-cli");
     }
 
@@ -471,12 +501,38 @@ mod tests {
             make_release("v0.1.1", false, false),
             make_release("v0.0.4-relayer-deployer", false, false),
         ];
-        assert!(pick_latest_relayer_release(releases).is_none());
+        assert!(pick_latest_relayer_release(releases, "_linux_amd64").is_none());
     }
 
     #[test]
     fn returns_none_on_empty_input() {
-        assert!(pick_latest_relayer_release(vec![]).is_none());
+        assert!(pick_latest_relayer_release(vec![], "_linux_amd64").is_none());
+    }
+
+    #[test]
+    fn skips_release_with_missing_assets_for_platform() {
+        // Newest release is still being built — tag exists but binary+checksum
+        // haven't been uploaded yet. We should fall back to the previous
+        // fully-published release instead of returning None or erroring.
+        let releases = vec![
+            make_release_without_assets("v0.2.0-relayer-cli", false, false),
+            make_release("v0.1.9-relayer-cli", false, false),
+        ];
+        let picked = pick_latest_relayer_release(releases, "_linux_amd64")
+            .expect("should fall back to v0.1.9");
+        assert_eq!(picked.tag_name, "v0.1.9-relayer-cli");
+    }
+
+    #[test]
+    fn skips_release_missing_checksum_for_platform() {
+        // Simulates partial upload: binary uploaded, checksum not yet.
+        let mut partial = make_release_without_assets("v0.2.0-relayer-cli", false, false);
+        partial.assets.push(asset("nw_v0.2.0_relayer_cli_linux_amd64"));
+
+        let releases = vec![partial, make_release("v0.1.9-relayer-cli", false, false)];
+        let picked = pick_latest_relayer_release(releases, "_linux_amd64")
+            .expect("should fall back to v0.1.9");
+        assert_eq!(picked.tag_name, "v0.1.9-relayer-cli");
     }
 
     // -----------------------------------------------------------------------

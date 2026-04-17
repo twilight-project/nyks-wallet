@@ -41,18 +41,17 @@ RELEASES_JSON="$(curl -sf "${API_URL}")" || {
     exit 1
 }
 
-# Pick the newest download URL whose filename matches the relayer-cli asset
-# for this platform. Works regardless of whether GitHub returns pretty-printed
-# or compact JSON: we extract the URL with a single regex rather than relying
-# on line-by-line grep + field-cut. GitHub returns releases newest-first, so
-# the first match is the latest relayer-cli release, which naturally ignores
-# unrelated tags like v0.1.1 or v0.0.4-relayer-deployer.
-#
-# The regex stops at `_relayer_cli${PLATFORM_SUFFIX}` (without `.sha256`), so
-# both binary and checksum URLs in the JSON produce the same binary URL here.
-DOWNLOAD_URL="$(echo "${RELEASES_JSON}" \
-    | grep -oE "https://github\.com/[^\"]+_relayer_cli${PLATFORM_SUFFIX}" \
+# Pick the newest release whose `.sha256` asset for this platform is already
+# uploaded, then derive the binary URL from it. The release workflow uploads
+# the binary first and the checksum second, so a present `.sha256` means the
+# binary is fully uploaded too. This makes us skip releases whose build is
+# still in progress (the release exists but assets aren't uploaded yet) and
+# fall back to the previous fully-published release.
+CHECKSUM_URL="$(echo "${RELEASES_JSON}" \
+    | grep -oE "https://github\.com/[^\"]+_relayer_cli${PLATFORM_SUFFIX}\.sha256" \
     | head -1)"
+
+DOWNLOAD_URL="${CHECKSUM_URL%.sha256}"
 
 if [ -z "${DOWNLOAD_URL}" ]; then
     echo "Error: could not find a relayer-cli asset for platform ${PLATFORM_SUFFIX}" >&2
@@ -74,8 +73,6 @@ curl -sfL "${DOWNLOAD_URL}" -o "${INSTALL_DIR}/${BINARY_NAME}" || {
 }
 
 # --- Verify checksum ---------------------------------------------------------
-
-CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
 
 echo "Verifying checksum..."
 
