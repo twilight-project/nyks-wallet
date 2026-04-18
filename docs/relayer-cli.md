@@ -2,6 +2,26 @@
 
 Command-line interface for managing Twilight wallets, trading orders, lending, portfolio tracking, transaction history, and querying market data.
 
+## Pre-built Binary
+
+Pre-built binaries are published on [GitHub releases](https://github.com/twilight-project/nyks-wallet/releases). Use them to skip the Rust toolchain and `protoc`/`libpq` setup.
+
+**macOS / Linux:**
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/twilight-project/nyks-wallet/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/twilight-project/nyks-wallet/main/install.ps1 | iex
+```
+
+The script auto-detects your platform, downloads the matching archive, and installs `relayer-cli` in the current directory. Verify with `./relayer-cli --help`, and self-update later with `relayer-cli update` (or `relayer-cli update --check` for a dry run).
+
+> **Backend:** The pre-built binary is compiled with the **default feature set** — `sqlite` + `order-wallet` (see `Cargo.toml` `[features]`). SQLite is bundled, so no system SQLite library is required. If you need the **PostgreSQL** backend (`--features postgresql`), the pre-built binary will not work — build from source using the instructions below.
+
 ## Building
 
 ### Prerequisites
@@ -135,6 +155,7 @@ relayer-cli [--json] <COMMAND>
 - `portfolio` — portfolio summary, balances (with unit conversion), liquidation risks
 - `verify-test` — run verification tests against testnet (testnet only)
 - `repl` — interactive REPL mode with line editing, history, and a persistent wallet session
+- `update` — check for updates and self-update the binary
 - `help` — show help for the CLI or a specific command group
 
 ### Built-in Help
@@ -1615,6 +1636,28 @@ twilight1a...z123> market price
 twilight1a...z123> exit
 Goodbye.
 ```
+
+---
+
+## Update Command
+
+Check for new releases and self-update the binary in-place. Fetches the latest release from [GitHub releases](https://github.com/twilight-project/nyks-wallet/releases), compares versions, and downloads the correct platform-specific binary.
+
+### `update`
+
+```bash
+# Check and install the latest version
+relayer-cli update
+
+# Check only (no download)
+relayer-cli update --check
+```
+
+| Flag      | Description                                          |
+| --------- | ---------------------------------------------------- |
+| `--check` | Check for a new version without downloading or installing |
+
+The command detects the current platform automatically (macOS ARM64, Linux x86_64, Windows x86_64) and downloads the matching binary. On success, restart the CLI to use the new version.
 
 ---
 

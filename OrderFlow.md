@@ -39,7 +39,8 @@ follow the .env.example file
 ```rust
 use nyks_wallet::relayer_module::order_wallet::OrderWallet;
 
-// Defaults to Twilight testnet endpoints via EndpointConfig::default()
+// Defaults come from EndpointConfig::default() and depend on NETWORK_TYPE
+// (mainnet is picked when NETWORK_TYPE is unset — set NETWORK_TYPE=testnet for testnet).
 let mut order_wallet = OrderWallet::new(None)?;
 
 // Optional: import from mnemonic

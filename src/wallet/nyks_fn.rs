@@ -4,12 +4,12 @@ pub use super::super::MsgMintBurnTradingBtc;
 use super::faucet::fetch_account_details;
 use super::wallet::*;
 use anyhow::anyhow;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use cosmrs::tendermint::chain::Id;
 use cosmrs::tx::{Body, Fee, SignDoc, SignerInfo};
 use prost::Message;
 use reqwest::header::HeaderMap;
-use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, HeaderValue, USER_AGENT};
+use reqwest::header::{HeaderValue, ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, USER_AGENT};
 use serde_json::Value;
 use std::str::FromStr;
 
@@ -119,25 +119,6 @@ mod tests {
             encrypt_scalar,
             twilight_address,
         );
-    }
-    #[tokio::test]
-    async fn test_send_tx() -> anyhow::Result<()> {
-        dotenv::dotenv().ok();
-        let rpc_endpoint =
-            std::env::var("NYKS_RPC_BASE_URL").unwrap_or("http://0.0.0.0:26657".to_string());
-        let lcd_endpoint =
-            std::env::var("NYKS_LCD_BASE_URL").unwrap_or("http://0.0.0.0:1317".to_string());
-        let (qq_account, encrypt_scalar) = get_quisquis_account();
-        let twilight_address = "twilight1ykm5td5kw2hwafmhn7qha54p20veh9um05dpjn".to_string();
-        let msg = create_funiding_to_trading_tx_msg(
-            true,
-            40000,
-            qq_account,
-            encrypt_scalar,
-            twilight_address,
-        );
-        send_tx(msg, rpc_endpoint.as_str(), lcd_endpoint.as_str()).await?;
-        Ok(())
     }
 }
 

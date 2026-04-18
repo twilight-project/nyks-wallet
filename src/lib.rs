@@ -102,37 +102,49 @@
 //! For lower-level access to relayer endpoints:
 //!
 //! ```no_run
+//! use nyks_wallet::config::RELAYER_API_RPC_SERVER_URL;
 //! use nyks_wallet::relayer_module::relayer_api::RelayerJsonRpcClient;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let client = RelayerJsonRpcClient::new("http://0.0.0.0:8088/api")?;
-//!     
+//!     let client = RelayerJsonRpcClient::new(&RELAYER_API_RPC_SERVER_URL)?;
+//!
 //!     // Get market data
 //!     let price = client.btc_usd_price().await?;
 //!     let order_book = client.open_limit_orders().await?;
 //!     let funding_rate = client.get_funding_rate().await?;
-//!     
+//!
 //!     println!("BTC/USD: ${}, Funding: {}%", price.price, funding_rate.rate);
-//!     
+//!
 //!     Ok(())
 //! }
 //! ```
 //!
 //! ## Environment Configuration
 //!
-//! The following environment variables can be used to configure endpoints and behavior:
+//! Endpoint defaults are selected by `NETWORK_TYPE` (mainnet vs testnet); override any
+//! variable explicitly to point at a local full-node.
 //!
 //! | Variable | Description | Default |
 //! |----------|-------------|---------|
-//! | `NYKS_RPC_BASE_URL` | Cosmos RPC endpoint | `http://0.0.0.0:26657` |
-//! | `NYKS_LCD_BASE_URL` | Cosmos LCD endpoint | `http://0.0.0.0:1317` |
-//! | `RELAYER_PROGRAM_JSON_PATH` | Path to relayer program config | `./relayerprogram.json` |
-//! | `PUBLIC_API_RPC_SERVER_URL` | Public relayer API endpoint | Various |
-//! | `RELAYER_RPC_SERVER_URL` | Relayer trading API endpoint | Various |
-//! | `FAUCET_BASE_URL` | Testnet faucet endpoint | Various |
-//! | `NYKS_WALLET_PASSPHRASE` | Database encryption passphrase | None |
-//! | `RUST_LOG` | Logging level | `info` |
+//! | `NETWORK_TYPE` | `mainnet` or `testnet`; selects defaults for other endpoints | `mainnet` |
+//! | `BTC_NETWORK_TYPE` | BTC network for Esplora endpoints (nyks chain only supports BTC `mainnet`) | `mainnet` |
+//! | `CHAIN_ID` | Target chain ID | `nyks` |
+//! | `NYKS_RPC_BASE_URL` | Cosmos / Tendermint RPC | mainnet: `https://rpc.twilight.org`; testnet: `https://rpc.twilight.rest` |
+//! | `NYKS_LCD_BASE_URL` | Cosmos LCD REST | mainnet: `https://lcd.twilight.org`; testnet: `https://lcd.twilight.rest` |
+//! | `RELAYER_API_RPC_SERVER_URL` | Relayer JSON-RPC API | mainnet: `https://api.ephemeral.fi/api`; testnet: `https://relayer.twilight.rest/api` |
+//! | `ZKOS_SERVER_URL` | ZkOS JSON-RPC | mainnet: `https://zkserver.twilight.org`; testnet: `https://nykschain.twilight.rest/zkos` |
+//! | `FAUCET_BASE_URL` | Testnet faucet | testnet: `https://faucet-rpc.twilight.rest` (empty on mainnet) |
+//! | `TWILIGHT_INDEXER_URL` | Twilight indexer | mainnet: `https://indexer.twilight.org`; testnet: `https://indexer.twilight.rest` |
+//! | `BTC_ESPLORA_PRIMARY_URL` | Primary Esplora API (driven by `BTC_NETWORK_TYPE`) | `https://blockstream.info/api` (mainnet) |
+//! | `BTC_ESPLORA_FALLBACK_URL` | Fallback Esplora API (driven by `BTC_NETWORK_TYPE`) | `https://mempool.space/api` (mainnet) |
+//! | `RELAYER_PROGRAM_JSON_PATH` | Path to relayer program JSON | `./relayerprogram.json` |
+//! | `VALIDATOR_WALLET_PATH` | Validator mnemonic file (`validator-wallet` feature) | `validator.mnemonic` |
+//! | `NYKS_WALLET_PASSPHRASE` | DB encryption passphrase | – (prompt) |
+//! | `WALLET_ID` | DB wallet ID (defaults to Twilight address) | – |
+//! | `DATABASE_URL_SQLITE` | SQLite path (`sqlite` feature) | `./wallet_data.db` |
+//! | `DATABASE_URL_POSTGRESQL` | PostgreSQL DSN (`postgresql` feature) | – |
+//! | `RUST_LOG` | Logging level | – |
 //!
 //! ## Feature Flags
 //!
@@ -162,7 +174,7 @@
 //! - [`error`]: Error types and handling
 //!
 //! For detailed usage examples and API documentation, see the individual module documentation
-//! and the `OrderWalletUpdated.md` guide in the repository.
+//! and the [`OrderWallet.md`](../../OrderWallet.md) guide in the repository.
 
 pub mod nyks_rpc;
 pub mod wallet;

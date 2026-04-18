@@ -53,3 +53,4 @@ examples/trading_bot/mnomenics_key
 env.example
 Audit_report_and_Suggetions.md
 test_cli.sh
+test_help_responses.sh

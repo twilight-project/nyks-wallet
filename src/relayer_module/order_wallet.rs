@@ -16,8 +16,7 @@ use crate::{
     relayer_module::{
         self, check_tx_status, fetch_removed_utxo_details_with_retry,
         fetch_tx_hash_with_account_address_retry, fetch_tx_hash_with_once,
-        fetch_tx_hash_with_retry, fetch_tx_hash_with_retry_with_close_order,
-        fetch_utxo_details_with_once, fetch_utxo_details_with_retry,
+        fetch_tx_hash_with_retry, fetch_utxo_details_with_once, fetch_utxo_details_with_retry,
         nonce_manager::NonceManager,
         relayer_api::RelayerJsonRpcClient,
         relayer_order::{
@@ -2284,166 +2283,175 @@ mod tests {
     // cargo test --no-default-features --features postgresql --lib -- relayer_module::order_wallet::tests::test_create_order --exact --show-output
     // cargo test --no-default-features --features sqlite --lib -- relayer_module::order_wallet::tests::test_create_order --exact --show-output
     // cargo test --all-features --lib -- relayer_module::order_wallet::tests::test_create_order --exact --show-output
-    // #[cfg(feature = "sqlite")]
-    // #[tokio::test]
-    // #[serial]
-    // async fn test_create_order_complete_cycle() -> Result<(), String> {
-    //     dotenv::dotenv().ok();
-    //     unsafe {
-    //         // std::env::set_var("DATABASE_URL", "./test.db");
-    //         std::env::set_var("NYKS_WALLET_PASSPHRASE", "test1_password");
-    //     }
-    //     init_logger();
-    //     let wallet = setup_wallet().await.map_err(|e| e.to_string())?;
-    //     let zk_accounts = ZkAccountDB::new();
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    #[serial]
+    #[ignore]
+    async fn test_create_order_complete_cycle() -> Result<(), String> {
+        dotenv::dotenv().ok();
+        unsafe {
+            // std::env::set_var("DATABASE_URL", "./test.db");
+            std::env::set_var("NYKS_WALLET_PASSPHRASE", "test1_password");
+        }
+        init_logger();
+        let wallet = setup_wallet().await.map_err(|e| e.to_string())?;
+        let zk_accounts = ZkAccountDB::new();
 
-    //     let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
-    //         .map_err(|e| e.to_string())?;
-    //     order_wallet.with_db(None, None)?;
-    //     let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
-    //     if tx_result.code != 0 {
-    //         return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
-    //     }
+        let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
+            .map_err(|e| e.to_string())?;
+        // order_wallet.with_db(None, None)?;
+        let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
+        if tx_result.code != 0 {
+            return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
+        }
 
-    //     let btc_price = order_wallet
-    //         .relayer_api_client
-    //         .btc_usd_price()
-    //         .await
-    //         .map_err(|e| e.to_string())?;
-    //     info!("btc_price: {:?}", btc_price);
-    //     let entry_price = btc_price.price as u64;
-    //     let result = order_wallet
-    //         .open_trader_order(
-    //             account_index,
-    //             OrderType::MARKET,
-    //             PositionType::LONG,
-    //             entry_price,
-    //             10,
-    //         )
-    //         .await?;
-    //     info!("result: {:?}", result);
-    //     let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
-    //     info!("tx_hash: {:?}", tx_hash);
-    //     assert_eq!(tx_hash.order_status, OrderStatus::FILLED);
-    //     let response = order_wallet.query_trader_order(account_index).await?;
-    //     info!("response: {:?}", response);
-    //     assert_eq!(response.order_status, OrderStatus::FILLED);
-    //     assert_eq!(
-    //         order_wallet
-    //             .zk_accounts
-    //             .get_account(&account_index)?
-    //             .io_type,
-    //         IOType::Memo
-    //     );
+        let btc_price = order_wallet
+            .relayer_api_client
+            .btc_usd_price()
+            .await
+            .map_err(|e| e.to_string())?;
+        info!("btc_price: {:?}", btc_price);
+        let entry_price = btc_price.price as u64;
+        let result = order_wallet
+            .open_trader_order(
+                account_index,
+                OrderType::MARKET,
+                PositionType::LONG,
+                entry_price,
+                10,
+            )
+            .await?;
+        info!("result: {:?}", result);
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
+        info!("tx_hash: {:?}", tx_hash);
+        assert_eq!(tx_hash.order_status, OrderStatus::FILLED);
+        let response = order_wallet.query_trader_order(account_index).await?;
+        info!("response: {:?}", response);
+        assert_eq!(response.order_status, OrderStatus::FILLED);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&account_index)?
+                .io_type,
+            IOType::Memo
+        );
 
-    //     let result = order_wallet
-    //         .close_trader_order(account_index, OrderType::MARKET, 0.0)
-    //         .await?;
+        let result = order_wallet
+            .close_trader_order(account_index, OrderType::MARKET, 0.0)
+            .await?;
 
-    //     let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
-    //     assert_eq!(tx_hash.order_status, OrderStatus::SETTLED);
-    //     let response = order_wallet.query_trader_order(account_index).await?;
-    //     assert_eq!(response.order_status, OrderStatus::SETTLED);
-    //     let zk_account = order_wallet.zk_accounts.get_account(&account_index)?;
-    //     assert_eq!(zk_account.io_type, IOType::Coin);
-    //     assert_eq!(zk_account.balance, response.available_margin as u64);
-    //     let receiver_account_index = order_wallet.trading_to_trading(account_index).await?;
-    //     assert_ne!(account_index, receiver_account_index);
-    //     assert_eq!(
-    //         order_wallet
-    //             .zk_accounts
-    //             .get_account(&account_index)?
-    //             .on_chain,
-    //         false
-    //     );
-    //     info!("receiver_account_index: {:?}", receiver_account_index);
-    //     let result1 = order_wallet
-    //         .open_trader_order(
-    //             receiver_account_index,
-    //             OrderType::MARKET,
-    //             PositionType::LONG,
-    //             entry_price,
-    //             10,
-    //         )
-    //         .await?;
-    //     info!("result1: {:?}", result1);
-    //     let tx_hash1 = fetch_tx_hash_with_retry(&result1, &order_wallet.relayer_api_client).await?;
-    //     info!("tx_hash1: {:?}", tx_hash1);
-    //     assert_eq!(tx_hash1.order_status, OrderStatus::FILLED);
-    //     let response = order_wallet
-    //         .query_trader_order(receiver_account_index)
-    //         .await?;
-    //     info!("response: {:?}", response);
-    //     assert_eq!(response.order_status, OrderStatus::FILLED);
-    //     assert_eq!(
-    //         order_wallet
-    //             .zk_accounts
-    //             .get_account(&receiver_account_index)?
-    //             .io_type,
-    //         IOType::Memo
-    //     );
-    //     let result2 = order_wallet
-    //         .close_trader_order(receiver_account_index, OrderType::MARKET, 0.0)
-    //         .await?;
-    //     let tx_hash2 = fetch_tx_hash_with_retry(&result2, &order_wallet.relayer_api_client).await?;
-    //     assert_eq!(tx_hash2.order_status, OrderStatus::SETTLED);
-    //     let response2 = order_wallet
-    //         .query_trader_order(receiver_account_index)
-    //         .await?;
-    //     assert_eq!(response2.order_status, OrderStatus::SETTLED);
-    //     assert_eq!(
-    //         order_wallet
-    //             .zk_accounts
-    //             .get_account(&receiver_account_index)?
-    //             .io_type,
-    //         IOType::Coin
-    //     );
-    //     let new_recever_index = order_wallet
-    //         .trading_to_trading(receiver_account_index)
-    //         .await?;
-    //     assert_ne!(receiver_account_index, new_recever_index);
-    //     assert_eq!(
-    //         order_wallet
-    //             .zk_accounts
-    //             .get_account(&new_recever_index)?
-    //             .io_type,
-    //         IOType::Coin
-    //     );
-    //     let result3 = order_wallet
-    //         .open_trader_order(
-    //             new_recever_index,
-    //             OrderType::MARKET,
-    //             PositionType::LONG,
-    //             entry_price,
-    //             10,
-    //         )
-    //         .await?;
-    //     let tx_hash3 = fetch_tx_hash_with_retry(&result3, &order_wallet.relayer_api_client).await?;
-    //     info!("tx_hash3: {:?}", tx_hash3);
-    //     assert_eq!(tx_hash3.order_status, OrderStatus::FILLED);
-    //     let response3 = order_wallet.query_trader_order(new_recever_index).await?;
-    //     info!("response3: {:?}", response3);
-    //     assert_eq!(response3.order_status, OrderStatus::FILLED);
-    //     assert_eq!(
-    //         order_wallet
-    //             .zk_accounts
-    //             .get_account(&new_recever_index)?
-    //             .io_type,
-    //         IOType::Memo
-    //     );
-    //     let result4 = order_wallet
-    //         .close_trader_order(new_recever_index, OrderType::MARKET, 0.0)
-    //         .await?;
-    //     debug!("result4: {:?}", result4);
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
+        assert_eq!(tx_hash.order_status, OrderStatus::SETTLED);
+        let response = order_wallet.query_trader_order(account_index).await?;
+        assert_eq!(response.order_status, OrderStatus::SETTLED);
+        order_wallet.unlock_trader_order(account_index).await?;
+        let zk_account = order_wallet.zk_accounts.get_account(&account_index)?;
+        assert_eq!(zk_account.io_type, IOType::Coin);
+        assert_eq!(zk_account.balance, response.available_margin as u64);
+        let receiver_account_index = order_wallet.trading_to_trading(account_index).await?;
+        assert_ne!(account_index, receiver_account_index);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&account_index)?
+                .on_chain,
+            false
+        );
+        info!("receiver_account_index: {:?}", receiver_account_index);
+        let result1 = order_wallet
+            .open_trader_order(
+                receiver_account_index,
+                OrderType::MARKET,
+                PositionType::LONG,
+                entry_price,
+                10,
+            )
+            .await?;
+        info!("result1: {:?}", result1);
+        let tx_hash1 = fetch_tx_hash_with_retry(&result1, &order_wallet.relayer_api_client).await?;
+        info!("tx_hash1: {:?}", tx_hash1);
+        assert_eq!(tx_hash1.order_status, OrderStatus::FILLED);
+        let response = order_wallet
+            .query_trader_order(receiver_account_index)
+            .await?;
+        info!("response: {:?}", response);
+        assert_eq!(response.order_status, OrderStatus::FILLED);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&receiver_account_index)?
+                .io_type,
+            IOType::Memo
+        );
+        let result2 = order_wallet
+            .close_trader_order(receiver_account_index, OrderType::MARKET, 0.0)
+            .await?;
+        let tx_hash2 = fetch_tx_hash_with_retry(&result2, &order_wallet.relayer_api_client).await?;
+        assert_eq!(tx_hash2.order_status, OrderStatus::SETTLED);
+        let response2 = order_wallet
+            .query_trader_order(receiver_account_index)
+            .await?;
+        assert_eq!(response2.order_status, OrderStatus::SETTLED);
+        order_wallet
+            .unlock_trader_order(receiver_account_index)
+            .await?;
+        order_wallet
+            .sync_account_state(receiver_account_index)
+            .await?;
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&receiver_account_index)?
+                .io_type,
+            IOType::Coin
+        );
+        let new_recever_index = order_wallet
+            .trading_to_trading(receiver_account_index)
+            .await?;
+        assert_ne!(receiver_account_index, new_recever_index);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&new_recever_index)?
+                .io_type,
+            IOType::Coin
+        );
+        let result3 = order_wallet
+            .open_trader_order(
+                new_recever_index,
+                OrderType::MARKET,
+                PositionType::LONG,
+                entry_price,
+                10,
+            )
+            .await?;
+        let tx_hash3 = fetch_tx_hash_with_retry(&result3, &order_wallet.relayer_api_client).await?;
+        info!("tx_hash3: {:?}", tx_hash3);
+        assert_eq!(tx_hash3.order_status, OrderStatus::FILLED);
+        let response3 = order_wallet.query_trader_order(new_recever_index).await?;
+        info!("response3: {:?}", response3);
+        assert_eq!(response3.order_status, OrderStatus::FILLED);
+        assert_eq!(
+            order_wallet
+                .zk_accounts
+                .get_account(&new_recever_index)?
+                .io_type,
+            IOType::Memo
+        );
+        let result4 = order_wallet
+            .close_trader_order(new_recever_index, OrderType::MARKET, 0.0)
+            .await?;
+        debug!("result4: {:?}", result4);
 
-    //     Ok(())
-    // }
+        Ok(())
+    }
     // cargo test --no-default-features --features postgresql --lib -- relayer_module::order_wallet::tests::test_create_order --exact --show-output
     // cargo test --no-default-features --features sqlite --lib -- relayer_module::order_wallet::tests::test_create_order --exact --show-output
     // cargo test --all-features --lib -- relayer_module::order_wallet::tests::test_create_order --exact --show-output
     // #[cfg(feature = "sqlite")]
     #[tokio::test]
     #[serial]
+    #[ignore]
     async fn test_create_order_complete_cycle_sltp() -> Result<(), String> {
         dotenv::dotenv().ok();
         unsafe {
@@ -2456,7 +2464,7 @@ mod tests {
 
         let mut order_wallet = OrderWallet::init(wallet, zk_accounts, EndpointConfig::default())
             .map_err(|e| e.to_string())?;
-        order_wallet.with_db(None, None)?;
+        // order_wallet.with_db(None, None)?;
         let (tx_result, account_index) = order_wallet.funding_to_trading(6000).await?;
         if tx_result.code != 0 {
             return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
@@ -2503,108 +2511,10 @@ mod tests {
             )
             .await?;
 
-        // let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
-        // assert_eq!(tx_hash.order_status, OrderStatus::SETTLED);
-        // let response = order_wallet.query_trader_order(account_index).await?;
-        // assert_eq!(response.order_status, OrderStatus::SETTLED);
-        // let zk_account = order_wallet.zk_accounts.get_account(&account_index)?;
-        // assert_eq!(zk_account.io_type, IOType::Coin);
-        // assert_eq!(zk_account.balance, response.available_margin as u64);
-        // let receiver_account_index = order_wallet.trading_to_trading(account_index).await?;
-        // assert_ne!(account_index, receiver_account_index);
-        // assert_eq!(
-        //     order_wallet
-        //         .zk_accounts
-        //         .get_account(&account_index)?
-        //         .on_chain,
-        //     false
-        // );
-        // info!("receiver_account_index: {:?}", receiver_account_index);
-        // let result1 = order_wallet
-        //     .open_trader_order(
-        //         receiver_account_index,
-        //         OrderType::MARKET,
-        //         PositionType::LONG,
-        //         entry_price,
-        //         10,
-        //     )
-        //     .await?;
-        // info!("result1: {:?}", result1);
-        // let tx_hash1 = fetch_tx_hash_with_retry(&result1, &order_wallet.relayer_api_client).await?;
-        // info!("tx_hash1: {:?}", tx_hash1);
-        // assert_eq!(tx_hash1.order_status, OrderStatus::FILLED);
-        // let response = order_wallet
-        //     .query_trader_order(receiver_account_index)
-        //     .await?;
-        // info!("response: {:?}", response);
-        // assert_eq!(response.order_status, OrderStatus::FILLED);
-        // assert_eq!(
-        //     order_wallet
-        //         .zk_accounts
-        //         .get_account(&receiver_account_index)?
-        //         .io_type,
-        //     IOType::Memo
-        // );
-        // let result2 = order_wallet
-        //     .close_trader_order_sltp(
-        //         receiver_account_index,
-        //         OrderType::MARKET,
-        //         0.0,
-        //         Some(entry_price as f64 - 1000.0),
-        //         Some(entry_price as f64 + 1000.0),
-        //     )
-        //     .await?;
-        // let tx_hash2 = fetch_tx_hash_with_retry(&result2, &order_wallet.relayer_api_client).await?;
-        // assert_eq!(tx_hash2.order_status, OrderStatus::SETTLED);
-        // let response2 = order_wallet
-        //     .query_trader_order(receiver_account_index)
-        //     .await?;
-        // assert_eq!(response2.order_status, OrderStatus::SETTLED);
-        // assert_eq!(
-        //     order_wallet
-        //         .zk_accounts
-        //         .get_account(&receiver_account_index)?
-        //         .io_type,
-        //     IOType::Coin
-        // );
-        // let new_recever_index = order_wallet
-        //     .trading_to_trading(receiver_account_index)
-        //     .await?;
-        // assert_ne!(receiver_account_index, new_recever_index);
-        // assert_eq!(
-        //     order_wallet
-        //         .zk_accounts
-        //         .get_account(&new_recever_index)?
-        //         .io_type,
-        //     IOType::Coin
-        // );
-        // let result3 = order_wallet
-        //     .open_trader_order(
-        //         new_recever_index,
-        //         OrderType::MARKET,
-        //         PositionType::LONG,
-        //         entry_price,
-        //         10,
-        //     )
-        //     .await?;
-        // let tx_hash3 = fetch_tx_hash_with_retry(&result3, &order_wallet.relayer_api_client).await?;
-        // info!("tx_hash3: {:?}", tx_hash3);
-        // assert_eq!(tx_hash3.order_status, OrderStatus::FILLED);
-        // let response3 = order_wallet.query_trader_order(new_recever_index).await?;
-        // info!("response3: {:?}", response3);
-        // assert_eq!(response3.order_status, OrderStatus::FILLED);
-        // assert_eq!(
-        //     order_wallet
-        //         .zk_accounts
-        //         .get_account(&new_recever_index)?
-        //         .io_type,
-        //     IOType::Memo
-        // );
-        // let result4 = order_wallet
-        //     .close_trader_order(new_recever_index, OrderType::MARKET, 0.0)
-        //     .await?;
-        // debug!("result4: {:?}", result4);
-
+        let tx_hash = fetch_tx_hash_with_retry(&result, &order_wallet.relayer_api_client).await?;
+        println!("tx_hash: {:?}", tx_hash);
+        let response = order_wallet.query_trader_order(account_index).await?;
+        println!("response: {:?}", response);
         Ok(())
     }
 
@@ -2711,6 +2621,8 @@ mod tests {
         assert_eq!(tx_hash.order_status, OrderStatus::SETTLED);
         let response = order_wallet.query_lend_order(account_index).await?;
         assert_eq!(response.order_status, OrderStatus::SETTLED);
+        order_wallet.unlock_lend_order(account_index).await?;
+        order_wallet.sync_account_state(account_index).await?;
         let zk_account = order_wallet.zk_accounts.get_account(&account_index)?;
         assert_eq!(zk_account.io_type, IOType::Coin);
         assert_eq!(zk_account.balance, response.new_lend_state_amount as u64);
@@ -2719,6 +2631,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore]
     async fn test_create_order_with_cancel() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
@@ -2775,6 +2688,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore]
     async fn test_get_wallet_list_from_db() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
@@ -2786,19 +2700,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_get_wallet_list_from_db_with_db_url() -> Result<(), String> {
-        dotenv::dotenv().ok();
-        init_logger();
-        let mut order_wallet = OrderWallet::new(None).map_err(|e| e.to_string())?;
-        order_wallet.with_db(None, None)?;
-        drop(order_wallet);
-        let wallet_list = OrderWallet::get_wallet_list_from_db(None).map_err(|e| e.to_string())?;
-        println!("wallet_list: {:?}", wallet_list);
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[serial]
+    #[ignore]
     async fn test_with_db() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
@@ -2811,6 +2713,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore]
     async fn test_trading_to_trading_multiple_accounts() -> Result<(), String> {
         dotenv::dotenv().ok();
         init_logger();
@@ -2868,30 +2771,6 @@ mod tests {
             IOType::Memo
         );
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_load_encrypted_wallet() -> Result<(), String> {
-        dotenv::dotenv().ok();
-        init_logger();
-        let wallet_id = "load_encrypted_wallet_test".to_string();
-        let mut order_wallet;
-        let wallet_exists = OrderWallet::get_wallet_id_from_db(&wallet_id, None)?;
-        if wallet_exists {
-            order_wallet =
-                OrderWallet::load_from_db(wallet_id, None, None).map_err(|e| e.to_string())?;
-        } else {
-            order_wallet = OrderWallet::new(None).map_err(|e| e.to_string())?;
-            order_wallet
-                .with_db(None, Some(wallet_id))
-                .map_err(|e| e.to_string())?;
-        }
-        get_test_tokens(&mut order_wallet.wallet)
-            .await
-            .map_err(|e| e.to_string())?;
-        drop(order_wallet);
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 # Quick Start – Nyks Wallet SDK
 
-This guide gets you from **zero to a funded test wallet in ~60 seconds**. For a deeper dive, see `README.md` and `Deployment.md`.
+This guide gets you from **zero to a funded test wallet in ~60 seconds**. For a deeper dive, see [`README.md`](README.md) and [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ---
 
@@ -27,40 +27,58 @@ $ cd nyks-wallet
 $ cargo build --release
 ```
 
-This produces the library **and** the sample binary `relayer_init` in `target/release/`.
+This produces the library **and** two binaries in `target/release/`: `relayer-init` (bootstrap) and `relayer-cli` (interactive CLI).
 
 ---
 
 ## 3 • Configure endpoints
 
-Nyks Wallet talks to the public Twilight test-net. Endpoints are read from environment variables and will **panic if missing**.
+Endpoints come from environment variables; every variable has a built-in default chosen by `NETWORK_TYPE` (mainnet vs testnet), so nothing is required — override only when you want to point at a local full-node.
 
 ```bash
-cat <<'EOF' > .env.blbal
-NYKS_LCD_BASE_URL=https://lcd.twilight.rest
-NYKS_RPC_BASE_URL=https://rpc.twilight.rest
-FAUCET_BASE_URL=https://faucet-rpc.twilight.rest
-ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
+cat <<'EOF' > .env
+# Select the network. Mainnet is the default if unset.
+NETWORK_TYPE=testnet
+# nyks chain only supports BTC mainnet — keep this as mainnet even on testnet.
+BTC_NETWORK_TYPE=mainnet
+CHAIN_ID=nyks
+
+# The following testnet endpoints are the built-in defaults for NETWORK_TYPE=testnet.
+# Only set them explicitly if you need to override.
+# NYKS_LCD_BASE_URL=https://lcd.twilight.rest
+# NYKS_RPC_BASE_URL=https://rpc.twilight.rest
+# FAUCET_BASE_URL=https://faucet-rpc.twilight.rest
+# ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos
+# RELAYER_API_RPC_SERVER_URL=https://relayer.twilight.rest/api
+
 RUST_LOG=info
 EOF
 
 # load them in your current shell
-source .env
+set -a; source .env; set +a
 ```
+
+> See [`.env.example`](.env.example) for the full list and [README.md §7](README.md#7--environment-variables) for the mainnet/testnet defaults.
 
 ---
 
 ## 4 • Run the one-liner demo
 
 ```bash
-# generates a fresh wallet, funds it, deploys relayer contract
-$ cargo run --bin relayer_init
+# generates a fresh wallet, funds it on testnet, writes relayer_deployer.json
+$ cargo run --bin relayer-init
 ```
 
 On success you will see `relayer_deployer.json` in the working directory plus log output similar to:
 
 ```
 Successfully wrote relayer data to relayer_deployer.json
+```
+
+Try the interactive CLI next:
+
+```bash
+$ cargo run --bin relayer-cli -- --help
 ```
 
 ---
@@ -83,7 +101,7 @@ use nyks_wallet::wallet::{Wallet, get_test_tokens};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 1️⃣ create a random Cosmos+BTC wallet
-    let mut wallet = Wallet::create_new_with_random_btc_address()?;
+    let mut wallet = Wallet::create_new_with_random_btc_address().await?;
 
     // 2️⃣ request test-net tokens (10 000 nyks & 50 000 sats)
     get_test_tokens(&mut wallet).await?;
@@ -104,8 +122,10 @@ cargo run -q
 
 ## 6 • Next steps
 
-• Explore the full API surface in [`README.md`](README.md).  
-• Check the [Deployment guide](DEPLOYMENT.md) for Docker usage and advanced relayer setup.  
+• Explore the full API surface in [`README.md`](README.md).
+• Read the [OrderWallet guide](OrderWallet.md) for trading and lending.
+• See the [`relayer-cli` reference](docs/relayer-cli.md) for the interactive CLI.
+• Check the [Deployment guide](DEPLOYMENT.md) for Docker usage and advanced relayer setup.
 • Join the discussion on Discord: https://discord.gg/twilight-protocol
 
 Happy building! 🚀

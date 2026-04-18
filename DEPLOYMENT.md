@@ -39,33 +39,44 @@ The resulting binary will be at `target/release/relayer-init`.
 
 ## 3. Configure endpoints
 
-`relayer-init` talks to several Twilight test-net services. Endpoints are looked up via environment variables and **panic if they are not set**.
+`relayer-init` talks to several Twilight services. Endpoint defaults are picked by `NETWORK_TYPE` (mainnet vs testnet) — nothing is required; override only what you need.
 
-| Variable            | Default value                                                        | Notes                          |
-| ------------------- | -------------------------------------------------------------------- | ------------------------------ |
-| `NYKS_LCD_BASE_URL` | `http://0.0.0.0:1317` (public: https://lcd.twilight.rest)            | NYKS chain LCD (REST) endpoint |
-| `NYKS_RPC_BASE_URL` | `http://0.0.0.0:26657` (public: https://rpc.twilight.rest)           | NYKS chain RPC endpoint        |
-| `FAUCET_BASE_URL`   | `http://0.0.0.0:6969` (public: https://faucet-rpc.twilight.rest)     | Nyks / BTC faucet services     |
-| `ZKOS_SERVER_URL`   | `http://0.0.0.0:3030` (public: https://nykschain.twilight.rest/zkos) | ZkOS JSON-RPC endpoint         |
-| `RUST_LOG`          | `info`                                                               | Logging info                   |
+| Variable                     | Default (selected by `NETWORK_TYPE`)                                                   | Notes                          |
+| ---------------------------- | -------------------------------------------------------------------------------------- | ------------------------------ |
+| `NETWORK_TYPE`               | `mainnet`                                                                              | set `testnet` to use `*.twilight.rest` defaults |
+| `BTC_NETWORK_TYPE`           | `mainnet`                                                                              | nyks chain only supports BTC mainnet — keep as `mainnet` |
+| `CHAIN_ID`                   | `nyks`                                                                                 | Chain identifier in signed messages |
+| `NYKS_LCD_BASE_URL`          | mainnet: `https://lcd.twilight.org` / testnet: `https://lcd.twilight.rest`             | NYKS chain LCD (REST) endpoint |
+| `NYKS_RPC_BASE_URL`          | mainnet: `https://rpc.twilight.org` / testnet: `https://rpc.twilight.rest`             | NYKS chain Tendermint RPC      |
+| `FAUCET_BASE_URL`            | mainnet: *(empty)* / testnet: `https://faucet-rpc.twilight.rest`                       | Testnet faucet (testnet only)  |
+| `ZKOS_SERVER_URL`            | mainnet: `https://zkserver.twilight.org` / testnet: `https://nykschain.twilight.rest/zkos` | ZkOS JSON-RPC endpoint     |
+| `RELAYER_API_RPC_SERVER_URL` | mainnet: `https://api.ephemeral.fi/api` / testnet: `https://relayer.twilight.rest/api` | Relayer public JSON-RPC API    |
+| `RELAYER_PROGRAM_JSON_PATH`  | `./relayerprogram.json`                                                                | Path to relayer program JSON   |
+| `RUST_LOG`                   | –                                                                                      | Logging level                  |
+
+See [`README.md §7`](README.md#7--environment-variables) for the complete list (including indexer, Esplora, DB, and wallet-passphrase variables).
 
 ### 3.1 Create a `.env` file (recommended)
 
 ```bash
 cat <<'EOF' > .env
-NYKS_LCD_BASE_URL=http://0.0.0.0:1317
-NYKS_RPC_BASE_URL=http://0.0.0.0:26657
-FAUCET_BASE_URL=http://0.0.0.0:6969
-ZKOS_SERVER_URL=http://0.0.0.0:3030
+NETWORK_TYPE=testnet
+BTC_NETWORK_TYPE=mainnet
+CHAIN_ID=nyks
 RUST_LOG=info
-
+# Override individual endpoints only if pointing at a local full-node:
+# NYKS_LCD_BASE_URL=http://0.0.0.0:1317
+# NYKS_RPC_BASE_URL=http://0.0.0.0:26657
+# FAUCET_BASE_URL=http://0.0.0.0:6969
+# ZKOS_SERVER_URL=http://0.0.0.0:3030
+# RELAYER_API_RPC_SERVER_URL=http://0.0.0.0:8088/api
 EOF
 ```
 
 Load it in your shell:
 
 ```bash
-source .env
+set -a; source .env; set +a
 ```
 
 ### 3.2 One-off override
@@ -73,10 +84,8 @@ source .env
 You can also pass variables inline for a single execution:
 
 ```bash
-ZKOS_SERVER_URL=https://nykschain.twilight.rest/zkos \
-NYKS_LCD_BASE_URL=https://lcd.twilight.rest \
-NYKS_RPC_BASE_URL=https://rpc.twilight.rest \
-FAUCET_BASE_URL=https://faucet-rpc.twilight.rest \
+NETWORK_TYPE=testnet \
+BTC_NETWORK_TYPE=mainnet \
 RUST_LOG=info \
 cargo run --bin relayer-init
 ```
