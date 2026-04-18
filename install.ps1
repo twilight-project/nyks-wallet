@@ -81,17 +81,22 @@
     if ($ChecksumAsset) {
         Write-Host "Verifying checksum..."
 
-        # Fetch raw checksum file content. Use Invoke-WebRequest rather than
-        # Invoke-RestMethod because the .sha256 asset is served as
-        # application/octet-stream, which Invoke-RestMethod may decode into a
-        # byte[] instead of a string.
+        # Fetch raw checksum file content. The .sha256 asset is served as
+        # application/octet-stream, so Invoke-WebRequest's $Response.Content
+        # is byte[] under PowerShell 5.1 and string under PowerShell 7+.
+        # Casting [string] on a byte[] yields space-separated decimals (e.g.
+        # "52 49 ..." for "41..."), so decode bytes explicitly when needed.
         $Expected = $null
         try {
             $ChecksumResponse = Invoke-WebRequest `
                 -Uri $ChecksumAsset.browser_download_url `
                 -Headers @{ "User-Agent" = "relayer-cli-installer" } `
                 -UseBasicParsing
-            $ChecksumText = [string]$ChecksumResponse.Content
+            if ($ChecksumResponse.Content -is [byte[]]) {
+                $ChecksumText = [System.Text.Encoding]::UTF8.GetString($ChecksumResponse.Content)
+            } else {
+                $ChecksumText = [string]$ChecksumResponse.Content
+            }
             $Expected = ($ChecksumText -split '\s+')[0].ToUpper()
         } catch {
             Write-Host "Warning: could not download checksum, skipping verification: $_" -ForegroundColor Yellow
