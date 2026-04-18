@@ -427,15 +427,16 @@ impl<T: Serialize> ToRpcParams for AsRpcParams<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::relayer_module::relayer_types::OrderStatus;
-
     use super::*;
+    use crate::config::RelayerEndPointConfig;
+    use crate::relayer_module::relayer_types::OrderStatus;
     use crate::relayer_module::relayer_types::{Interval, TransactionHashArgs};
     #[tokio::test]
     async fn test_transaction_hashes_by_request_id() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
 
         let request_id = TransactionHashArgs::RequestId {
@@ -457,8 +458,9 @@ mod tests {
     #[tokio::test]
     async fn test_position_size() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
 
         match relayer.position_size().await {
@@ -472,8 +474,9 @@ mod tests {
     #[tokio::test]
     async fn test_pool_share_value() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
 
         match relayer.pool_share_value().await {
@@ -487,8 +490,9 @@ mod tests {
     #[tokio::test]
     async fn test_lend_pool_info() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
 
         match relayer.lend_pool_info().await {
@@ -502,8 +506,9 @@ mod tests {
     #[tokio::test]
     async fn test_historical_funding() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         let args = HistoricalFundingArgs {
             from: chrono::Utc::now() - chrono::Duration::hours(24),
@@ -524,8 +529,9 @@ mod tests {
     #[tokio::test]
     async fn test_historical_fees() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         let args = HistoricalFeeArgs {
             from: chrono::Utc::now() - chrono::Duration::days(365),
@@ -546,8 +552,9 @@ mod tests {
     #[tokio::test]
     async fn test_historical_prices() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         let args = HistoricalPriceArgs {
             from: chrono::Utc::now() - chrono::Duration::hours(24),
@@ -569,8 +576,9 @@ mod tests {
     #[tokio::test]
     async fn test_btc_usd_price() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         match relayer.btc_usd_price().await {
             Ok(price) => println!("BTC/USD price: {:?}", price),
@@ -584,8 +592,9 @@ mod tests {
     #[tokio::test]
     async fn test_open_limit_orders() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         match relayer.open_limit_orders().await {
             Ok(order_book) => println!("Open limit orders: {:?}", order_book),
@@ -599,8 +608,9 @@ mod tests {
     #[tokio::test]
     async fn test_recent_trade_orders() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         match relayer.recent_trade_orders().await {
             Ok(orders) => println!("Recent trade orders: {:?}", orders),
@@ -614,8 +624,9 @@ mod tests {
     #[tokio::test]
     async fn test_candle_data() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         let args = Candles {
             interval: Interval::ONE_MINUTE,
@@ -635,8 +646,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_funding_rate() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         match relayer.get_funding_rate().await {
             Ok(rate) => println!("Funding rate: {:?}", rate),
@@ -650,8 +662,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_fee_rate() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         match relayer.get_fee_rate().await {
             Ok(fee) => println!("Fee rate: {:?}", fee),
@@ -665,8 +678,9 @@ mod tests {
     #[tokio::test]
     async fn test_historical_trader_order_info() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         let query_str = "8a00000000000000306339363431313165653936636436663332656333363734353065656130636464663632343439393766623339366265323464623335363063653831616133333435313633393733333265316135386131646162623135346134346539663631616163386436663264323366386338386464623435306332623065626663373831633239366638343761050000008a000000000000003063393634313131656539366364366633326563333637343530656561306364646636323434393937666233393662653234646233353630636538316161333334353136333937333332653161353861316461626231353461343465396636316161633864366632643233663863383864646234353063326230656266633738316332393666383437614000000000000000bcdd784e30b11b3d80b039e951e2de9ce68bc9e12254f588872a4cb05621916267f41835ff570ed81f53e4553f055b6b3e691d75910b4e5ae0d9d5556f5b0e08".to_string();
         let query = QueryTraderOrderZkos::decode_from_hex_string(query_str).unwrap();
@@ -682,8 +696,9 @@ mod tests {
     #[ignore]
     async fn test_trader_order_info() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         let query_str = "8a00000000000000306339363431313165653936636436663332656333363734353065656130636464663632343439393766623339366265323464623335363063653831616133333435313633393733333265316135386131646162623135346134346539663631616163386436663264323366386338386464623435306332623065626663373831633239366638343761050000008a000000000000003063393634313131656539366364366633326563333637343530656561306364646636323434393937666233393662653234646233353630636538316161333334353136333937333332653161353861316461626231353461343465396636316161633864366632643233663863383864646234353063326230656266633738316332393666383437614000000000000000bcdd784e30b11b3d80b039e951e2de9ce68bc9e12254f588872a4cb05621916267f41835ff570ed81f53e4553f055b6b3e691d75910b4e5ae0d9d5556f5b0e08".to_string();
         let query = QueryTraderOrderZkos::decode_from_hex_string(query_str).unwrap();
@@ -699,8 +714,9 @@ mod tests {
     #[ignore]
     async fn test_lend_order_info() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         let query_str = "8a00000000000000306366383562333461346538383936643232333035623462333831636335663237383535373631616361356361323761376237636366663561663536623330343238336334303266656363363634346561323638663031643661643466356631663736663066383631386261323533353963623462353064623530653638363733313031653037653934050000008a000000000000003063663835623334613465383839366432323330356234623338316363356632373835353736316163613563613237613762376363666635616635366233303432383363343032666563633636343465613236386630316436616434663566316637366630663836313862613235333539636234623530646235306536383637333130316530376539344000000000000000622ec112f3087ef15f6265c4d600c53098ebb27310f3296f1dbcfa3c165a7b4ce780d5cf9fc7dd2ef89fe127ef16188fe5811b6e4a8f1e0c90c92bb96be7a302".to_string();
         let query = QueryLendOrderZkos::decode_from_hex_string(query_str).unwrap();
@@ -715,8 +731,9 @@ mod tests {
     #[tokio::test]
     async fn test_server_time() {
         dotenv::dotenv().ok();
-        let relayer_url = std::env::var("RELAYER_API_RPC_SERVER_URL")
-            .unwrap_or("http://0.0.0.0:8088/api".to_string());
+        let relayer_url = RelayerEndPointConfig::from_env()
+            .relayer_api_endpoint
+            .clone();
         let relayer = RelayerJsonRpcClient::new(&relayer_url).unwrap();
         match relayer.server_time().await {
             Ok(time) => println!("Server time: {:?}", time),

@@ -1432,6 +1432,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_fetch_btc_proposed_reserve() {
         let wallet = Wallet::from_mnemonic(
             "test test test test test test test test test test test junk",

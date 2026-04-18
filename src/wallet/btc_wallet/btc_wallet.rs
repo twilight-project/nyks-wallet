@@ -44,7 +44,11 @@ impl BtcNetwork {
 
 impl std::fmt::Display for BtcWallet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "BtcWallet(address={}, network={:?})", self.address, self.network)
+        write!(
+            f,
+            "BtcWallet(address={}, network={:?})",
+            self.address, self.network
+        )
     }
 }
 
@@ -106,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_from_mnemonic() {
-        let mnemonic = "fragile suffer other retire often wrong ribbon alcohol wine dutch wet cancel physical dignity awkward trophy atom twist cover seminar voice only describe slide";
+        let mnemonic = "test test test test test test test test test test test junk";
         let btc = BtcWallet::from_mnemonic(mnemonic).unwrap();
 
         assert!(btc.address.starts_with("bc1q"));
@@ -123,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_consistent_with_legacy_keys() {
-        let mnemonic = "fragile suffer other retire often wrong ribbon alcohol wine dutch wet cancel physical dignity awkward trophy atom twist cover seminar voice only describe slide";
+        let mnemonic = "test test test test test test test test test test test junk";
         let btc = BtcWallet::from_mnemonic(mnemonic).unwrap();
         let (_wif, addr) = super::super::keys::segwit_from_mnemonic(mnemonic).unwrap();
 
@@ -133,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_create_bdk_wallet() {
-        let mnemonic = "fragile suffer other retire often wrong ribbon alcohol wine dutch wet cancel physical dignity awkward trophy atom twist cover seminar voice only describe slide";
+        let mnemonic = "test test test test test test test test test test test junk";
         let btc = BtcWallet::from_mnemonic(mnemonic).unwrap();
         let bdk = btc.create_bdk_wallet().unwrap();
 

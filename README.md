@@ -75,26 +75,40 @@ All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**
 
 ### 4.1 Wallet lifecycle
 
-- `Wallet::new(None)` – generate a random Cosmos key-pair _and_ deterministic testnet BTC address.
-- `Wallet::from_mnemonic(..)` / `Wallet::from_private_key(..)` – import existing credentials.
-- `Wallet::import_from_json(..)` / `export_to_json(..)` – round-trip safe serialization for long-term storage.
+- `Wallet::new(chain_config: Option<WalletEndPointConfig>)` – generate a random Cosmos key-pair along with a BIP-39 BTC wallet; prints the 24-word mnemonic once to the TTY.
+- `Wallet::create_new_with_random_btc_address()` – async variant that does not print the mnemonic (used in automated flows).
+- `Wallet::from_mnemonic(mnemonic, chain_config)` – import an existing 24-word mnemonic.
+- `Wallet::from_private_key(private_key, btc_address, chain_config)` – import using a raw secp256k1 hex private key (no BTC wallet, just an address).
+- `Wallet::from_mnemonic_file(path)` – read mnemonic from a file (used by the validator wallet).
+- `Wallet::import_from_json(path)` / `Wallet::export_to_json(path)` – round-trip safe serialization for long-term storage.
 
-### 4.2 Balance management
+> The BTC network (`mainnet` vs `testnet`) used to derive the BIP-86 Taproot address is controlled by `BTC_NETWORK_TYPE` — default `mainnet`. The nyks chain only supports BTC mainnet, so keep `BTC_NETWORK_TYPE=mainnet` even on nyks testnet.
 
-- `wallet::check_balance(addr)` – one-shot REST query.
+### 4.2 Balance & account info
+
+- `wallet::check_balance(addr, lcd_endpoint)` – one-shot REST query against the LCD endpoint.
 - `Wallet::update_balance()` – refreshes the embedded `balance_nyks` & `balance_sats` fields.
+- `Wallet::account_info()` / `Wallet::update_account_info()` – fetches the Cosmos auth account (sequence + account number).
 
-### 4.3 Faucet helpers
+### 4.3 Faucet helpers (testnet only)
 
-- `faucet::get_nyks(addr)` – requests **10 000 nyks**.
-- `faucet::mint_sats(addr)` – mints **50 000 test satoshis**.
-- `faucet::mint_sats_5btc(addr)` – special 5 BTC mint used by relayer wallets.
+- `faucet::get_nyks(addr, faucet_endpoint)` – requests **10 000 nyks**.
+- `faucet::mint_sats(addr, faucet_endpoint)` – mints **50 000 test satoshis**.
+- `faucet::mint_sats_5btc(addr, faucet_endpoint)` – special 5 BTC mint used by relayer wallets.
+- `wallet::get_test_tokens(&mut wallet)` – one-shot helper that requests nyks, registers the BTC address, and mints sats. Errors on mainnet (`NETWORK_TYPE=mainnet`).
 
-### 4.4 BTC deposit registration & trading
+### 4.4 BTC deposit & withdrawal
 
-- `faucet::sign_and_send_reg_deposit_tx(..)` – signs a `MsgRegisterBtcDepositAddress` and broadcasts it.
-- `nyks_fn::create_funiding_to_trading_tx_msg(..)` – crafts a **mint/burn** trading message.
-- `nyks_fn::send_tx(msg)` – generic helper that signs & synchronously broadcasts any protobuf `Any`.
+- `Wallet::register_btc_deposit(..)` – signs and broadcasts `MsgRegisterBtcDepositAddress`.
+- `Wallet::withdraw_btc(..)` – signs and broadcasts `MsgWithdrawBtcRequest`.
+- `Wallet::fetch_deposit_status()` / `fetch_deposit_details()` – query current deposit state from the indexer.
+- `Wallet::fetch_withdrawal_status(..)` – query withdrawal progress by ID.
+- `Wallet::fetch_btc_reserves()` / `fetch_btc_proposed_reserve()` – read live BTC reserve state.
+- `Wallet::fetch_registered_btc_by_address(..)` – verify whether a given address is registered on-chain.
+- `Wallet::fetch_account_from_indexer()` – full indexer view of the account (deposits, withdrawals, balances).
+- `Wallet::send_tokens(to_address, amount, denom)` – send `nyks` or `sats` to another Twilight address.
+- `faucet::sign_and_send_reg_deposit_tx(..)` – lower-level primitive that signs a `MsgRegisterBtcDepositAddress`.
+- `nyks_fn::create_funiding_to_trading_tx_msg(..)` – crafts a mint/burn trading message (note: the typo `funiding` is intentional in the current API surface).
 
 ### 4.5 ZkOS / QuisQuis accounts
 
@@ -154,35 +168,45 @@ All network calls run on **Tokio + Reqwest**, all crypto is handled via **k256**
 
 ## 7 • Environment variables
 
-| Variable                     | Default                   | Description                                           |
-| ---------------------------- | ------------------------- | ----------------------------------------------------- |
-| `NYKS_LCD_BASE_URL`          | `http://0.0.0.0:1317`     | Cosmos SDK LCD REST endpoint                          |
-| `NYKS_RPC_BASE_URL`          | `http://0.0.0.0:26657`    | Tendermint RPC endpoint                               |
-| `FAUCET_BASE_URL`            | `http://0.0.0.0:6969`     | Faucet & mint endpoints                               |
-| `ZKOS_SERVER_URL`            | `http://0.0.0.0:3030`     | ZkOS / QuisQuis JSON-RPC server                       |
-| `RELAYER_API_RPC_SERVER_URL` | `http://0.0.0.0:8088/api` | Relayer public JSON-RPC API (OrderWallet)             |
-| `PUBLIC_API_RPC_SERVER_URL`  | `http://0.0.0.0:8088/api` | Public price-feed / order-book API                    |
-| `RELAYER_RPC_SERVER_URL`     | `http://0.0.0.0:3032`     | Internal relayer client RPC                           |
-| `RELAYER_PROGRAM_JSON_PATH`  | `./relayerprogram.json`   | Path to relayer program ABI/bytecode                  |
-| `CHAIN_ID`                   | `nyks`                    | Chain identifier used in signed msgs                  |
-| `RUST_LOG`                   | `info`                    | Log level (`info`, `debug`, `trace`, …)               |
-| `RUST_BACKTRACE`             | `full`                    | Enable Rust backtraces for debugging                  |
-| `NYKS_WALLET_PASSPHRASE`     | –                         | Passphrase used to encrypt wallet seed                |
-| `WALLET_ID`                  | –                         | Override default wallet ID when using DB              |
-| `VALIDATOR_WALLET_PATH`      | `validator-self.mnemonic` | Path to validator mnemonic (validator-wallet)         |
-| `DATABASE_URL_SQLITE`        | `./wallet_data.db`        | SQLite file used when feature = `sqlite`              |
-| `DATABASE_URL_POSTGRESQL`    | –                         | PostgreSQL connection string (feature = `postgresql`) |
+Endpoint defaults are selected by `NETWORK_TYPE` (and `BTC_NETWORK_TYPE` for BTC-specific ones). Override any variable explicitly to point at a local full-node.
 
-Set them before running to point the SDK at a local full-node.
+| Variable                     | Default (mainnet)                       | Default (testnet)                      | Description                                      |
+| ---------------------------- | --------------------------------------- | -------------------------------------- | ------------------------------------------------ |
+| `NETWORK_TYPE`               | `mainnet`                               | `mainnet`                              | Selects endpoint defaults (`mainnet` / `testnet`) |
+| `BTC_NETWORK_TYPE`           | `mainnet`                               | `mainnet`                              | BTC network for Esplora endpoints (nyks only supports BTC mainnet) |
+| `CHAIN_ID`                   | `nyks`                                  | `nyks`                                 | Chain identifier used in signed msgs             |
+| `NYKS_LCD_BASE_URL`          | `https://lcd.twilight.org`              | `https://lcd.twilight.rest`            | Cosmos SDK LCD REST endpoint                     |
+| `NYKS_RPC_BASE_URL`          | `https://rpc.twilight.org`              | `https://rpc.twilight.rest`            | Tendermint RPC endpoint                          |
+| `FAUCET_BASE_URL`            | *(empty)*                               | `https://faucet-rpc.twilight.rest`     | Faucet & mint endpoints (testnet only)           |
+| `ZKOS_SERVER_URL`            | `https://zkserver.twilight.org`         | `https://nykschain.twilight.rest/zkos` | ZkOS / QuisQuis JSON-RPC server                  |
+| `RELAYER_API_RPC_SERVER_URL` | `https://api.ephemeral.fi/api`          | `https://relayer.twilight.rest/api`    | Relayer public JSON-RPC API (OrderWallet)        |
+| `TWILIGHT_INDEXER_URL`       | `https://indexer.twilight.org`          | `https://indexer.twilight.rest`        | Twilight indexer endpoint                        |
+| `BTC_ESPLORA_PRIMARY_URL`    | `https://blockstream.info/api`          | `https://blockstream.info/testnet/api` | Primary Esplora API (driven by `BTC_NETWORK_TYPE`) |
+| `BTC_ESPLORA_FALLBACK_URL`   | `https://mempool.space/api`             | `https://mempool.space/testnet/api`    | Fallback Esplora API (driven by `BTC_NETWORK_TYPE`) |
+| `RELAYER_PROGRAM_JSON_PATH`  | `./relayerprogram.json`                 | `./relayerprogram.json`                | Path to relayer program ABI/bytecode             |
+| `VALIDATOR_WALLET_PATH`      | `validator.mnemonic`                    | `validator.mnemonic`                   | Path to validator mnemonic (validator-wallet feature); `.env.example` overrides to `validator-self.mnemonic` |
+| `RUST_LOG`                   | –                                       | –                                      | Log level (`info`, `debug`, `trace`, …)          |
+| `RUST_BACKTRACE`             | –                                       | –                                      | Enable Rust backtraces for debugging             |
+| `NYKS_WALLET_PASSPHRASE`     | –                                       | –                                      | Passphrase used to encrypt wallet seed           |
+| `WALLET_ID`                  | –                                       | –                                      | Override default wallet ID when using DB         |
+| `DATABASE_URL_SQLITE`        | `./wallet_data.db`                      | `./wallet_data.db`                     | SQLite file used when feature = `sqlite`         |
+| `DATABASE_URL_POSTGRESQL`    | –                                       | –                                      | PostgreSQL connection string (feature = `postgresql`) |
 
 ---
 
 ## 8 • Getting started in your own project
 
-```bash
+```toml
 # Cargo.toml
 [dependencies]
-nyks-wallet = { path = "../nyks-wallet" }    # or github = "twilight-project/nyks-wallet"
+nyks-wallet = { git = "https://github.com/twilight-project/nyks-wallet", tag = "v0.1.2" }
+# or: nyks-wallet = { path = "../nyks-wallet" }
+```
+
+Default features enable `sqlite` + `order-wallet`. Disable defaults and pick your own set if you don't need the DB:
+
+```toml
+nyks-wallet = { git = "...", default-features = false, features = ["order-wallet"] }
 ```
 
 ```rust
@@ -190,16 +214,29 @@ use nyks_wallet::wallet::{Wallet, get_test_tokens};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Import an existing key (mnemonic, hex or JSON)
-    let mut wallet = Wallet::from_mnemonic("your twelve words …")?;
+    // Import an existing 24-word mnemonic (chain_config=None → defaults from NETWORK_TYPE)
+    let mut wallet = Wallet::from_mnemonic("your twenty-four words …", None)?;
 
-    // Fund it on test-net
+    // Fund it on test-net (requires NETWORK_TYPE=testnet; errors on mainnet)
     get_test_tokens(&mut wallet).await?;
 
     println!("Twilight address: {}", wallet.twilightaddress);
     println!("Balance: {} nyks, {} sats", wallet.balance_nyks, wallet.balance_sats);
     Ok(())
 }
+```
+
+### 8.1 Binaries shipped with the crate
+
+The crate also builds two CLIs (both require the `order-wallet` feature, which is on by default):
+
+- **`relayer-init`** – one-shot bootstrap that creates a wallet, funds it on testnet, and writes `relayer_deployer.json`. See [DEPLOYMENT.md](DEPLOYMENT.md).
+- **`relayer-cli`** – interactive REPL + subcommand CLI for wallets, ZkOS accounts, orders, market data, portfolio, and self-update. See [`docs/relayer-cli.md`](docs/relayer-cli.md).
+
+```bash
+cargo build --release           # builds lib + both binaries with default features
+cargo run --bin relayer-init    # run the bootstrap
+cargo run --bin relayer-cli -- --help
 ```
 
 ---

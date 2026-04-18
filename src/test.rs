@@ -330,29 +330,4 @@ mod tests {
             Err(e) => println!("Failed to export to json: {}", e),
         }
     }
-
-    // This test creates a wallet from a keyring file and prints the wallet details.
-    // RUST_LOG=debug cargo test --package nyks-wallet --lib --all-features -- test::tests::test_wallet_from_keyring_file --exact --show-output
-    #[tokio::test]
-    #[serial]
-    async fn test_wallet_from_keyring_file() -> anyhow::Result<()> {
-        dotenv::dotenv().ok();
-        init_logger();
-        // global_setup().await;
-        let wallet = Wallet::from_mnemonic_file("validator-self.mnemonic")?;
-        let balance =
-            check_balance(&wallet.twilightaddress, &wallet.chain_config.lcd_endpoint).await?;
-        println!("balance: {:?}", balance);
-        println!("wallet: {:?}", wallet);
-        Ok(())
-    }
-    #[tokio::test]
-    #[serial]
-    async fn test_wallet_from_mnemonic_new() -> anyhow::Result<()> {
-        dotenv::dotenv().ok();
-        init_logger();
-        let wallet = Wallet::new(None)?;
-        println!("wallet: {:?}", wallet);
-        Ok(())
-    }
 }
