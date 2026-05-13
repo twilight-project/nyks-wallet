@@ -42,6 +42,7 @@ use relayer_module::utils::{build_and_sign_msg_mint_burn_trading_btc, send_tx_to
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use twilight_client_sdk::{
+    address::Network,
     quisquislib::RistrettoSecretKey,
     relayer::{query_lend_order_zkos, query_trader_order_zkos},
     relayer_rpcclient::method::UtxoDetailResponse,
@@ -49,13 +50,13 @@ use twilight_client_sdk::{
         LendOrder, OrderStatus, OrderType, PositionType, QueryLendOrderZkos, QueryTraderOrderZkos,
         SlTpOrderCancel, TXType, TraderOrder,
     },
-    transaction::{Receiver, Sender},
+    transaction::{reference_tx, Receiver, Sender, Transaction},
     transfer::{
         create_burn_message_transaction,
         create_private_transfer_transaction_single_source_multiple_recievers,
-        create_private_transfer_tx_single,
+        create_private_transfer_tx_single, create_quisquis_transaction_single, verify_quisquis_tx,
     },
-    zkvm::IOType,
+    zkvm::{IOType, Input, Utxo},
 };
 
 /// One-based index of a ZkOS account tracked by `ZkAccountDB`.
@@ -552,6 +553,108 @@ impl OrderWallet {
                 "trade_to_trade",
                 Some(index),
                 Some(new_account_index),
+                sender_account.balance,
+                tx_hash,
+            );
+        }
+
+        Ok(new_account_index)
+    }
+
+    pub async fn private_qq_transfer(
+        &mut self,
+        index: AccountIndex,
+        receiver_input_string: Option<String>,
+    ) -> Result<Option<AccountIndex>, String> {
+        self.sync_account_state(index).await?;
+        let sender_account = self.zk_accounts.get_account(&index)?;
+        self.ensure_zk_account_onchain(&sender_account)?;
+        let amount = sender_account.balance;
+
+        let (new_account_index, receiver_str, address_input) = match receiver_input_string {
+            Some(s) => (None, s, true),
+            None => {
+                let new_idx = self.zk_accounts.generate_new_account(amount, &self.seed)?;
+                self.try_save_new_account_to_db(&new_idx);
+                let addr = self.zk_accounts.get_account(&new_idx)?.account;
+                (Some(new_idx), addr, false)
+            }
+        };
+
+        let utxo_detail = self
+            .utxo_details
+            .get(&index)
+            .ok_or("UTXO detail not found")?;
+        let input = utxo_detail.get_input()?;
+
+        // let utxo = Utxo::random();
+        // let (anonymity_account_vector, _anonymity_scalar_vector) =
+        //     reference_tx::Sender::create_anonymity_set(1, 1);
+        // let anonymity_set_input = anonymity_account_vector
+        //     .iter()
+        //     .map(|i| Input::input_from_quisquis_account(i, utxo.clone(), 0, Network::default()))
+        //     .collect::<Vec<Input>>();
+        // let anonymity_input_set_str =
+        //     serde_json::to_string(&anonymity_set_input).map_err(|e| e.to_string())?;
+
+        let anonymity_input_set_str = self.zk_accounts.anonymity_set(&index, &self.seed, 2)?;
+        let tx_hex = create_quisquis_transaction_single(
+            self.get_secret_key(index),
+            input,
+            receiver_str,
+            amount,
+            false,
+            0,
+            anonymity_input_set_str,
+            1u64,
+        );
+        let tx: Transaction =
+            bincode::deserialize(&hex::decode(&tx_hex).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        let verify_result = tx.verify().map_err(|e| e.to_string())?;
+        println!("verify_result: {:?}", verify_result);
+
+        let transaction: Transaction =
+            bincode::deserialize(&hex::decode(&tx_hex).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+
+        let response = tokio::task::spawn_blocking(move || {
+            twilight_client_sdk::chain::tx_commit_broadcast_transaction(transaction)
+        })
+        .await
+        .map_err(|e| format!("Failed to send RPC request: {}", e))?;
+        info!("private_qq_transfer response: {:?}", response);
+
+        self.uncache_utxo(index);
+        self.zk_accounts.update_on_chain(&index, false)?;
+        self.zk_accounts.update_balance(&index, 0u64)?;
+
+        if let Some(new_idx) = new_account_index {
+            let utxo_detail = fetch_utxo_details_with_retry(
+                self.zk_accounts.get_account_address(&new_idx)?,
+                IOType::Coin,
+            )
+            .await?;
+
+            self.cache_utxo(new_idx, utxo_detail.clone());
+            self.zk_accounts.update_on_chain(&new_idx, true)?;
+            let account = utxo_detail.output.to_quisquis_account()?;
+            self.zk_accounts.update_qq_account(&new_idx, account)?;
+            self.try_update_account_in_db(&new_idx);
+        }
+
+        self.try_update_account_in_db(&index);
+
+        #[cfg(any(feature = "sqlite", feature = "postgresql"))]
+        {
+            let tx_hash = match &response {
+                Ok(hash) => Some(hash.as_str()),
+                Err(_) => None,
+            };
+            self.log_transfer_history(
+                "private_qq_transfer",
+                Some(index),
+                new_account_index,
                 sender_account.balance,
                 tx_hash,
             );
@@ -2588,6 +2691,50 @@ mod tests {
                 .io_type,
             IOType::Memo
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_private_qq_transfer_new_account() -> Result<(), String> {
+        dotenv::dotenv().ok();
+        init_logger();
+        let wallet_id = "wallet1";
+        let pwd = SecretString::new("s3cret".to_string());
+        let mut order_wallet = OrderWallet::load_from_db(wallet_id.to_string(), Some(pwd), None)
+            .map_err(|e| e.to_string())?;
+        let (tx_result, sender_account_index) = order_wallet.funding_to_trading(1000).await?;
+        if tx_result.code != 0 {
+            return Err(format!("Failed to send tx to chain: {}", tx_result.tx_hash));
+        }
+
+        let receiver_account_index = order_wallet
+            .private_qq_transfer(sender_account_index, None)
+            .await?
+            .ok_or("private_qq_transfer with None should return a new account index")?;
+        println!("receiver_account_index: {:?}", receiver_account_index);
+        // assert_ne!(sender_account_index, receiver_account_index);
+
+        // let sender = order_wallet
+        //     .zk_accounts
+        //     .get_account(&sender_account_index)?;
+        // assert_eq!(sender.on_chain, false);
+        // assert_eq!(sender.balance, 0);
+
+        // let receiver = order_wallet
+        //     .zk_accounts
+        //     .get_account(&receiver_account_index)?;
+        // assert_eq!(receiver.balance, 6000);
+        // assert_eq!(receiver.on_chain, true);
+        // assert_eq!(receiver.io_type, IOType::Coin);
+
+        // assert!(order_wallet
+        //     .utxo_details
+        //     .contains_key(&receiver_account_index));
+        // assert!(!order_wallet
+        //     .utxo_details
+        //     .contains_key(&sender_account_index));
+
         Ok(())
     }
 

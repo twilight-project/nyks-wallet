@@ -104,6 +104,21 @@ impl ZkAccount {
         let qq_address: EncryptedAccount = EncryptedAccount::from(account);
         qq_address.to_hex_str().map_err(|e| e.to_string())
     }
+
+    pub fn get_zero_balance_account(index: u64, seed: &SecretString) -> Result<Account, String> {
+        let key_manager = KeyManager::from_cosmos_signature(seed.expose_secret().as_bytes());
+
+        let secret_key = key_manager.derive_child_key(index);
+        let pk_in = RistrettoPublicKey::from_secret_key(&secret_key, &mut OsRng);
+
+        let rscalar = Scalar::random(&mut OsRng);
+        let rscalar_str = hex::encode(rscalar.to_bytes());
+        let commit_in =
+            ElGamalCommitment::generate_commitment(&pk_in, rscalar.clone(), Scalar::zero());
+
+        let coin_acc = Account::set_account(pk_in.clone(), commit_in.clone());
+        Ok(coin_acc)
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -282,5 +297,49 @@ impl ZkAccountDB {
         }
         self.accounts.remove(index);
         Ok(())
+    }
+    pub fn get_anonymity_account_vector(
+        &self,
+        index: &u64,
+        seed: &SecretString,
+        input_count: u64,
+    ) -> Result<Vec<Account>, String> {
+        let mut account_vector: Vec<Account> = Vec::new();
+        if input_count > 7 {
+            return Ok(account_vector);
+        }
+        let remaining_count = 9 - input_count;
+        for _ in 0..remaining_count {
+            let account = ZkAccount::get_zero_balance_account(*index, seed)?;
+            account_vector.push(account);
+        }
+        Ok(account_vector)
+    }
+
+    pub fn anonymity_set(
+        &self,
+        index: &u64,
+        seed: &SecretString,
+        input_count: u64,
+    ) -> Result<String, String> {
+        let account_vector = self.get_anonymity_account_vector(index, seed, input_count)?;
+        let utxo = Utxo::default();
+
+        let anonymity_set_input = account_vector
+            .iter()
+            .enumerate()
+            .map(|(j, i)| {
+                Input::input_from_quisquis_account(
+                    i,
+                    Utxo::new(Utxo::default().tx_id().clone(), j as u8 + 1),
+                    j as u8 + 1,
+                    Network::default(),
+                )
+            })
+            .collect::<Vec<Input>>();
+
+        let anonymity_set_input_str =
+            serde_json::to_string(&anonymity_set_input).map_err(|e| e.to_string())?;
+        Ok(anonymity_set_input_str)
     }
 }
