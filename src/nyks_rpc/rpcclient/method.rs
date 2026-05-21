@@ -97,8 +97,8 @@ pub enum MethodTypeURL {
     MsgSweepProposal,
 }
 use anyhow::anyhow;
-use base64::{Engine as _, engine::general_purpose};
-use cosmrs::crypto::{PublicKey, secp256k1::SigningKey};
+use base64::{engine::general_purpose, Engine as _};
+use cosmrs::crypto::{secp256k1::SigningKey, PublicKey};
 use cosmrs::{
     tendermint::chain::Id as ChainId,
     tx::{Body, Fee, SignDoc, SignerInfo},
@@ -316,7 +316,8 @@ impl MethodTypeURL {
             200_0000u64,
         );
         let auth_info = SignerInfo::single_direct(Some(pk.into()), sequence).auth_info(fee);
-        let chain_id = ChainId::try_from("nyks").map_err(|e| anyhow!("{}", e))?;
+        let chain_id = ChainId::try_from(crate::config::EndpointConfig::from_env().chain_id)
+            .map_err(|e| anyhow!("{}", e))?;
 
         let sign_doc = SignDoc::new(&body, &auth_info, &chain_id, account_number)
             .map_err(|e| anyhow!("{}", e))?;

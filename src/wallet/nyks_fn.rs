@@ -67,7 +67,8 @@ pub async fn send_tx(
         200_0000u64,
     );
     let auth_info = SignerInfo::single_direct(Some(pk.into()), sequence).auth_info(fee);
-    let chain_id = Id::try_from("nyks").map_err(|e| anyhow!("{}", e))?;
+    let chain_id = Id::try_from(crate::config::EndpointConfig::from_env().chain_id)
+        .map_err(|e| anyhow!("{}", e))?;
 
     let sign_doc =
         SignDoc::new(&body, &auth_info, &chain_id, account_number).map_err(|e| anyhow!("{}", e))?;

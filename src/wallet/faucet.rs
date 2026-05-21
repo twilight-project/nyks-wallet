@@ -209,9 +209,9 @@ pub async fn sign_and_send_reg_deposit_tx(
     };
     let signer_info = SignerInfo::single_direct(Some(public_key), sequence);
     let auth_info = signer_info.auth_info(Fee::from_amount_and_gas(fee_amount, gas_limit));
-
+    let chain_id = crate::config::EndpointConfig::from_env().chain_id;
     // --- Sign
-    let chain_id = Id::try_from("nyks").map_err(|e| anyhow!("{}", e))?;
+    let chain_id = Id::try_from(chain_id).map_err(|e| anyhow!("{}", e))?;
     let sign_doc =
         SignDoc::new(&body, &auth_info, &chain_id, account_number).map_err(|e| anyhow!("{}", e))?;
     let raw_tx = sign_doc.sign(&signing_key).map_err(|e| anyhow!("{}", e))?;
